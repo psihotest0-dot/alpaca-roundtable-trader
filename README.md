@@ -17,6 +17,12 @@ You can test the CLI locally:
 poetry run python -m trading_system --help
 ```
 
+You can validate your local configuration without making network requests or sending orders:
+
+```bash
+poetry run python -m trading_system validate-config
+```
+
 Or using Docker:
 
 ```bash
