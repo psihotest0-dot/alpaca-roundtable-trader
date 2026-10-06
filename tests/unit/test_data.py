@@ -1,9 +1,8 @@
 from datetime import datetime, timezone
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pandas as pd
 import pytest
-from alpaca.data.timeframe import TimeFrame
 
 from trading_system.config import Settings
 from trading_system.data.alpaca_data import AlpacaData

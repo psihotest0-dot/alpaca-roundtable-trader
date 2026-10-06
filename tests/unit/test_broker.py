@@ -1,4 +1,4 @@
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 from alpaca.trading.enums import QueryOrderStatus
@@ -18,7 +18,7 @@ def settings():
 
 @patch("trading_system.broker.alpaca_broker.TradingClient")
 def test_broker_init(mock_client, settings):
-    broker = AlpacaBroker(settings)
+    _ = AlpacaBroker(settings)
     mock_client.assert_called_once_with(
         api_key="test_key",
         secret_key="test_secret",
