@@ -1,0 +1,8 @@
+services:
+  app:
+    build: .
+    volumes:
+      - .:/app
+    environment:
+      - DATABASE_URL=sqlite:///local.db
+    # Chroma service is intentionally excluded as it runs as a host process
