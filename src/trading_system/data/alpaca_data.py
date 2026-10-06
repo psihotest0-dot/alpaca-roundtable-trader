@@ -71,21 +71,22 @@ class AlpacaData:
         end: "datetime"
     ) -> "pd.DataFrame":
         from alpaca.data.requests import StockBarsRequest
+        from alpaca.data.enums import DataFeed
 
         req = StockBarsRequest(
             symbol_or_symbols=symbol,
             timeframe=timeframe,
             start=start,
             end=end,
-            feed=self.feed
+            feed=DataFeed(self.feed) if self.feed else None
         )
 
         bars = self.client.get_stock_bars(req)
-        if not bars.data or symbol not in bars.data:
+        if not hasattr(bars, 'data') or not bars.data or symbol not in bars.data:
             import pandas as pd
             return pd.DataFrame()
 
-        df = bars.df
+        df = getattr(bars, 'df', pd.DataFrame())
         if df.empty:
             import pandas as pd
             return pd.DataFrame()

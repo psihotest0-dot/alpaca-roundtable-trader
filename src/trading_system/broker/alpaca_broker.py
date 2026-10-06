@@ -2,6 +2,7 @@ import functools
 import logging
 import random
 import time
+import datetime
 from typing import Any, Callable, TypeVar
 
 from alpaca.trading.client import TradingClient
@@ -77,10 +78,10 @@ class AlpacaBroker:
         return self.client.get_account()
 
     @retry_read_request()
-    def get_positions(self) -> list[Any]:
+    def get_positions(self) -> Any:
         return self.client.get_all_positions()
     @retry_read_request()
-    def get_open_orders(self) -> list[Any]:
+    def get_open_orders(self) -> Any:
         from alpaca.trading.requests import GetOrdersRequest
         from alpaca.trading.enums import QueryOrderStatus
 
@@ -102,7 +103,7 @@ class AlpacaBroker:
         return self.client.get_asset(symbol_or_asset_id=symbol)
 
     @retry_read_request()
-    def get_calendar(self, start: str, end: str) -> list[Any]:
+    def get_calendar(self, start: "datetime.date | None" = None, end: "datetime.date | None" = None) -> Any:
         from alpaca.trading.requests import GetCalendarRequest
         req = GetCalendarRequest(start=start, end=end)
         return self.client.get_calendar(filters=req)
