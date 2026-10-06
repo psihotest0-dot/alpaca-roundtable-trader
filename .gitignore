@@ -1,0 +1,36 @@
+# Environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Databases
+*.sqlite
+*.db
+local.db
+
+# Generated data, caches, embeddings
+data/
+embeddings/
+chroma/
+
+# Secrets
+secrets/
+*.pem
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
