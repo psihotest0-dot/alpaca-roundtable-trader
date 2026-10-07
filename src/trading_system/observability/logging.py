@@ -32,7 +32,11 @@ class SensitiveDataRedactor:
     @classmethod
     def _redact_value(cls, key: str, value: Any) -> Any:
         key_lower = str(key).lower()
-        if any(sensitive_key in key_lower for sensitive_key in cls.SENSITIVE_KEYS) or key_lower == "env" or key_lower == "environment":
+        if (
+            any(sensitive_key in key_lower for sensitive_key in cls.SENSITIVE_KEYS)
+            or key_lower == "env"
+            or key_lower == "environment"
+        ):
             return "***REDACTED***"
         return cls.redact(value)
 
@@ -89,10 +93,10 @@ class JSONFormatter(logging.Formatter):
 
         # Redact environment info specifically - never log the full environment
         if "environment" in redacted_data or "env" in redacted_data:
-             if "environment" in redacted_data:
-                 redacted_data["environment"] = "***REDACTED***"
-             if "env" in redacted_data:
-                 redacted_data["env"] = "***REDACTED***"
+            if "environment" in redacted_data:
+                redacted_data["environment"] = "***REDACTED***"
+            if "env" in redacted_data:
+                redacted_data["env"] = "***REDACTED***"
 
         return json.dumps(redacted_data)
 

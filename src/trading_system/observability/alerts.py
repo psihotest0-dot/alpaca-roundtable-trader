@@ -21,7 +21,4 @@ class LoggingAlertManager(AlertManager):
         self.logger = logger
 
     def send_alert(self, title: str, message: str) -> None:
-        self.logger.critical(
-            f"ALERT: {title} - {message}",
-            extra={"component": "AlertManager"}
-        )
+        self.logger.critical(f"ALERT: {title} - {message}", extra={"component": "AlertManager"})

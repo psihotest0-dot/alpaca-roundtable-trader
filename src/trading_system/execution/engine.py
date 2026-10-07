@@ -16,8 +16,15 @@ from trading_system.config import Settings
 
 logger = logging.getLogger(__name__)
 
+
 class ExecutionEngine:
-    def __init__(self, broker: AlpacaBroker, order_repo: OrderRepository, state_repo: StateRepository, settings: Settings):
+    def __init__(
+        self,
+        broker: AlpacaBroker,
+        order_repo: OrderRepository,
+        state_repo: StateRepository,
+        settings: Settings,
+    ):
         self.broker = broker
         self.order_repo = order_repo
         self.state_repo = state_repo
@@ -36,16 +43,17 @@ class ExecutionEngine:
         self.state_repo.save_state(state)
 
     from typing import Any
+
     def _validate_price_increment(self, price: Decimal, asset: Any) -> bool:
         # Validate price increments based on US Equity rules if not specified by asset
         # $0.01 for >= $1.00, $0.0001 for < $1.00
 
         inc = asset.price_increment
         if inc is None:
-             if price >= Decimal("1.00"):
-                 inc = 0.01
-             else:
-                 inc = 0.0001
+            if price >= Decimal("1.00"):
+                inc = 0.01
+            else:
+                inc = 0.0001
 
         # Avoid float precision issues
         inc_dec = Decimal(str(inc))
@@ -100,7 +108,9 @@ class ExecutionEngine:
                 return None
 
             # Calculate take profit price
-            take_profit_price = intent.limit_price * (Decimal("1") + Decimal(str(self.settings.take_profit_pct)))
+            take_profit_price = intent.limit_price * (
+                Decimal("1") + Decimal(str(self.settings.take_profit_pct))
+            )
 
             if not self._validate_price_increment(take_profit_price, asset):
                 # Round to nearest valid increment
@@ -130,13 +140,13 @@ class ExecutionEngine:
                 take_profit=TakeProfitRequest(limit_price=float(take_profit_price)),
                 stop_loss=StopLossRequest(stop_price=float(intent.stop_price)),
                 client_order_id=client_order_id,
-                extended_hours=False
+                extended_hours=False,
             )
 
             # Persist an initial broker order in SUBMITTING state to track the in-flight API call
             # This handles the "crash after submission before DB update" by leaving a SUBMITTING record
             inflight_order = BrokerOrder(
-                broker_id=client_order_id, # Temporary ID
+                broker_id=client_order_id,  # Temporary ID
                 client_order_id=client_order_id,
                 symbol=intent.symbol,
                 side=intent.side,
@@ -147,7 +157,7 @@ class ExecutionEngine:
                 limit_price=intent.limit_price,
                 stop_price=intent.stop_price,
                 created_at=datetime.datetime.now(datetime.timezone.utc),
-                updated_at=datetime.datetime.now(datetime.timezone.utc)
+                updated_at=datetime.datetime.now(datetime.timezone.utc),
             )
             try:
                 self.order_repo.save_broker_order(inflight_order)
@@ -170,13 +180,13 @@ class ExecutionEngine:
                     limit_price=intent.limit_price,
                     stop_price=intent.stop_price,
                     created_at=datetime.datetime.now(datetime.timezone.utc),
-                    updated_at=datetime.datetime.now(datetime.timezone.utc)
+                    updated_at=datetime.datetime.now(datetime.timezone.utc),
                 )
 
                 self.order_repo.save_broker_order(broker_order)
 
                 # Track child orders (legs) if they exist
-                if hasattr(alpaca_order, 'legs') and alpaca_order.legs:
+                if hasattr(alpaca_order, "legs") and alpaca_order.legs:
                     for leg in alpaca_order.legs:
                         leg_order = BrokerOrder(
                             broker_id=str(leg.id),
@@ -184,13 +194,13 @@ class ExecutionEngine:
                             symbol=leg.symbol,
                             side=OrderSide.BUY if leg.side == "buy" else OrderSide.SELL,
                             type=OrderType.LIMIT if leg.order_type == "limit" else OrderType.STOP,
-                            status=OrderStatus.CREATED, # Usually they start created/held
+                            status=OrderStatus.CREATED,  # Usually they start created/held
                             quantity=Decimal(str(leg.qty)),
                             filled_quantity=Decimal(str(leg.filled_qty)),
                             limit_price=Decimal(str(leg.limit_price)) if leg.limit_price else None,
                             stop_price=Decimal(str(leg.stop_price)) if leg.stop_price else None,
                             created_at=leg.created_at,
-                            updated_at=leg.updated_at
+                            updated_at=leg.updated_at,
                         )
                         self.order_repo.save_broker_order(leg_order)
 
@@ -207,7 +217,9 @@ class ExecutionEngine:
                     if reconciled_order:
                         return reconciled_order
                     else:
-                        logger.critical("Reconciliation failed after submission crash. Halting trading to prevent conflicting inputs.")
+                        logger.critical(
+                            "Reconciliation failed after submission crash. Halting trading to prevent conflicting inputs."
+                        )
                         self.halt_trading("Reconciliation failed after order submission crash.")
                 except Exception as rec_e:
                     logger.critical(f"Failed to reconcile after exception: {rec_e}")
@@ -224,7 +236,7 @@ class ExecutionEngine:
 
             # Map status
             status_str = str(alpaca_order.status)
-            if hasattr(alpaca_order.status, 'value'):
+            if hasattr(alpaca_order.status, "value"):
                 status_str = alpaca_order.status.value
             status_str = status_str.upper()
 
@@ -247,19 +259,22 @@ class ExecutionEngine:
                 status=mapped_status,
                 quantity=Decimal(str(alpaca_order.qty)),
                 filled_quantity=Decimal(str(alpaca_order.filled_qty)),
-                limit_price=Decimal(str(alpaca_order.limit_price)) if alpaca_order.limit_price else None,
-                stop_price=Decimal(str(alpaca_order.stop_price)) if alpaca_order.stop_price else None,
+                limit_price=Decimal(str(alpaca_order.limit_price))
+                if alpaca_order.limit_price
+                else None,
+                stop_price=Decimal(str(alpaca_order.stop_price))
+                if alpaca_order.stop_price
+                else None,
                 created_at=alpaca_order.created_at,
-                updated_at=alpaca_order.updated_at
+                updated_at=alpaca_order.updated_at,
             )
             self.order_repo.save_broker_order(broker_order)
 
             # Track child orders (legs) if they exist
-            if hasattr(alpaca_order, 'legs') and alpaca_order.legs:
+            if hasattr(alpaca_order, "legs") and alpaca_order.legs:
                 for leg in alpaca_order.legs:
-
                     leg_status_str = str(leg.status)
-                    if hasattr(leg.status, 'value'):
+                    if hasattr(leg.status, "value"):
                         leg_status_str = leg.status.value
                     leg_status_str = leg_status_str.upper()
 
@@ -286,7 +301,7 @@ class ExecutionEngine:
                         limit_price=Decimal(str(leg.limit_price)) if leg.limit_price else None,
                         stop_price=Decimal(str(leg.stop_price)) if leg.stop_price else None,
                         created_at=leg.created_at,
-                        updated_at=leg.updated_at
+                        updated_at=leg.updated_at,
                     )
                     self.order_repo.save_broker_order(leg_order)
 
@@ -305,13 +320,17 @@ class ExecutionEngine:
         with self._lock:
             try:
                 alpaca_order = self.broker.get_order_by_client_id(client_order_id)
-                if alpaca_order.status in ['filled', 'canceled', 'rejected', 'expired']:
-                    logger.info(f"Order {client_order_id} cannot be canceled in status {alpaca_order.status}")
+                if alpaca_order.status in ["filled", "canceled", "rejected", "expired"]:
+                    logger.info(
+                        f"Order {client_order_id} cannot be canceled in status {alpaca_order.status}"
+                    )
                     return
 
                 # Check partial fill safety
-                if alpaca_order.status == 'partially_filled':
-                    logger.info(f"Order {client_order_id} is partially filled. Canceling parent will leave children active for filled quantity.")
+                if alpaca_order.status == "partially_filled":
+                    logger.info(
+                        f"Order {client_order_id} is partially filled. Canceling parent will leave children active for filled quantity."
+                    )
 
                 self.broker.cancel_order_by_id(str(alpaca_order.id))
             except Exception as e:
@@ -324,14 +343,15 @@ class ExecutionEngine:
             open_orders = self.broker.get_open_orders()
             now = datetime.datetime.now(datetime.timezone.utc)
             for order in open_orders:
-                if order.side == 'buy' and order.status in ['new', 'accepted', 'partially_filled']:
+                if order.side == "buy" and order.status in ["new", "accepted", "partially_filled"]:
                     age = (now - order.created_at).total_seconds() / 60
                     if age > max_age_minutes:
-                        logger.warning(f"Order {order.id} for {order.symbol} expired ({age:.1f} min). Canceling.")
+                        logger.warning(
+                            f"Order {order.id} for {order.symbol} expired ({age:.1f} min). Canceling."
+                        )
                         self.cancel_bracket_order(order.client_order_id)
         except Exception as e:
             logger.error(f"Failed to check bounded entry expiry: {e}")
-
 
     def emergency_check_unprotected_positions(self) -> None:
         # Paper emergency procedure: Check for open positions without active protective child orders
@@ -340,7 +360,13 @@ class ExecutionEngine:
             open_orders = self.broker.get_open_orders()
 
             # Check for STOP orders which act as stop loss
-            sell_orders = [o for o in open_orders if o.side == 'sell' and o.order_type == 'stop' and o.status in ['new', 'accepted', 'partially_filled', 'pending_new']]
+            sell_orders = [
+                o
+                for o in open_orders
+                if o.side == "sell"
+                and o.order_type == "stop"
+                and o.status in ["new", "accepted", "partially_filled", "pending_new"]
+            ]
 
             for pos in positions:
                 sym = pos.symbol
@@ -351,19 +377,22 @@ class ExecutionEngine:
 
                 if covering_qty < qty:
                     # Unprotected position detected!
-                    logger.critical(f"UNPROTECTED POSITION DETECTED for {sym}: Position qty {qty}, covered {covering_qty}")
+                    logger.critical(
+                        f"UNPROTECTED POSITION DETECTED for {sym}: Position qty {qty}, covered {covering_qty}"
+                    )
                     self.halt_trading(f"Unprotected open position for {sym}")
 
                     # Documented action: In paper trading, submit a market sell order to close it out immediately
                     try:
                         from alpaca.trading.requests import MarketOrderRequest
                         from alpaca.trading.enums import OrderSide, TimeInForce
+
                         req = MarketOrderRequest(
                             symbol=sym,
                             qty=float(qty - covering_qty),
                             side=OrderSide.SELL,
                             time_in_force=TimeInForce.DAY,
-                            client_order_id=f"emergency_close_{sym}_{int(time.time())}"
+                            client_order_id=f"emergency_close_{sym}_{int(time.time())}",
                         )
                         self.broker.submit_order(req)
                         logger.critical(f"Submitted emergency market close for {sym}")

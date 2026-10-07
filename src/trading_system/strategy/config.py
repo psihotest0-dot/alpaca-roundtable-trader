@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field
 
+
 class StrategyConfig(BaseModel):
     strategy_version: str = "v1.0"
 
@@ -18,4 +19,6 @@ class StrategyConfig(BaseModel):
     htf_slow_ema_period: int = Field(50, gt=0, description="Higher timeframe Slow EMA period")
 
     # Safety limits
-    min_warmup_bars: int = Field(100, gt=50, description="Minimum bars needed for stable indicators")
+    min_warmup_bars: int = Field(
+        100, gt=50, description="Minimum bars needed for stable indicators"
+    )

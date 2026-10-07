@@ -9,31 +9,19 @@ from trading_system.config import Settings
 
 @pytest.fixture
 def settings():
-    return Settings(
-        alpaca_api_key="test_key",
-        alpaca_secret_key="test_secret",
-        is_paper=True
-    )
+    return Settings(alpaca_api_key="test_key", alpaca_secret_key="test_secret", is_paper=True)
 
 
 @patch("trading_system.broker.alpaca_broker.TradingClient")
 def test_broker_init(mock_client, settings):
     _ = AlpacaBroker(settings)
-    mock_client.assert_called_once_with(
-        api_key="test_key",
-        secret_key="test_secret",
-        paper=True
-    )
+    mock_client.assert_called_once_with(api_key="test_key", secret_key="test_secret", paper=True)
 
 
 @patch("trading_system.broker.alpaca_broker.TradingClient")
 def test_broker_live_trading_prevented(mock_client):
-    settings = Settings(
-        alpaca_api_key="test_key",
-        alpaca_secret_key="test_secret",
-        is_paper=True
-    )
-    settings.is_paper = False # Pydantic settings block this on init, but simulating just in case
+    settings = Settings(alpaca_api_key="test_key", alpaca_secret_key="test_secret", is_paper=True)
+    settings.is_paper = False  # Pydantic settings block this on init, but simulating just in case
     with pytest.raises(ValueError, match="Live trading is not supported"):
         AlpacaBroker(settings)
 

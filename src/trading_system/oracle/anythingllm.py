@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 _decision_cache: Dict[str, OracleDecision] = {}
 
+
 class AnythingLLMAdapter:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -28,7 +29,7 @@ class AnythingLLMAdapter:
         self.headers = {
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
-            "Accept": "application/json"
+            "Accept": "application/json",
         }
         self.timeout = self.settings.oracle_timeout_seconds
 
@@ -36,7 +37,7 @@ class AnythingLLMAdapter:
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
         retry=retry_if_exception_type((httpx.RequestError, httpx.HTTPStatusError)),
-        reraise=True
+        reraise=True,
     )
     def _make_request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         """Make HTTP request with bounded retries"""
@@ -85,7 +86,9 @@ class AnythingLLMAdapter:
             logger.error(f"Failed to validate LLM response schema: {e}")
             raise ValueError(f"Malformed output from LLM: {str(e)}")
 
-    def evaluate_signal(self, signal: StrategySignal, technicals: Dict[str, Any], rationale: str) -> OracleDecision:
+    def evaluate_signal(
+        self, signal: StrategySignal, technicals: Dict[str, Any], rationale: str
+    ) -> OracleDecision:
         """
         Evaluate a strategy signal with the Oracle.
         Returns a cached decision if one exists.
@@ -98,7 +101,7 @@ class AnythingLLMAdapter:
                 signal_id=signal_id,
                 approved=True,
                 reasoning="Oracle is DISABLED",
-                decision_timestamp=datetime.now(timezone.utc)
+                decision_timestamp=datetime.now(timezone.utc),
             )
 
         if signal_id in _decision_cache:
@@ -111,29 +114,25 @@ class AnythingLLMAdapter:
             "strategy_version": signal.version,
             "direction": signal.direction.value,
             "technicals": technicals,
-            "rationale": rationale
+            "rationale": rationale,
         }
 
         # Ensure we only ask for structured output
         message = (
             f"Analyze the following trading signal and context.\n"
             f"Respond ONLY with a valid JSON object in the exact format:\n"
-            f"{{\"decision\": \"APPROVE\" | \"VETO\" | \"ABSTAIN\", \"reason\": \"short text\"}}\n\n"
+            f'{{"decision": "APPROVE" | "VETO" | "ABSTAIN", "reason": "short text"}}\n\n'
             f"Context: {json.dumps(prompt)}"
         )
 
-        payload = {
-            "message": message,
-            "mode": "chat",
-            "sessionId": signal_id
-        }
+        payload = {"message": message, "mode": "chat", "sessionId": signal_id}
 
         try:
             logger.info(f"Requesting Oracle decision for {signal_id}")
             raw_response = self._make_request(payload)
             llm_response = self._extract_and_parse_llm_response(raw_response)
 
-            approved = (llm_response.decision == LLMDecision.APPROVE)
+            approved = llm_response.decision == LLMDecision.APPROVE
             reason = llm_response.reason
 
             # ABSTAIN is treated as a rejection in the strict MVP model
@@ -161,7 +160,7 @@ class AnythingLLMAdapter:
             signal_id=signal_id,
             approved=approved,
             reasoning=reason,
-            decision_timestamp=datetime.now(timezone.utc)
+            decision_timestamp=datetime.now(timezone.utc),
         )
 
         _decision_cache[signal_id] = decision

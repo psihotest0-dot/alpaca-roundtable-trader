@@ -13,13 +13,16 @@ from trading_system.domain.models import OrderIntent, TradingState
 from trading_system.domain.enums import OrderSide, OrderType, OrderStatus
 from trading_system.config import Settings
 
+
 @pytest.fixture
 def mock_broker():
     return MagicMock(spec=AlpacaBroker)
 
+
 @pytest.fixture
 def mock_order_repo():
     return MagicMock(spec=OrderRepository)
+
 
 @pytest.fixture
 def mock_state_repo():
@@ -27,19 +30,23 @@ def mock_state_repo():
     repo.get_state.return_value = TradingState()
     return repo
 
+
 @pytest.fixture
 def settings():
     # Use dummy env vars to satisfy pydantic
     import os
+
     os.environ["ALPACA_API_KEY"] = "test"
     os.environ["ALPACA_SECRET_KEY"] = "test"
     s = Settings()
     s.is_paper = True
     return s
 
+
 @pytest.fixture
 def engine(mock_broker, mock_order_repo, mock_state_repo, settings):
     return ExecutionEngine(mock_broker, mock_order_repo, mock_state_repo, settings)
+
 
 @pytest.fixture
 def base_intent():
@@ -51,14 +58,15 @@ def base_intent():
         quantity=Decimal("10"),
         limit_price=Decimal("150.00"),
         stop_price=Decimal("140.00"),
-        intent_timestamp=datetime.datetime.now(datetime.timezone.utc)
+        intent_timestamp=datetime.datetime.now(datetime.timezone.utc),
     )
+
 
 @pytest.fixture
 def mock_asset():
     return MagicMock(
         spec=Asset,
-        id="a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d", # valid uuid format
+        id="a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d",  # valid uuid format
         class_="us_equity",
         exchange="NASDAQ",
         symbol="AAPL",
@@ -73,10 +81,13 @@ def mock_asset():
         min_order_size=None,
         min_trade_increment=None,
         maintenance_margin_requirement=None,
-        attributes=[]
+        attributes=[],
     )
 
-def test_successful_bracket_submission(engine, mock_broker, mock_order_repo, base_intent, mock_asset):
+
+def test_successful_bracket_submission(
+    engine, mock_broker, mock_order_repo, base_intent, mock_asset
+):
     mock_broker.get_asset.return_value = mock_asset
 
     mock_alpaca_order = MagicMock(spec=Order)
@@ -94,7 +105,9 @@ def test_successful_bracket_submission(engine, mock_broker, mock_order_repo, bas
     mock_order_repo.save_broker_order.assert_called()
 
 
-def test_duplicate_submission_handling(engine, mock_broker, mock_order_repo, base_intent, mock_asset):
+def test_duplicate_submission_handling(
+    engine, mock_broker, mock_order_repo, base_intent, mock_asset
+):
     # Simulate first submission
     mock_broker.get_asset.return_value = mock_asset
     mock_alpaca_order = MagicMock(spec=Order)
@@ -166,7 +179,9 @@ def test_partial_fill_tracking(engine, mock_broker, mock_order_repo, base_intent
     assert result.filled_quantity == Decimal("4")
 
 
-def test_rejected_invalid_price_increments(engine, mock_broker, mock_order_repo, base_intent, mock_asset):
+def test_rejected_invalid_price_increments(
+    engine, mock_broker, mock_order_repo, base_intent, mock_asset
+):
     mock_broker.get_asset.return_value = mock_asset
 
     # Invalid limit price (not $0.01 increment)
@@ -200,7 +215,9 @@ def test_cancel_fill_race_condition(engine, mock_broker):
     mock_broker.cancel_order_by_id.assert_not_called()
 
 
-def test_crash_after_submission_before_db_update(engine, mock_broker, mock_order_repo, base_intent, mock_asset):
+def test_crash_after_submission_before_db_update(
+    engine, mock_broker, mock_order_repo, base_intent, mock_asset
+):
     mock_broker.get_asset.return_value = mock_asset
 
     mock_alpaca_order = MagicMock(spec=Order)
@@ -218,7 +235,9 @@ def test_crash_after_submission_before_db_update(engine, mock_broker, mock_order
     mock_reconciled_order.symbol = "AAPL"
     mock_reconciled_order.side = "buy"
     mock_reconciled_order.order_type = "limit"
-    mock_reconciled_order.status = 'unknown_status'  # Alpaca API might return some unsupported string
+    mock_reconciled_order.status = (
+        "unknown_status"  # Alpaca API might return some unsupported string
+    )
     mock_reconciled_order.qty = "10"
     mock_reconciled_order.filled_qty = "0"
     mock_reconciled_order.limit_price = "150.00"
@@ -228,14 +247,14 @@ def test_crash_after_submission_before_db_update(engine, mock_broker, mock_order
 
     mock_broker.get_order_by_client_id.return_value = mock_reconciled_order
 
-
     # Fix the side effect for the reconciliation call so it succeeds
     def save_broker_order_side_effect(order):
         if order.status == OrderStatus.SUBMITTING:
-             return
+            return
         if order.status == OrderStatus.UNKNOWN_REQUIRES_RECONCILIATION:
-             return
+            return
         raise Exception("DB Crash")
+
     mock_order_repo.save_broker_order.side_effect = save_broker_order_side_effect
 
     result = engine.submit_order(base_intent)

@@ -7,7 +7,13 @@ from decimal import Decimal
 import os
 
 from .database import get_engine, get_session_factory
-from .models import StrategySignalModel, OrderIntentModel, BrokerOrderModel, FillModel, RuntimeStateModel
+from .models import (
+    StrategySignalModel,
+    OrderIntentModel,
+    BrokerOrderModel,
+    FillModel,
+    RuntimeStateModel,
+)
 from ..domain.models import StrategySignal, OrderIntent, BrokerOrder, TradingState
 
 
@@ -33,6 +39,7 @@ def transaction() -> Generator[Session, None, None]:
     finally:
         session.close()
 
+
 class SignalRepository:
     def __init__(self, session: Session):
         self.session = session
@@ -46,7 +53,7 @@ class SignalRepository:
             timeframe=signal.timeframe,
             closed_bar_timestamp=signal.closed_bar_timestamp,
             direction=signal.direction,
-            confidence=signal.confidence
+            confidence=signal.confidence,
         )
         try:
             self.session.add(model)
@@ -55,6 +62,7 @@ class SignalRepository:
         except IntegrityError:
             self.session.rollback()
             return False
+
 
 class OrderRepository:
     def __init__(self, session: Session):
@@ -69,7 +77,7 @@ class OrderRepository:
             quantity=intent.quantity,
             limit_price=intent.limit_price,
             stop_price=intent.stop_price,
-            intent_timestamp=intent.intent_timestamp
+            intent_timestamp=intent.intent_timestamp,
         )
         self.session.add(model)
         self.session.flush()
@@ -88,20 +96,27 @@ class OrderRepository:
             limit_price=order.limit_price,
             stop_price=order.stop_price,
             created_at=order.created_at,
-            updated_at=order.updated_at
+            updated_at=order.updated_at,
         )
         self.session.merge(model)
         self.session.flush()
         return model
 
-    def save_fill(self, broker_order_id: str, execution_id: str, price: float, quantity: float, timestamp: datetime) -> bool:
+    def save_fill(
+        self,
+        broker_order_id: str,
+        execution_id: str,
+        price: float,
+        quantity: float,
+        timestamp: datetime,
+    ) -> bool:
         """Saves a fill. Returns True if saved, False if it already exists."""
         model = FillModel(
             broker_order_id=broker_order_id,
             broker_execution_id=execution_id,
             price=price,
             quantity=quantity,
-            timestamp=timestamp
+            timestamp=timestamp,
         )
         try:
             self.session.add(model)
@@ -110,6 +125,7 @@ class OrderRepository:
         except IntegrityError:
             self.session.rollback()
             return False
+
 
 class StateRepository:
     def __init__(self, session: Session):
@@ -128,7 +144,7 @@ class StateRepository:
             halt_reason=str(model.halt_reason) if model.halt_reason else None,
             daily_start_equity=cast(Optional[Decimal], model.daily_start_equity),
             daily_equity_date=cast(Optional[datetime], model.daily_equity_date),
-            last_updated=cast(datetime, model.last_updated)
+            last_updated=cast(datetime, model.last_updated),
         )
 
     def save_state(self, state: TradingState) -> None:
@@ -137,8 +153,8 @@ class StateRepository:
             model = RuntimeStateModel(id=1)
             self.session.add(model)
 
-        model.is_trading_halted = state.is_trading_halted # type: ignore
-        model.halt_reason = state.halt_reason # type: ignore
-        model.daily_start_equity = state.daily_start_equity # type: ignore
-        model.daily_equity_date = state.daily_equity_date # type: ignore
+        model.is_trading_halted = state.is_trading_halted  # type: ignore
+        model.halt_reason = state.halt_reason  # type: ignore
+        model.daily_start_equity = state.daily_start_equity  # type: ignore
+        model.daily_equity_date = state.daily_equity_date  # type: ignore
         self.session.flush()

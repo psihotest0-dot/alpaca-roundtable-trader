@@ -32,9 +32,36 @@ jobs:
         run: poetry install --no-interaction --no-root
       - name: Install project
         run: poetry install --no-interaction
-      - name: Run Ruff
+      - name: Secret Scanning (Regex)
+        run: |
+          # Basic secret scanning to catch obvious issues in MVP
+          if grep -rniE "ALPACA_API_KEY\s*=\s*['\"][A-Z0-9]+['\"]" src/ tests/; then
+            echo "Secrets found in codebase!"
+            exit 1
+          fi
+          if grep -rniE "ANYTHINGLLM_API_KEY\s*=\s*['\"][A-Z0-9]+['\"]" src/ tests/; then
+            echo "Secrets found in codebase!"
+            exit 1
+          fi
+
+      - name: Dependency Vulnerability Check
+        run: |
+          poetry run pip install safety
+          poetry export -f requirements.txt | poetry run safety check --stdin
+
+      - name: Run Ruff Check
         run: poetry run ruff check .
+
+      - name: Run Ruff Format Check
+        run: poetry run ruff format --check .
+
       - name: Run Mypy
         run: poetry run mypy src
+
+      - name: Migration Smoke Test
+        run: |
+          poetry run alembic upgrade head
+          poetry run alembic downgrade base
+
       - name: Run Pytest
         run: poetry run pytest

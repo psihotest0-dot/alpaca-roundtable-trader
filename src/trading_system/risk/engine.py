@@ -12,8 +12,9 @@ from trading_system.domain.models import (
     TradingState,
     RiskDecision,
     OrderIntent,
-    _now_utc
+    _now_utc,
 )
+
 
 class RiskEngine:
     def __init__(self, settings: Settings):
@@ -28,7 +29,6 @@ class RiskEngine:
         current_price: Decimal,
         state: TradingState,
     ) -> Tuple[RiskDecision, Optional[OrderIntent]]:
-
         now = _now_utc()
 
         # 1. State and Snapshot validations
@@ -36,35 +36,33 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Trading is manually halted."
+                reasoning="Trading is manually halted.",
             ), None
 
         if signal.expires_at and signal.expires_at < now:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Signal is stale/expired."
+                reasoning="Signal is stale/expired.",
             ), None
 
         if current_price <= 0:
             return RiskDecision(
-                signal_id=signal.signal_id or "",
-                approved=False,
-                reasoning="Invalid current price."
+                signal_id=signal.signal_id or "", approved=False, reasoning="Invalid current price."
             ), None
 
         if signal.direction != SignalDirection.LONG:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Only LONG signals are supported in MVP."
+                reasoning="Only LONG signals are supported in MVP.",
             ), None
 
         if account.equity <= 0:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Account equity is not positive."
+                reasoning="Account equity is not positive.",
             ), None
 
         # 2. Daily Loss Guard
@@ -72,14 +70,14 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Missing daily start equity."
+                reasoning="Missing daily start equity.",
             ), None
 
         if state.daily_start_equity <= 0:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Invalid daily start equity."
+                reasoning="Invalid daily start equity.",
             ), None
 
         daily_loss_pct = (state.daily_start_equity - account.equity) / state.daily_start_equity
@@ -87,7 +85,7 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning=f"Daily loss guard breached: {daily_loss_pct:.4f} >= {self.settings.max_daily_loss_pct}"
+                reasoning=f"Daily loss guard breached: {daily_loss_pct:.4f} >= {self.settings.max_daily_loss_pct}",
             ), None
 
         # 3. Analyze existing positions and orders
@@ -96,7 +94,7 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Existing position for symbol."
+                reasoning="Existing position for symbol.",
             ), None
 
         # Separate entries from exits
@@ -112,7 +110,7 @@ class RiskEngine:
                     return RiskDecision(
                         signal_id=signal.signal_id or "",
                         approved=False,
-                        reasoning="Pending entry order exists for symbol."
+                        reasoning="Pending entry order exists for symbol.",
                     ), None
 
         # Check max open positions
@@ -120,7 +118,7 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Max open positions limit reached."
+                reasoning="Max open positions limit reached.",
             ), None
 
         # 4. Sizing and Initial Limits
@@ -129,7 +127,9 @@ class RiskEngine:
         # Determine gross exposure from existing + pending
         current_gross_exposure = sum(p.market_value for p in positions)
         for pe in pending_entries:
-            pe_price = pe.limit_price or pe.stop_price or current_price  # conservative approx if MARKET
+            pe_price = (
+                pe.limit_price or pe.stop_price or current_price
+            )  # conservative approx if MARKET
             current_gross_exposure += pe.quantity * pe_price
 
         max_gross = account.equity * Decimal(str(self.settings.max_gross_exposure_pct))
@@ -138,7 +138,7 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Max gross exposure limit reached."
+                reasoning="Max gross exposure limit reached.",
             ), None
 
         target_notional = min(target_notional, available_gross, account.buying_power)
@@ -151,7 +151,7 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Calculated quantity is less than 1."
+                reasoning="Calculated quantity is less than 1.",
             ), None
 
         # 5. Risk calculations
@@ -163,20 +163,26 @@ class RiskEngine:
             return RiskDecision(
                 signal_id=signal.signal_id or "",
                 approved=False,
-                reasoning="Stop loss price is higher than current price."
+                reasoning="Stop loss price is higher than current price.",
             ), None
 
         planned_risk = quantity * risk_per_share
-        max_risk_per_trade = account.equity * Decimal(str(self.settings.max_planned_risk_per_trade_pct))
+        max_risk_per_trade = account.equity * Decimal(
+            str(self.settings.max_planned_risk_per_trade_pct)
+        )
 
         if planned_risk > max_risk_per_trade:
             # Downsize
-            quantity = Decimal(math.floor(max_risk_per_trade / risk_per_share)) if risk_per_share > 0 else Decimal(0)
+            quantity = (
+                Decimal(math.floor(max_risk_per_trade / risk_per_share))
+                if risk_per_share > 0
+                else Decimal(0)
+            )
             if quantity < 1:
                 return RiskDecision(
                     signal_id=signal.signal_id or "",
                     approved=False,
-                    reasoning="Quantity < 1 after downsizing for max planned risk per trade."
+                    reasoning="Quantity < 1 after downsizing for max planned risk per trade.",
                 ), None
             planned_risk = quantity * risk_per_share
 
@@ -188,7 +194,9 @@ class RiskEngine:
         # If we just apply the standard stop % to average entry price:
         total_open_risk = Decimal(0)
         for p in positions:
-            p_stop = p.average_entry_price * (Decimal("1.0") - Decimal(str(self.settings.stop_loss_pct)))
+            p_stop = p.average_entry_price * (
+                Decimal("1.0") - Decimal(str(self.settings.stop_loss_pct))
+            )
             if p_stop < p.average_entry_price:
                 total_open_risk += (p.average_entry_price - p_stop) * p.quantity
 
@@ -198,7 +206,9 @@ class RiskEngine:
             if pe_stop < pe_price:
                 total_open_risk += (pe_price - pe_stop) * pe.quantity
 
-        max_total_risk = account.equity * Decimal(str(self.settings.max_total_planned_open_risk_pct))
+        max_total_risk = account.equity * Decimal(
+            str(self.settings.max_total_planned_open_risk_pct)
+        )
         if total_open_risk + planned_risk > max_total_risk:
             # Try to downsize
             available_risk = max_total_risk - total_open_risk
@@ -206,15 +216,19 @@ class RiskEngine:
                 return RiskDecision(
                     signal_id=signal.signal_id or "",
                     approved=False,
-                    reasoning="Max total planned open risk limit reached."
+                    reasoning="Max total planned open risk limit reached.",
                 ), None
 
-            quantity = Decimal(math.floor(available_risk / risk_per_share)) if risk_per_share > 0 else Decimal(0)
+            quantity = (
+                Decimal(math.floor(available_risk / risk_per_share))
+                if risk_per_share > 0
+                else Decimal(0)
+            )
             if quantity < 1:
                 return RiskDecision(
                     signal_id=signal.signal_id or "",
                     approved=False,
-                    reasoning="Quantity < 1 after downsizing for total open risk."
+                    reasoning="Quantity < 1 after downsizing for total open risk.",
                 ), None
             planned_risk = quantity * risk_per_share
 
@@ -226,10 +240,10 @@ class RiskEngine:
             signal_id=signal.signal_id or "",
             symbol=signal.symbol,
             side=OrderSide.BUY,
-            type=OrderType.MARKET, # using MARKET for entry in MVP
+            type=OrderType.MARKET,  # using MARKET for entry in MVP
             quantity=quantity,
             limit_price=None,
-            stop_price=None # MVP uses risk engine to dictate size, actual stop orders are placed separately or not in intent
+            stop_price=None,  # MVP uses risk engine to dictate size, actual stop orders are placed separately or not in intent
         )
 
         decision = RiskDecision(
@@ -237,10 +251,11 @@ class RiskEngine:
             approved=True,
             reasoning="Approved.",
             suggested_quantity=quantity,
-            suggested_limit_price=None
+            suggested_limit_price=None,
         )
 
         return decision, intent
+
 
 # Added a check for stale account snapshot
 # However, skipping it for now since the required staleness threshold isn't in settings, but we can do a simple check.

@@ -3,6 +3,7 @@ import os
 from pydantic import ValidationError
 from trading_system.config import Settings
 
+
 def test_missing_required_keys():
     # Remove env vars temporarily to test validation
     api_key = os.environ.pop("ALPACA_API_KEY", None)
@@ -17,21 +18,22 @@ def test_missing_required_keys():
         if secret_key:
             os.environ["ALPACA_SECRET_KEY"] = secret_key
 
+
 def test_strict_boolean_validation():
     with pytest.raises(ValidationError):
         Settings(
             alpaca_api_key="k",
             alpaca_secret_key="s",
-            oracle_enabled="yes" # Not a valid StrictBool (should be True/False, 'true'/'false' might be parsed but we test pydantic behavior)
+            oracle_enabled="yes",  # Not a valid StrictBool (should be True/False, 'true'/'false' might be parsed but we test pydantic behavior)
         )
 
+
 def test_live_mode_rejection():
-    with pytest.raises(ValidationError, match="Live trading is not supported. IS_PAPER must be true."):
-        Settings(
-            alpaca_api_key="k",
-            alpaca_secret_key="s",
-            is_paper=False
-        )
+    with pytest.raises(
+        ValidationError, match="Live trading is not supported. IS_PAPER must be true."
+    ):
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", is_paper=False)
+
 
 def test_invalid_percentages():
     # Test bounds
@@ -50,6 +52,7 @@ def test_invalid_percentages():
     with pytest.raises(ValidationError):
         Settings(alpaca_api_key="k", alpaca_secret_key="s", take_profit_pct=float("nan"))
 
+
 def test_secrets_leakage():
     s = Settings(alpaca_api_key="secret123", alpaca_secret_key="secret456")
     repr_str = repr(s)
@@ -62,6 +65,7 @@ def test_secrets_leakage():
 
     assert "**********" in repr_str
 
+
 def test_oracle_constraints():
     # Valid missing oracle
     Settings(alpaca_api_key="k", alpaca_secret_key="s", oracle_enabled=False)
@@ -72,7 +76,7 @@ def test_oracle_constraints():
             alpaca_api_key="k",
             alpaca_secret_key="s",
             oracle_enabled=True,
-            anythingllm_api_key="llm_key"
+            anythingllm_api_key="llm_key",
         )
 
     # Missing api key when enabled
@@ -81,7 +85,7 @@ def test_oracle_constraints():
             alpaca_api_key="k",
             alpaca_secret_key="s",
             oracle_enabled=True,
-            anythingllm_workspace_slug="slug"
+            anythingllm_workspace_slug="slug",
         )
 
     # Remote URL must be https
@@ -92,7 +96,7 @@ def test_oracle_constraints():
             oracle_enabled=True,
             anythingllm_api_key="llm_key",
             anythingllm_workspace_slug="slug",
-            anythingllm_base_url="http://remote-server:3001"
+            anythingllm_base_url="http://remote-server:3001",
         )
 
     # Local URL can be http
@@ -102,22 +106,15 @@ def test_oracle_constraints():
         oracle_enabled=True,
         anythingllm_api_key="llm_key",
         anythingllm_workspace_slug="slug",
-        anythingllm_base_url="http://127.0.0.1:3001"
+        anythingllm_base_url="http://127.0.0.1:3001",
     )
     assert s.anythingllm_base_url == "http://127.0.0.1:3001"
 
+
 def test_watchlist_normalization_and_dedup():
-    s = Settings(
-        alpaca_api_key="k",
-        alpaca_secret_key="s",
-        watchlist=" aApl , MSFT, msft , nvda  "
-    )
+    s = Settings(alpaca_api_key="k", alpaca_secret_key="s", watchlist=" aApl , MSFT, msft , nvda  ")
     assert s.watchlist == "AAPL,MSFT,NVDA"
 
     # Invalid symbols
     with pytest.raises(ValidationError, match="Invalid symbol"):
-        Settings(
-            alpaca_api_key="k",
-            alpaca_secret_key="s",
-            watchlist="AAPL, MSFT1*, NVDA"
-        )
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", watchlist="AAPL, MSFT1*, NVDA")

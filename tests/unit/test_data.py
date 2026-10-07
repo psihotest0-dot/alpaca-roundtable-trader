@@ -11,20 +11,14 @@ from trading_system.data.alpaca_data import AlpacaData
 @pytest.fixture
 def settings():
     return Settings(
-        alpaca_api_key="test_key",
-        alpaca_secret_key="test_secret",
-        data_feed="iex",
-        is_paper=True
+        alpaca_api_key="test_key", alpaca_secret_key="test_secret", data_feed="iex", is_paper=True
     )
 
 
 @patch("trading_system.data.alpaca_data.StockHistoricalDataClient")
 def test_data_init(mock_client, settings):
     data = AlpacaData(settings)
-    mock_client.assert_called_once_with(
-        api_key="test_key",
-        secret_key="test_secret"
-    )
+    mock_client.assert_called_once_with(api_key="test_key", secret_key="test_secret")
     assert data.feed == "iex"
 
 
@@ -36,10 +30,7 @@ def test_clean_and_deduplicate(mock_client, settings):
     t1 = pd.Timestamp("2023-01-01 10:00:00")
     t2 = pd.Timestamp("2023-01-01 10:15:00")
 
-    df = pd.DataFrame(
-        {"close": [100, 101, 102]},
-        index=[t2, t1, t2]
-    )
+    df = pd.DataFrame({"close": [100, 101, 102]}, index=[t2, t1, t2])
 
     cleaned = data.clean_and_deduplicate(df)
 

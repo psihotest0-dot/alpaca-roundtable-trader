@@ -1,13 +1,16 @@
 from enum import Enum
 
+
 class SignalDirection(str, Enum):
     LONG = "LONG"
     SHORT = "SHORT"
     FLAT = "FLAT"
 
+
 class OrderSide(str, Enum):
     BUY = "BUY"
     SELL = "SELL"
+
 
 class OrderType(str, Enum):
     MARKET = "MARKET"
@@ -15,6 +18,7 @@ class OrderType(str, Enum):
     STOP = "STOP"
     STOP_LIMIT = "STOP_LIMIT"
     TRAILING_STOP = "TRAILING_STOP"
+
 
 class OrderStatus(str, Enum):
     CREATED = "CREATED"
