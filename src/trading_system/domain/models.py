@@ -29,6 +29,7 @@ class StrategySignal(BaseModel):
     direction: SignalDirection
     confidence: float = Field(default=1.0, ge=0.0, le=1.0)
     signal_id: Optional[str] = None
+    expires_at: Optional[datetime] = None
 
     @model_validator(mode="after")
     def compute_signal_id(self) -> "StrategySignal":
