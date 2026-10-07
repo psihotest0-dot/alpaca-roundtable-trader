@@ -9,12 +9,14 @@ from trading_system.domain.models import (
     AccountSnapshot,
     PositionSnapshot,
     BrokerOrder,
-    TradingState
+    TradingState,
 )
 from trading_system.risk.engine import RiskEngine
 
+
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
+
 
 @pytest.fixture
 def settings():
@@ -28,12 +30,14 @@ def settings():
         max_planned_risk_per_trade_pct=0.002,
         max_total_planned_open_risk_pct=0.01,
         max_daily_loss_pct=0.02,
-        stop_loss_pct=0.04
+        stop_loss_pct=0.04,
     )
+
 
 @pytest.fixture
 def risk_engine(settings):
     return RiskEngine(settings)
+
 
 @pytest.fixture
 def base_signal():
@@ -44,8 +48,9 @@ def base_signal():
         closed_bar_timestamp=_now_utc() - timedelta(minutes=15),
         direction=SignalDirection.LONG,
         confidence=0.9,
-        expires_at=_now_utc() + timedelta(minutes=5)
+        expires_at=_now_utc() + timedelta(minutes=5),
     )
+
 
 @pytest.fixture
 def base_account():
@@ -54,15 +59,14 @@ def base_account():
         cash=Decimal("100000"),
         buying_power=Decimal("200000"),
         day_trade_count=0,
-        updated_at=_now_utc()
+        updated_at=_now_utc(),
     )
+
 
 @pytest.fixture
 def base_state():
-    return TradingState(
-        is_trading_halted=False,
-        daily_start_equity=Decimal("100000")
-    )
+    return TradingState(is_trading_halted=False, daily_start_equity=Decimal("100000"))
+
 
 def test_valid_long_signal(risk_engine, base_signal, base_account, base_state):
     decision, intent = risk_engine.evaluate_signal(
@@ -71,11 +75,12 @@ def test_valid_long_signal(risk_engine, base_signal, base_account, base_state):
         positions=[],
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is True
     assert intent is not None
-    assert intent.quantity == Decimal("26") # 100000 * 0.04 / 150 = 26.66 -> 26
+    assert intent.quantity == Decimal("26")  # 100000 * 0.04 / 150 = 26.66 -> 26
+
 
 def test_short_signal_rejected(risk_engine, base_signal, base_account, base_state):
     base_signal.direction = SignalDirection.SHORT
@@ -85,11 +90,12 @@ def test_short_signal_rejected(risk_engine, base_signal, base_account, base_stat
         positions=[],
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert intent is None
     assert "LONG signals" in decision.reasoning
+
 
 def test_trading_halted_rejected(risk_engine, base_signal, base_account, base_state):
     base_state.is_trading_halted = True
@@ -99,23 +105,25 @@ def test_trading_halted_rejected(risk_engine, base_signal, base_account, base_st
         positions=[],
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "manually halted" in decision.reasoning
 
+
 def test_daily_loss_breach(risk_engine, base_signal, base_account, base_state):
-    base_account.equity = Decimal("97000") # 3% loss > 2% max
+    base_account.equity = Decimal("97000")  # 3% loss > 2% max
     decision, intent = risk_engine.evaluate_signal(
         signal=base_signal,
         account=base_account,
         positions=[],
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "Daily loss guard breached" in decision.reasoning
+
 
 def test_missing_daily_equity_rejected(risk_engine, base_signal, base_account, base_state):
     base_state.daily_start_equity = None
@@ -125,10 +133,11 @@ def test_missing_daily_equity_rejected(risk_engine, base_signal, base_account, b
         positions=[],
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "Missing daily start equity" in decision.reasoning
+
 
 def test_existing_position_rejected(risk_engine, base_signal, base_account, base_state):
     positions = [
@@ -137,7 +146,7 @@ def test_existing_position_rejected(risk_engine, base_signal, base_account, base
             quantity=Decimal("10"),
             market_value=Decimal("1500"),
             average_entry_price=Decimal("150"),
-            unrealized_pl=Decimal("0")
+            unrealized_pl=Decimal("0"),
         )
     ]
     decision, intent = risk_engine.evaluate_signal(
@@ -146,10 +155,11 @@ def test_existing_position_rejected(risk_engine, base_signal, base_account, base
         positions=positions,
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "Existing position" in decision.reasoning
+
 
 def test_pending_entry_rejected(risk_engine, base_signal, base_account, base_state):
     active_orders = [
@@ -163,7 +173,7 @@ def test_pending_entry_rejected(risk_engine, base_signal, base_account, base_sta
             quantity=Decimal("10"),
             filled_quantity=Decimal("0"),
             created_at=_now_utc(),
-            updated_at=_now_utc()
+            updated_at=_now_utc(),
         )
     ]
     decision, intent = risk_engine.evaluate_signal(
@@ -172,14 +182,21 @@ def test_pending_entry_rejected(risk_engine, base_signal, base_account, base_sta
         positions=[],
         active_orders=active_orders,
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "Pending entry" in decision.reasoning
 
+
 def test_max_open_positions(risk_engine, base_signal, base_account, base_state):
     positions = [
-        PositionSnapshot(symbol=f"SYM{i}", quantity=Decimal("10"), market_value=Decimal("1000"), average_entry_price=Decimal("100"), unrealized_pl=Decimal("0"))
+        PositionSnapshot(
+            symbol=f"SYM{i}",
+            quantity=Decimal("10"),
+            market_value=Decimal("1000"),
+            average_entry_price=Decimal("100"),
+            unrealized_pl=Decimal("0"),
+        )
         for i in range(5)
     ]
     decision, intent = risk_engine.evaluate_signal(
@@ -188,10 +205,11 @@ def test_max_open_positions(risk_engine, base_signal, base_account, base_state):
         positions=positions,
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "Max open positions" in decision.reasoning
+
 
 def test_insufficient_buying_power(risk_engine, base_signal, base_account, base_state):
     base_account.buying_power = Decimal("100")
@@ -202,10 +220,11 @@ def test_insufficient_buying_power(risk_engine, base_signal, base_account, base_
         positions=[],
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "Calculated quantity is less than 1" in decision.reasoning
+
 
 def test_max_planned_risk_per_trade_pct(risk_engine, base_signal, base_account, base_state):
     # equity 100k
@@ -222,16 +241,23 @@ def test_max_planned_risk_per_trade_pct(risk_engine, base_signal, base_account, 
         positions=[],
         active_orders=[],
         current_price=Decimal("100"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is True
     # 100 / 4 = 25
     assert intent.quantity == Decimal("25")
 
+
 def test_max_gross_exposure_pct(risk_engine, base_signal, base_account, base_state):
     # equity 100k, max gross = 20k
     positions = [
-        PositionSnapshot(symbol="MSFT", quantity=Decimal("190"), market_value=Decimal("19000"), average_entry_price=Decimal("100"), unrealized_pl=Decimal("0"))
+        PositionSnapshot(
+            symbol="MSFT",
+            quantity=Decimal("190"),
+            market_value=Decimal("19000"),
+            average_entry_price=Decimal("100"),
+            unrealized_pl=Decimal("0"),
+        )
     ]
     # available gross = 1000
     decision, intent = risk_engine.evaluate_signal(
@@ -240,20 +266,27 @@ def test_max_gross_exposure_pct(risk_engine, base_signal, base_account, base_sta
         positions=positions,
         active_orders=[],
         current_price=Decimal("100"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is True
-    assert intent.quantity == Decimal("10") # 1000 / 100 = 10
+    assert intent.quantity == Decimal("10")  # 1000 / 100 = 10
+
 
 def test_max_total_planned_open_risk_pct(risk_engine, base_signal, base_account, base_state):
     # equity 100k, max total open risk = 100k * 0.01 = 1000
     # position risk: 100 shares * $4 risk = 400
     positions = [
-        PositionSnapshot(symbol="MSFT", quantity=Decimal("100"), market_value=Decimal("10000"), average_entry_price=Decimal("100"), unrealized_pl=Decimal("0"))
+        PositionSnapshot(
+            symbol="MSFT",
+            quantity=Decimal("100"),
+            market_value=Decimal("10000"),
+            average_entry_price=Decimal("100"),
+            unrealized_pl=Decimal("0"),
+        )
     ]
     # new signal: AAPL, price 100, target qty 40, risk = 4 * 40 = 160
     # total risk = 560 < 1000
-    risk_engine.settings.max_total_planned_open_risk_pct = 0.005 # 500
+    risk_engine.settings.max_total_planned_open_risk_pct = 0.005  # 500
 
     decision, intent = risk_engine.evaluate_signal(
         signal=base_signal,
@@ -261,13 +294,14 @@ def test_max_total_planned_open_risk_pct(risk_engine, base_signal, base_account,
         positions=positions,
         active_orders=[],
         current_price=Decimal("100"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is True
     # available risk = 500 - 400 = 100
     # risk per share = 4
     # allowed qty = 100 / 4 = 25
     assert intent.quantity == Decimal("25")
+
 
 def test_quantity_less_than_one(risk_engine, base_signal, base_account, base_state):
     # price 5000 -> qty = 4000 / 5000 = 0.8 -> 0
@@ -277,10 +311,11 @@ def test_quantity_less_than_one(risk_engine, base_signal, base_account, base_sta
         positions=[],
         active_orders=[],
         current_price=Decimal("5000"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "Calculated quantity is less than 1" in decision.reasoning
+
 
 def test_unknown_orders_conservatism(risk_engine, base_signal, base_account, base_state):
     # pending BUY order increases gross exposure
@@ -297,7 +332,7 @@ def test_unknown_orders_conservatism(risk_engine, base_signal, base_account, bas
             created_at=_now_utc(),
             updated_at=_now_utc(),
             limit_price=None,
-            stop_price=None
+            stop_price=None,
         )
     ]
     # pending NVDA increases gross exposure by 100 * 150 = 15000 (assumes current price)
@@ -308,13 +343,15 @@ def test_unknown_orders_conservatism(risk_engine, base_signal, base_account, bas
         positions=[],
         active_orders=active_orders,
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is True
-    assert intent.quantity == Decimal("26") # target is 4000, 4000 < 5000 available gross, 4000 / 150 = 26.66 -> 26
+    assert intent.quantity == Decimal(
+        "26"
+    )  # target is 4000, 4000 < 5000 available gross, 4000 / 150 = 26.66 -> 26
 
     # Let's increase the pending order size
-    active_orders[0].quantity = Decimal("130") # 130 * 150 = 19500
+    active_orders[0].quantity = Decimal("130")  # 130 * 150 = 19500
     # available gross = 500
     decision, intent = risk_engine.evaluate_signal(
         signal=base_signal,
@@ -322,11 +359,12 @@ def test_unknown_orders_conservatism(risk_engine, base_signal, base_account, bas
         positions=[],
         active_orders=active_orders,
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is True
     # allowed qty = 500 / 150 = 3
     assert intent.quantity == Decimal("3")
+
 
 def test_stale_signal_rejected(risk_engine, base_signal, base_account, base_state):
     base_signal.expires_at = _now_utc() - timedelta(minutes=5)
@@ -336,7 +374,7 @@ def test_stale_signal_rejected(risk_engine, base_signal, base_account, base_stat
         positions=[],
         active_orders=[],
         current_price=Decimal("150"),
-        state=base_state
+        state=base_state,
     )
     assert decision.approved is False
     assert "stale/expired" in decision.reasoning

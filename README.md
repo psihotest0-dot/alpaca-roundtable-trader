@@ -2,12 +2,21 @@
 
 Automated trading system for US stocks using Alpaca for market data and paper trading. This project utilizes a 15-minute technical strategy with a 1-hour confirmation and an optional AnythingLLM Oracle.
 
-## Installation
+## Installation (Clean Install)
 
 This project uses [Poetry](https://python-poetry.org/) for dependency management.
 
-1. Install Poetry if you haven't already.
-2. Run `poetry install` to install dependencies from the lock file.
+1. Ensure you have Python 3.11+ installed.
+2. Install Poetry if you haven't already.
+3. Clone this repository.
+4. Run `poetry install` to install dependencies from the lock file in a fresh virtual environment.
+5. Create `.env` file from the example: `cp .env.example .env` and configure your API keys. Do not use quotes around values.
+
+### Database Setup
+The system uses SQLite. Before starting, initialize the database via migrations:
+```bash
+poetry run alembic upgrade head
+```
 
 ## Usage
 
@@ -28,6 +37,18 @@ Or using Docker:
 ```bash
 docker compose run --rm app python -m trading_system --help
 ```
+
+### Main CLI Commands
+
+- `validate-config`: Validates the `.env` settings offline.
+- `doctor`: Runs diagnostic checks (use `--network` for API validation).
+- `run`: Starts the trading loop in `--dry-run` mode (default). Use `--paper` to enable active broker orders.
+- `pause-entries`: Manual kill switch to halt new trades.
+- `resume-entries`: Removes the trading halt (requires manual reconciliation check).
+- `status`: Displays current system status (halt state, equity).
+- `backtest`: Runs an offline fixture-based historical simulation.
+
+For detailed command behaviors, refer to `docs/operations.md`.
 
 ## Checks and Tests
 

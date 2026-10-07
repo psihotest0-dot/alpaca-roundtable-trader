@@ -32,9 +32,44 @@ jobs:
         run: poetry install --no-interaction --no-root
       - name: Install project
         run: poetry install --no-interaction
-      - name: Run Ruff
+      - name: Secret Scanning (Regex)
+        run: |
+          # Basic secret scanning to catch obvious issues in MVP
+          # Exclude test files since they use dummy keys (e.g. "dummy", "test", "k")
+          # Using || true to prevent set -e from killing the script if grep finds nothing
+          bad_alpaca=$(grep -rnIE "ALPACA_API_KEY\s*=\s*['\"][A-Za-z0-9]{10,}['\"]" src/ tests/ | grep -v -i "dummy" | grep -v -i "secret" | grep -v -i "test" || true)
+          if [ -n "$bad_alpaca" ]; then
+            echo "Alpaca secrets found in codebase!"
+            echo "$bad_alpaca"
+            exit 1
+          fi
+
+          bad_llm=$(grep -rnIE "ANYTHINGLLM_API_KEY\s*=\s*['\"][A-Za-z0-9]{10,}['\"]" src/ tests/ | grep -v -i "dummy" | grep -v -i "secret" | grep -v -i "test" || true)
+          if [ -n "$bad_llm" ]; then
+            echo "AnythingLLM secrets found in codebase!"
+            echo "$bad_llm"
+            exit 1
+          fi
+
+      - name: Dependency Vulnerability Check
+        run: |
+          poetry run pip install safety
+          poetry export -f requirements.txt | poetry run safety check --stdin
+
+      - name: Run Ruff Check
         run: poetry run ruff check .
+
+      - name: Run Ruff Format Check
+        run: poetry run ruff format --check .
+
       - name: Run Mypy
         run: poetry run mypy src
+
+      - name: Migration Smoke Test
+        run: |
+          mkdir -p var
+          poetry run alembic upgrade head
+          poetry run alembic downgrade base
+
       - name: Run Pytest
         run: poetry run pytest

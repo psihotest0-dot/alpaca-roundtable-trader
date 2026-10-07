@@ -10,7 +10,12 @@ from trading_system.domain.enums import OrderSide
 from trading_system.domain.models import StrategySignal
 from trading_system.strategy.config import StrategyConfig
 from trading_system.strategy.trend import generate_signals, filter_signals
-from trading_system.backtest.models import BacktestConfig, BacktestTrade, BacktestPosition, BacktestResult
+from trading_system.backtest.models import (
+    BacktestConfig,
+    BacktestTrade,
+    BacktestPosition,
+    BacktestResult,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +26,7 @@ class BacktestEngine:
         settings: Settings,
         bt_config: BacktestConfig,
         df_15m: Dict[str, pd.DataFrame],
-        df_1h: Dict[str, pd.DataFrame]
+        df_1h: Dict[str, pd.DataFrame],
     ):
         self.settings = settings
         self.bt_config = bt_config
@@ -39,7 +44,7 @@ class BacktestEngine:
             atr_period=14,
             htf_fast_ema_period=20,
             htf_slow_ema_period=50,
-            min_warmup_bars=settings.htf_lookback_days * 6
+            min_warmup_bars=settings.htf_lookback_days * 6,
         )
 
         self.cash = bt_config.initial_capital
@@ -58,12 +63,12 @@ class BacktestEngine:
 
     def _load_replay_oracle(self, path: str) -> None:
         try:
-            with open(path, 'r') as f:
+            with open(path, "r") as f:
                 data = json.load(f)
                 # Assume dict mapping signal_id -> approved bool
                 for k, v in data.items():
-                    if isinstance(v, dict) and 'approved' in v:
-                        self.oracle_decisions[k] = bool(v['approved'])
+                    if isinstance(v, dict) and "approved" in v:
+                        self.oracle_decisions[k] = bool(v["approved"])
                     else:
                         self.oracle_decisions[k] = bool(v)
             logger.info(f"Loaded {len(self.oracle_decisions)} oracle decisions from replay.")
@@ -75,7 +80,7 @@ class BacktestEngine:
         all_timestamps = set()
         for df in self.df_15m.values():
             if not df.empty:
-                all_timestamps.update(df['timestamp'].tolist())
+                all_timestamps.update(df["timestamp"].tolist())
 
         sorted_timestamps = sorted(list(all_timestamps))
 
@@ -129,19 +134,21 @@ class BacktestEngine:
             return True
         if sig.signal_id in self.oracle_decisions:
             return self.oracle_decisions[sig.signal_id]
-        return False # Abstain / default veto if not found in replay
+        return False  # Abstain / default veto if not found in replay
 
-    def _apply_risk_and_queue(self, sig: StrategySignal, equity: Decimal, eval_time: datetime) -> None:
+    def _apply_risk_and_queue(
+        self, sig: StrategySignal, equity: Decimal, eval_time: datetime
+    ) -> None:
         # Determine current price for risk logic using the closed bar
         df = self.df_15m.get(sig.symbol)
         if df is None or df.empty:
             return
 
-        closed_bars = df[df['timestamp'] + pd.Timedelta(minutes=15) <= eval_time]
+        closed_bars = df[df["timestamp"] + pd.Timedelta(minutes=15) <= eval_time]
         if closed_bars.empty:
             return
 
-        last_close = Decimal(str(closed_bars.iloc[-1]['close']))
+        last_close = Decimal(str(closed_bars.iloc[-1]["close"]))
 
         # Calculate risk based on config percentages
         risk_per_trade = equity * Decimal(str(self.settings.max_planned_risk_per_trade_pct))
@@ -182,15 +189,15 @@ class BacktestEngine:
             if df is None:
                 continue
 
-            bar = df[df['timestamp'] == current_time]
+            bar = df[df["timestamp"] == current_time]
             if bar.empty:
                 continue
             bar = bar.iloc[0]
 
-            low = Decimal(str(bar['low']))
-            open_px = Decimal(str(bar['open']))
-            limit_px = getattr(sig, '_suggested_limit', Decimal("0"))
-            shares = getattr(sig, '_suggested_shares', Decimal("0"))
+            low = Decimal(str(bar["low"]))
+            open_px = Decimal(str(bar["open"]))
+            limit_px = getattr(sig, "_suggested_limit", Decimal("0"))
+            shares = getattr(sig, "_suggested_shares", Decimal("0"))
 
             if limit_px > 0 and low <= limit_px:
                 # Gap down below limit? We get filled at open if open < limit, else limit.
@@ -201,22 +208,28 @@ class BacktestEngine:
 
                 # Calculate fees
                 notional = shares * fill_price
-                fee = self.bt_config.fee_per_trade + (notional * Decimal(str(self.bt_config.fee_pct_per_trade)))
+                fee = self.bt_config.fee_per_trade + (
+                    notional * Decimal(str(self.bt_config.fee_pct_per_trade))
+                )
 
                 total_cost = notional + fee
                 if self.cash >= total_cost:
                     self.cash -= total_cost
 
-                    stop_loss = fill_price * (Decimal("1") - Decimal(str(self.settings.stop_loss_pct)))
-                    take_profit = fill_price * (Decimal("1") + Decimal(str(self.settings.take_profit_pct)))
+                    stop_loss = fill_price * (
+                        Decimal("1") - Decimal(str(self.settings.stop_loss_pct))
+                    )
+                    take_profit = fill_price * (
+                        Decimal("1") + Decimal(str(self.settings.take_profit_pct))
+                    )
 
                     self.positions[sym] = BacktestPosition(
                         symbol=sym,
                         quantity=shares,
                         average_entry_price=fill_price,
-                        entry_time=current_time, # Actually it's the timestamp of this bar
+                        entry_time=current_time,  # Actually it's the timestamp of this bar
                         stop_loss=stop_loss,
-                        take_profit=take_profit
+                        take_profit=take_profit,
                     )
 
                     filled.append(sym)
@@ -242,14 +255,14 @@ class BacktestEngine:
             if df is None:
                 continue
 
-            bar = df[df['timestamp'] == current_time]
+            bar = df[df["timestamp"] == current_time]
             if bar.empty:
                 continue
             bar = bar.iloc[0]
 
-            high = Decimal(str(bar['high']))
-            low = Decimal(str(bar['low']))
-            open_px = Decimal(str(bar['open']))
+            high = Decimal(str(bar["high"]))
+            low = Decimal(str(bar["low"]))
+            open_px = Decimal(str(bar["open"]))
 
             hit_stop = False
             hit_tp = False
@@ -261,14 +274,14 @@ class BacktestEngine:
                 hit_stop = True
                 exit_price = pos.stop_loss
                 if open_px < pos.stop_loss:
-                    exit_price = open_px # Gap down, filled worse
+                    exit_price = open_px  # Gap down, filled worse
                 reason = "STOP_LOSS"
 
             if pos.take_profit and high >= pos.take_profit:
                 hit_tp = True
                 tp_price = pos.take_profit
                 if open_px > pos.take_profit:
-                    tp_price = open_px # Gap up, filled better
+                    tp_price = open_px  # Gap up, filled better
 
                 # Conservative intra-bar collision:
                 if hit_stop:
@@ -283,9 +296,11 @@ class BacktestEngine:
                 exit_price = exit_price * (Decimal("1") - Decimal(str(self.bt_config.slippage_pct)))
 
                 notional = pos.quantity * exit_price
-                fee = self.bt_config.fee_per_trade + (notional * Decimal(str(self.bt_config.fee_pct_per_trade)))
+                fee = self.bt_config.fee_per_trade + (
+                    notional * Decimal(str(self.bt_config.fee_pct_per_trade))
+                )
 
-                self.cash += (notional - fee)
+                self.cash += notional - fee
 
                 entry_notional = pos.quantity * pos.average_entry_price
                 pnl = (notional - fee) - entry_notional
@@ -293,7 +308,7 @@ class BacktestEngine:
 
                 trade = BacktestTrade(
                     symbol=sym,
-                    side=OrderSide.BUY, # Always long MVP
+                    side=OrderSide.BUY,  # Always long MVP
                     quantity=pos.quantity,
                     entry_price=pos.average_entry_price,
                     entry_time=pos.entry_time,
@@ -302,8 +317,8 @@ class BacktestEngine:
                     exit_reason=reason,
                     pnl=pnl,
                     pnl_pct=pnl_pct,
-                    fees_paid=fee, # Simplified, missing entry fee here but reflected in cash
-                    slippage_paid=Decimal("0") # Already baked into price
+                    fees_paid=fee,  # Simplified, missing entry fee here but reflected in cash
+                    slippage_paid=Decimal("0"),  # Already baked into price
                 )
                 self.trades.append(trade)
                 closed_positions.append(sym)
@@ -317,9 +332,9 @@ class BacktestEngine:
             df = self.df_15m.get(sym)
             if df is not None:
                 # Get the close of the current bar if available, else last known close
-                bar = df[df['timestamp'] <= current_time]
+                bar = df[df["timestamp"] <= current_time]
                 if not bar.empty:
-                    close_px = Decimal(str(bar.iloc[-1]['close']))
+                    close_px = Decimal(str(bar.iloc[-1]["close"]))
                     equity += pos.quantity * close_px
                 else:
                     equity += pos.quantity * pos.average_entry_price
@@ -331,7 +346,7 @@ class BacktestEngine:
         for sym, pos in self.positions.items():
             df = self.df_15m.get(sym)
             if df is not None and not df.empty:
-                close_px = Decimal(str(df.iloc[-1]['close']))
+                close_px = Decimal(str(df.iloc[-1]["close"]))
                 final_equity += pos.quantity * close_px
 
         initial = self.bt_config.initial_capital
@@ -349,7 +364,7 @@ class BacktestEngine:
         if gross_loss_val > Decimal("0.0"):
             profit_factor = float(gross_profit_val / gross_loss_val)
         elif gross_profit_val > Decimal("0.0"):
-            profit_factor = float('inf')
+            profit_factor = float("inf")
 
         total_fees = Decimal("0.0")
         total_slippage = Decimal("0.0")
@@ -368,5 +383,5 @@ class BacktestEngine:
             total_fees=total_fees,
             total_slippage=total_slippage,
             max_exposure_pct=self.peak_exposure,
-            trades=self.trades
+            trades=self.trades,
         )

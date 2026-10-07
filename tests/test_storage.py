@@ -8,7 +8,12 @@ from alembic.config import Config
 
 from trading_system.storage.database import get_engine, get_session_factory
 from trading_system.storage.models import Base
-from trading_system.storage.repositories import SignalRepository, OrderRepository, StateRepository, transaction
+from trading_system.storage.repositories import (
+    SignalRepository,
+    OrderRepository,
+    StateRepository,
+    transaction,
+)
 from trading_system.domain.models import StrategySignal, BrokerOrder, TradingState
 from trading_system.domain.enums import SignalDirection, OrderSide, OrderType, OrderStatus
 
@@ -16,6 +21,7 @@ from trading_system.domain.enums import SignalDirection, OrderSide, OrderType, O
 # Set test environment variables to satisfy Settings
 os.environ["ALPACA_API_KEY"] = "test_key"
 os.environ["ALPACA_SECRET_KEY"] = "test_secret"
+
 
 @pytest.fixture
 def engine(tmp_path):
@@ -25,10 +31,12 @@ def engine(tmp_path):
     eng = get_engine(url)
     return eng, url
 
+
 @pytest.fixture
 def session_factory(engine):
     eng, _ = engine
     return get_session_factory(eng)
+
 
 def test_migration_and_empty_db(engine, monkeypatch):
     eng, url = engine
@@ -44,6 +52,7 @@ def test_migration_and_empty_db(engine, monkeypatch):
     with eng.connect() as conn:
         result = conn.execute(text("SELECT count(*) FROM strategy_signals")).scalar()
         assert result == 0
+
 
 def test_transaction_rollback(engine, session_factory, monkeypatch):
     eng, url = engine
@@ -63,6 +72,7 @@ def test_transaction_rollback(engine, session_factory, monkeypatch):
         state = repo.get_state()
         assert state.is_trading_halted is False
 
+
 def test_duplicate_signal(engine, session_factory):
     eng, url = engine
     Base.metadata.create_all(eng)
@@ -71,7 +81,7 @@ def test_duplicate_signal(engine, session_factory):
         symbol="AAPL",
         timeframe="15Min",
         closed_bar_timestamp=datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc),
-        direction=SignalDirection.LONG
+        direction=SignalDirection.LONG,
     )
 
     session = session_factory()
@@ -106,7 +116,7 @@ def test_duplicate_fill(engine, session_factory):
         quantity=Decimal("10.0"),
         filled_quantity=Decimal("10.0"),
         created_at=datetime.now(timezone.utc),
-        updated_at=datetime.now(timezone.utc)
+        updated_at=datetime.now(timezone.utc),
     )
     repo.save_broker_order(broker_order)
     session.commit()
@@ -121,6 +131,7 @@ def test_duplicate_fill(engine, session_factory):
     session.commit()
     assert success2 is False
     session.close()
+
 
 def test_state_persistence(engine, session_factory):
     eng, url = engine

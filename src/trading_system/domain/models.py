@@ -40,7 +40,7 @@ class StrategySignal(BaseModel):
         if not self.signal_id:
             # Deterministic ID: version + symbol + timeframe + closed_bar_timestamp + direction
             unique_string = f"{self.version}_{self.symbol}_{self.timeframe}_{self.closed_bar_timestamp.isoformat()}_{self.direction.value}"
-            self.signal_id = hashlib.sha256(unique_string.encode('utf-8')).hexdigest()
+            self.signal_id = hashlib.sha256(unique_string.encode("utf-8")).hexdigest()
         return self
 
 
@@ -69,6 +69,7 @@ class OrderIntent(BaseModel):
     limit_price: Optional[Decimal] = None
     stop_price: Optional[Decimal] = None
     intent_timestamp: datetime = Field(default_factory=_now_utc)
+
 
 class BrokerOrder(BaseModel):
     broker_id: str

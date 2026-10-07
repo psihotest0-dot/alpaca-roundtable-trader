@@ -1,5 +1,3 @@
-
-
 class HealthStatus:
     """Tracks the health and readiness of the trading system."""
 

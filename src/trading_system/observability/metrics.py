@@ -6,75 +6,49 @@ from prometheus_client import Counter, Gauge, start_http_server
 
 # Define metrics
 RUNTIME_HEALTH = Gauge(
-    "runtime_health",
-    "Health of the trading system runtime (1=healthy, 0=unhealthy)"
+    "runtime_health", "Health of the trading system runtime (1=healthy, 0=unhealthy)"
 )
 
 MARKET_DATA_AGE_SECONDS = Gauge(
-    "market_data_age_seconds",
-    "Age of the latest market data in seconds"
+    "market_data_age_seconds", "Age of the latest market data in seconds"
 )
 
 RECONCILIATION_AGE_SECONDS = Gauge(
-    "reconciliation_age_seconds",
-    "Time since last successful broker reconciliation in seconds"
+    "reconciliation_age_seconds", "Time since last successful broker reconciliation in seconds"
 )
 
-ACTIVE_POSITIONS = Gauge(
-    "active_positions",
-    "Number of active trading positions"
-)
+ACTIVE_POSITIONS = Gauge("active_positions", "Number of active trading positions")
 
-RESERVED_ENTRIES = Gauge(
-    "reserved_entries",
-    "Number of reserved entries pending execution"
-)
+RESERVED_ENTRIES = Gauge("reserved_entries", "Number of reserved entries pending execution")
 
-GROSS_EXPOSURE = Gauge(
-    "gross_exposure",
-    "Total gross exposure as a fraction of account equity"
-)
+GROSS_EXPOSURE = Gauge("gross_exposure", "Total gross exposure as a fraction of account equity")
 
 PLANNED_OPEN_RISK = Gauge(
     "planned_open_risk",
-    "Total planned open risk across all positions/intents as a fraction of equity"
+    "Total planned open risk across all positions/intents as a fraction of equity",
 )
 
-DAILY_LOSS = Gauge(
-    "daily_loss",
-    "Current daily loss as a fraction of start-of-day equity"
-)
+DAILY_LOSS = Gauge("daily_loss", "Current daily loss as a fraction of start-of-day equity")
 
 # Use labels for reason, but do NOT use unique IDs like signal_id or order_id
 REJECTED_SIGNALS = Counter(
-    "rejected_signals_total",
-    "Total number of rejected trading signals",
-    ["reason"]
+    "rejected_signals_total", "Total number of rejected trading signals", ["reason"]
 )
 
-ORACLE_LATENCY_SECONDS = Gauge(
-    "oracle_latency_seconds",
-    "Latency of AnythingLLM Oracle calls"
-)
+ORACLE_LATENCY_SECONDS = Gauge("oracle_latency_seconds", "Latency of AnythingLLM Oracle calls")
 
-ORACLE_ERRORS = Counter(
-    "oracle_errors_total",
-    "Total number of AnythingLLM Oracle errors"
-)
+ORACLE_ERRORS = Counter("oracle_errors_total", "Total number of AnythingLLM Oracle errors")
 
-ORDER_FAILURES = Counter(
-    "order_failures_total",
-    "Total number of failed broker orders"
-)
+ORDER_FAILURES = Counter("order_failures_total", "Total number of failed broker orders")
 
 UNRESOLVED_INTENTS = Gauge(
     "unresolved_intents",
-    "Number of order intents in an unknown or unresolved state requiring reconciliation"
+    "Number of order intents in an unknown or unresolved state requiring reconciliation",
 )
 
 UNPROTECTED_POSITIONS = Gauge(
     "unprotected_positions",
-    "Number of open positions lacking protective child orders (stop-loss/take-profit)"
+    "Number of open positions lacking protective child orders (stop-loss/take-profit)",
 )
 
 

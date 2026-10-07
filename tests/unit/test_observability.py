@@ -15,11 +15,8 @@ def test_secret_redaction_dict():
     data = {
         "normal_key": "normal_value",
         "api_key": "secret_abc123",
-        "nested": {
-            "SECRET": "hidden_value",
-            "token": "token_123"
-        },
-        "environment": {"API_URL": "http://test"}
+        "nested": {"SECRET": "hidden_value", "token": "token_123"},
+        "environment": {"API_URL": "http://test"},
     }
 
     redacted = SensitiveDataRedactor.redact(data)
@@ -48,10 +45,10 @@ def test_json_formatter():
         lineno=0,
         msg="Test message with API_KEY=secret123",
         args=(),
-        exc_info=None
+        exc_info=None,
     )
-    record.component = "TestComponent" # type: ignore
-    record.signal_id = "sig_123" # type: ignore
+    record.component = "TestComponent"  # type: ignore
+    record.signal_id = "sig_123"  # type: ignore
 
     formatter = JSONFormatter()
     formatted = formatter.format(record)
