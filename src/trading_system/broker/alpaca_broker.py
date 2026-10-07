@@ -107,3 +107,9 @@ class AlpacaBroker:
         from alpaca.trading.requests import GetCalendarRequest
         req = GetCalendarRequest(start=start, end=end)
         return self.client.get_calendar(filters=req)
+
+    def submit_order(self, order_data: Any) -> Any:
+        return self.client.submit_order(order_data=order_data)
+
+    def cancel_order_by_id(self, order_id: str) -> Any:
+        return self.client.cancel_order_by_id(order_id=order_id)
