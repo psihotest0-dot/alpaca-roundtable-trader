@@ -16,6 +16,7 @@ class Orchestrator:
         self.state_repo = state_repo
         if self.state_repo is None:
             from trading_system.storage.database import get_engine, get_session_factory
+
             engine = get_engine(settings.database_url)
             session_factory = get_session_factory(engine)
             self.state_repo = StateRepository(session_factory())
