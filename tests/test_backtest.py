@@ -22,12 +22,12 @@ def dummy_settings():
         oracle_enabled=False
     )
 
-def _create_mock_bar(timestamp: datetime, o: float, h: float, l: float, c: float) -> pd.DataFrame:
+def _create_mock_bar(timestamp: datetime, o: float, h: float, low_val: float, c: float) -> pd.DataFrame:
     return pd.DataFrame({
         'timestamp': [timestamp],
         'open': [o],
         'high': [h],
-        'low': [l],
+        'low': [low_val],
         'close': [c],
         'volume': [1000]
     })

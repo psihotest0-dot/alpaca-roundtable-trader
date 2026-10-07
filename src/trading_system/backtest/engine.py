@@ -1,9 +1,8 @@
 import pandas as pd
-import numpy as np
-from typing import Dict, List, Optional, Set
+from typing import Dict, List
 from decimal import Decimal
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 import json
 
 from trading_system.config import Settings
@@ -12,7 +11,6 @@ from trading_system.domain.models import StrategySignal
 from trading_system.strategy.config import StrategyConfig
 from trading_system.strategy.trend import generate_signals, filter_signals
 from trading_system.backtest.models import BacktestConfig, BacktestTrade, BacktestPosition, BacktestResult
-from trading_system.risk.engine import RiskEngine
 
 logger = logging.getLogger(__name__)
 
