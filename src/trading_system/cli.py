@@ -7,6 +7,11 @@ from pydantic import ValidationError
 from trading_system.config import Settings
 
 
+def inject_offline_dummy_keys() -> None:
+    import os
+    os.environ["ALPACA_API_KEY"] = os.environ.get("ALPACA_API_KEY", "dummy_offline_key")
+    os.environ["ALPACA_SECRET_KEY"] = os.environ.get("ALPACA_SECRET_KEY", "dummy_offline_secret")
+
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Alpaca Roundtable Trader - Automated paper trading system."
@@ -70,6 +75,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     if args.command == "validate-config":
         try:
+            inject_offline_dummy_keys()
             Settings()  # type: ignore
             print("Configuration is valid.")
             return 0
@@ -79,6 +85,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     elif args.command == "doctor":
         try:
+            if not args.network:
+                inject_offline_dummy_keys()
             settings = Settings()  # type: ignore
             print("Local configuration is valid.")
 

@@ -261,3 +261,29 @@ def test_crash_after_submission_before_db_update(
 
     assert result is not None
     assert result.status == OrderStatus.UNKNOWN_REQUIRES_RECONCILIATION
+
+def test_dry_run_prevents_mutations(mock_broker, mock_order_repo, mock_state_repo, settings, base_intent):
+    # Initialize engine in dry-run mode
+    engine = ExecutionEngine(mock_broker, mock_order_repo, mock_state_repo, settings, is_dry_run=True)
+    mock_broker.get_asset.return_value = MagicMock(price_increment=0.01)
+
+    # 1. Test submit_order
+    result = engine.submit_order(base_intent)
+    assert result is not None
+    assert result.status == OrderStatus.SUBMITTED
+    assert result.broker_id == f"dry_run_exec_{base_intent.signal_id}"
+    mock_broker.submit_order.assert_not_called()
+
+    # 2. Test cancel_bracket_order
+    engine.cancel_bracket_order(result.client_order_id)
+    mock_broker.cancel_order_by_id.assert_not_called()
+
+    # 3. Test emergency_check_unprotected_positions
+    mock_pos = MagicMock()
+    mock_pos.symbol = "AAPL"
+    mock_pos.qty = "10"
+    mock_broker.get_positions.return_value = [mock_pos]
+    mock_broker.get_open_orders.return_value = [] # No covering orders
+
+    engine.emergency_check_unprotected_positions()
+    mock_broker.submit_order.assert_not_called()
