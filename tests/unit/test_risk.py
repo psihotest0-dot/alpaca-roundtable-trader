@@ -1,7 +1,6 @@
 from decimal import Decimal
 from datetime import datetime, timezone, timedelta
 import pytest
-from pydantic import SecretStr
 
 from trading_system.config import Settings
 from trading_system.domain.enums import SignalDirection, OrderSide, OrderType, OrderStatus
