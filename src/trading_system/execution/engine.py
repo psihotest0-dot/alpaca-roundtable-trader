@@ -24,11 +24,13 @@ class ExecutionEngine:
         order_repo: OrderRepository,
         state_repo: StateRepository,
         settings: Settings,
+        is_dry_run: bool = False,
     ):
         self.broker = broker
         self.order_repo = order_repo
         self.state_repo = state_repo
         self.settings = settings
+        self.is_dry_run = is_dry_run
         self._lock = threading.Lock()
 
     def _generate_client_order_id(self, signal_id: str) -> str:
@@ -119,6 +121,29 @@ class ExecutionEngine:
                     inc = 0.01 if take_profit_price >= Decimal("1.00") else 0.0001
                 inc_dec = Decimal(str(inc))
                 take_profit_price = (take_profit_price // inc_dec) * inc_dec
+
+            if self.is_dry_run:
+                logger.info(f"[DRY-RUN] Would submit order {client_order_id} for {intent.symbol}")
+                broker_order = BrokerOrder(
+                    broker_id=f"dry_run_{client_order_id}",
+                    client_order_id=client_order_id,
+                    symbol=str(intent.symbol),
+                    side=intent.side,
+                    type=intent.type,
+                    status=OrderStatus.SUBMITTED,
+                    quantity=intent.quantity,
+                    filled_quantity=Decimal("0"),
+                    limit_price=intent.limit_price,
+                    stop_price=intent.stop_price,
+                    created_at=datetime.datetime.now(datetime.timezone.utc),
+                    updated_at=datetime.datetime.now(datetime.timezone.utc),
+                )
+                try:
+                    self.order_repo.save_broker_order(broker_order)
+                except Exception as e:
+                    logger.error(f"Failed to persist dry-run broker order {client_order_id}: {e}")
+                    return None
+                return broker_order
 
             # Check for existing
             try:
@@ -318,6 +343,10 @@ class ExecutionEngine:
         If the parent is subsequently cancelled, the children remain active for the filled amount.
         """
         with self._lock:
+            if self.is_dry_run:
+                logger.info(f"[DRY-RUN] Would cancel order {client_order_id}")
+                return
+
             try:
                 alpaca_order = self.broker.get_order_by_client_id(client_order_id)
                 if alpaca_order.status in ["filled", "canceled", "rejected", "expired"]:
@@ -381,6 +410,10 @@ class ExecutionEngine:
                         f"UNPROTECTED POSITION DETECTED for {sym}: Position qty {qty}, covered {covering_qty}"
                     )
                     self.halt_trading(f"Unprotected open position for {sym}")
+
+                    if self.is_dry_run:
+                        logger.critical(f"[DRY-RUN] Would submit emergency market close for {sym}")
+                        continue
 
                     # Documented action: In paper trading, submit a market sell order to close it out immediately
                     try:

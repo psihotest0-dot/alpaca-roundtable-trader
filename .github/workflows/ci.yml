@@ -54,7 +54,7 @@ jobs:
       - name: Dependency Vulnerability Check
         run: |
           poetry run pip install safety
-          poetry export -f requirements.txt | poetry run safety check --stdin
+          poetry self add poetry-plugin-export@^1.8.0 && poetry export -f requirements.txt | poetry run safety check --stdin
 
       - name: Run Ruff Check
         run: poetry run ruff check .

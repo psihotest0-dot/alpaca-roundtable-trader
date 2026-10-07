@@ -15,7 +15,7 @@ This document outlines the safety and architectural checks completed before perm
 | Partial Fills | Are partial fills protected? | PASS | Alpaca native OTOCO/bracket handling is used. The `cancel_bracket_order` method explicitly notes that canceling a parent limit order leaves the generated child legs for the partially filled quantity active. |
 | Missing Protect | Are unprotected positions caught? | PASS | `ExecutionEngine.emergency_check_unprotected_positions` explicitly tallies position quantity against protective sell stops and submits emergency closing market orders for unprotected quantities. |
 | Oracle Scope | Can Oracle bypass exits or risk sizing? | PASS | `src/trading_system/oracle/` contains no execution or sizing logic. The signal evaluation pipeline forces risk to authorize entry after the oracle acts as a veto filter. |
-| Secrets | Are secrets exposed? | PASS | `pydantic.SecretStr` is used in configuration, and the CI uses a regex scanner to catch hardcoded secrets. |
+| Secrets | Are secrets exposed? | PASS | `pydantic.SecretStr` is used in configuration, preventing accidental leak in dumps. Note limitation: `.get_secret_value()` usage must be strictly excluded from logging manually. CI uses a regex scanner to catch hardcoded secrets. |
 | Defaults | Are defaults safe? | PASS | `is_paper` defaults to `True`. `oracle_enabled` defaults to `False`. Live commands default to `--dry-run`. |
 
 ## Conclusion

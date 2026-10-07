@@ -35,15 +35,24 @@
   ```bash
   sqlite3 ./var/trading.db ".backup './var/trading_backup.db'"
   ```
-- **Restore**: Simply stop the application and copy the backup file over the active database file:
-  ```bash
-  cp ./var/trading_backup.db ./var/trading.db
-  poetry run alembic upgrade head
-  ```
+- **Restore**:
+  1. Stop all users/processes interacting with the database.
+  2. Backup existing state (even if corrupted) before overwrite. Ensure WAL and SHM files are handled/removed.
+  3. Copy the backup file over the active database file:
+     ```bash
+     cp ./var/trading_backup.db ./var/trading.db
+     ```
+  4. Run integrity and schema checks:
+     ```bash
+     sqlite3 ./var/trading.db "PRAGMA integrity_check;"
+     poetry run alembic upgrade head
+     ```
+  5. Manually reconcile the broker state before allowing new entries.
 
 ## Docker & Connectivity
 
 - **Chroma & AnythingLLM Networking**: The local Chroma database MUST run on the host system outside of Docker.
+  - **Access Mode**: Chroma must be accessed via `PersistentClient` locally or via a strictly local HTTP server on the host, preventing external exposure unless explicitly required by deployment.
   - On macOS/Linux: Usually `~/opper-data/chroma`.
   - On Windows: Usually `C:\opper-data\chroma`.
   Inside Docker (`compose.yaml`), the container resolves host endpoints using OS-specific gateways (e.g., `host.docker.internal` for Mac/Win or `172.17.0.1` for Linux). Do NOT use `127.0.0.1` inside Docker for AnythingLLM/Chroma URLs.
