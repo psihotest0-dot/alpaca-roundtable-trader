@@ -4,12 +4,12 @@ from decimal import Decimal
 import datetime
 
 from alpaca.trading.models import Order, Asset
-from alpaca.trading.enums import OrderClass, OrderStatus as AlpacaOrderStatus
+from alpaca.trading.enums import OrderStatus as AlpacaOrderStatus
 
 from trading_system.execution.engine import ExecutionEngine
 from trading_system.broker.alpaca_broker import AlpacaBroker
 from trading_system.storage.repositories import OrderRepository, StateRepository
-from trading_system.domain.models import OrderIntent, BrokerOrder, TradingState
+from trading_system.domain.models import OrderIntent, TradingState
 from trading_system.domain.enums import OrderSide, OrderType, OrderStatus
 from trading_system.config import Settings
 

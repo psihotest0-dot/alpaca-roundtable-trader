@@ -6,11 +6,11 @@ import datetime
 import time
 
 from alpaca.trading.requests import LimitOrderRequest, TakeProfitRequest, StopLossRequest
-from alpaca.trading.enums import OrderClass, OrderType as AlpacaOrderType, OrderSide as AlpacaOrderSide, TimeInForce
+from alpaca.trading.enums import OrderClass, OrderSide as AlpacaOrderSide, TimeInForce
 
 from trading_system.broker.alpaca_broker import AlpacaBroker
 from trading_system.storage.repositories import OrderRepository, StateRepository
-from trading_system.domain.models import OrderIntent, BrokerOrder, TradingState
+from trading_system.domain.models import OrderIntent, BrokerOrder
 from trading_system.domain.enums import OrderSide, OrderType, OrderStatus
 from trading_system.config import Settings
 
@@ -35,7 +35,8 @@ class ExecutionEngine:
         state.halt_reason = reason
         self.state_repo.save_state(state)
 
-    def _validate_price_increment(self, price: Decimal, asset: any) -> bool:
+    from typing import Any
+    def _validate_price_increment(self, price: Decimal, asset: Any) -> bool:
         # Validate price increments based on US Equity rules if not specified by asset
         # $0.01 for >= $1.00, $0.0001 for < $1.00
 
@@ -316,7 +317,7 @@ class ExecutionEngine:
             except Exception as e:
                 logger.error(f"Failed to cancel order {client_order_id}: {e}")
 
-    def check_bounded_entry_expiry(self, max_age_minutes: int = 15):
+    def check_bounded_entry_expiry(self, max_age_minutes: int = 15) -> None:
         # Bounded entry expiry policy
         # Query broker for open buy orders and cancel if they exceed TTL
         try:
@@ -332,7 +333,7 @@ class ExecutionEngine:
             logger.error(f"Failed to check bounded entry expiry: {e}")
 
 
-    def emergency_check_unprotected_positions(self):
+    def emergency_check_unprotected_positions(self) -> None:
         # Paper emergency procedure: Check for open positions without active protective child orders
         try:
             positions = self.broker.get_positions()
