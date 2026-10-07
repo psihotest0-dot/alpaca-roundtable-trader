@@ -9,8 +9,10 @@ from trading_system.config import Settings
 
 def inject_offline_dummy_keys() -> None:
     import os
+
     os.environ["ALPACA_API_KEY"] = os.environ.get("ALPACA_API_KEY", "dummy_offline_key")
     os.environ["ALPACA_SECRET_KEY"] = os.environ.get("ALPACA_SECRET_KEY", "dummy_offline_secret")
+
 
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
