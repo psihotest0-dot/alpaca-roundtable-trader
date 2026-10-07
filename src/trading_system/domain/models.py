@@ -31,6 +31,10 @@ class StrategySignal(BaseModel):
     signal_id: Optional[str] = None
     expires_at: Optional[datetime] = None
 
+    # Used internally by the backtest engine; not part of the standard runtime
+    _suggested_limit: Optional[Decimal] = None
+    _suggested_shares: Optional[Decimal] = None
+
     @model_validator(mode="after")
     def compute_signal_id(self) -> "StrategySignal":
         if not self.signal_id:

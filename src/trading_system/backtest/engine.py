@@ -31,8 +31,14 @@ class BacktestEngine:
 
         self.strategy_config = StrategyConfig(
             strategy_version="1.0",
-            timeframe_minutes=settings.timeframe_minutes,
-            htf_timeframe_minutes=settings.htf_timeframe_minutes,
+            fast_ema_period=20,
+            slow_ema_period=50,
+            rsi_period=14,
+            rsi_lower_bound=50.0,
+            rsi_upper_bound=70.0,
+            atr_period=14,
+            htf_fast_ema_period=20,
+            htf_slow_ema_period=50,
             min_warmup_bars=settings.htf_lookback_days * 6
         )
 
@@ -50,7 +56,7 @@ class BacktestEngine:
         if bt_config.replay_oracle_path:
             self._load_replay_oracle(bt_config.replay_oracle_path)
 
-    def _load_replay_oracle(self, path: str):
+    def _load_replay_oracle(self, path: str) -> None:
         try:
             with open(path, 'r') as f:
                 data = json.load(f)
@@ -125,7 +131,7 @@ class BacktestEngine:
             return self.oracle_decisions[sig.signal_id]
         return False # Abstain / default veto if not found in replay
 
-    def _apply_risk_and_queue(self, sig: StrategySignal, equity: Decimal, eval_time: datetime):
+    def _apply_risk_and_queue(self, sig: StrategySignal, equity: Decimal, eval_time: datetime) -> None:
         # Determine current price for risk logic using the closed bar
         df = self.df_15m.get(sig.symbol)
         if df is None or df.empty:
@@ -167,7 +173,7 @@ class BacktestEngine:
                 sig._suggested_limit = last_close
                 sig._suggested_shares = shares
 
-    def _process_pending_orders(self, current_time: datetime):
+    def _process_pending_orders(self, current_time: datetime) -> None:
         # Pending orders are assumed to be limit orders placed at the close of the signal bar.
         # If the low of the *current* bar is <= limit price, we get filled.
         filled = []
@@ -221,7 +227,7 @@ class BacktestEngine:
         for sym in filled:
             self.pending_orders.pop(sym, None)
 
-    def _expire_orders(self, current_time: datetime):
+    def _expire_orders(self, current_time: datetime) -> None:
         expired = []
         for sym, sig in self.pending_orders.items():
             if sig.expires_at and current_time >= sig.expires_at:
@@ -229,7 +235,7 @@ class BacktestEngine:
         for sym in expired:
             self.pending_orders.pop(sym, None)
 
-    def _process_bar_executions(self, current_time: datetime):
+    def _process_bar_executions(self, current_time: datetime) -> None:
         closed_positions = []
         for sym, pos in self.positions.items():
             df = self.df_15m.get(sym)
@@ -336,9 +342,20 @@ class BacktestEngine:
 
         win_rate = len(wins) / len(self.trades) if self.trades else 0.0
 
-        gross_profit = sum(t.pnl for t in wins if t.pnl)
-        gross_loss = abs(sum(t.pnl for t in losses if t.pnl))
-        profit_factor = float(gross_profit / gross_loss) if gross_loss > 0 else (float('inf') if gross_profit > 0 else 0.0)
+        gross_profit_val = sum((t.pnl for t in wins if t.pnl), Decimal("0.0"))
+        gross_loss_val = abs(sum((t.pnl for t in losses if t.pnl), Decimal("0.0")))
+
+        profit_factor = 0.0
+        if gross_loss_val > Decimal("0.0"):
+            profit_factor = float(gross_profit_val / gross_loss_val)
+        elif gross_profit_val > Decimal("0.0"):
+            profit_factor = float('inf')
+
+        total_fees = Decimal("0.0")
+        total_slippage = Decimal("0.0")
+        for t in self.trades:
+            total_fees += t.fees_paid
+            total_slippage += t.slippage_paid
 
         return BacktestResult(
             initial_capital=initial,
@@ -348,8 +365,8 @@ class BacktestEngine:
             trade_count=len(self.trades),
             win_rate=win_rate,
             profit_factor=profit_factor,
-            total_fees=sum(t.fees_paid for t in self.trades),
-            total_slippage=sum(t.slippage_paid for t in self.trades),
+            total_fees=total_fees,
+            total_slippage=total_slippage,
             max_exposure_pct=self.peak_exposure,
             trades=self.trades
         )
