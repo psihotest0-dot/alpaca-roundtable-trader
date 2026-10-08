@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     rss_feeds: str = ""
     rss_update_interval_minutes: int = Field(60, gt=0)
     rss_max_concurrent_requests: int = Field(5, gt=0)
-    rss_max_response_bytes: int = Field(5 * 1024 * 1024, gt=0) # 5MB
+    rss_max_response_bytes: int = Field(5 * 1024 * 1024, gt=0)  # 5MB
     rss_max_entries_per_feed: int = Field(50, gt=0)
     chroma_db_path: str = "./var/chroma_db"
     chroma_collection_name: str = "news"

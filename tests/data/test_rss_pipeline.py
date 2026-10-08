@@ -1,3 +1,4 @@
+from typing import Any
 import pytest
 import os
 from datetime import datetime, timezone
@@ -20,12 +21,12 @@ def settings() -> Settings:
         chroma_db_path="./var/test_chroma_db"
     )
 
-def test_html_cleaner():
+def test_html_cleaner() -> None:
     html = "<script>alert('xss');</script><p>Hello <b>World</b></p><style>.hidden { display: none; }</style>"
     cleaned = HTMLCleaner.clean(html)
     assert cleaned == "Hello World"
 
-def test_rss_parser(settings):
+def test_rss_parser(settings: Settings) -> None:
     parser = RSSParser(settings)
     content = b"""<?xml version="1.0" encoding="UTF-8" ?>
 <rss version="2.0">
@@ -47,7 +48,7 @@ def test_rss_parser(settings):
     assert entries[0].summary == "New RSS tutorial on W3Schools"
     assert entries[0].source_id == "W3Schools Home Page"
 
-def test_text_chunker():
+def test_text_chunker() -> None:
     chunker = TextChunker(chunk_size=20, chunk_overlap=5)
     text = "This is a sentence. And another one. Finally, the last one."
     chunks = chunker.chunk_text(text)
@@ -57,7 +58,7 @@ def test_text_chunker():
     for chunk in chunks:
         assert len(chunk) <= 20
 
-def test_chroma_storage_and_retrieval(settings, tmp_path):
+def test_chroma_storage_and_retrieval(settings: Settings, tmp_path: Any) -> None:
     settings.chroma_db_path = str(tmp_path)
 
     provider = FakeEmbeddingProvider(dimension=3)
