@@ -17,6 +17,9 @@ SQLAlchemy = "^2.0.29"
 alembic = "^1.13.1"
 tenacity = "^9.1.4"
 prometheus-client = "^0.26.0"
+beautifulsoup4 = "^4.15.0"
+chromadb = "^1.5.9"
+feedparser = "^6.0.14"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.1.1"
