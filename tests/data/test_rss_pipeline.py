@@ -15,7 +15,8 @@ from trading_system.data.retrieval import NewsSearchService
 def settings() -> Settings:
     os.environ["ALPACA_API_KEY"] = "dummy"
     os.environ["ALPACA_SECRET_KEY"] = "dummy"
-    return Settings(
+    return Settings(alpaca_api_key="dummy", alpaca_secret_key="dummy",  # type: ignore
+
         rss_enabled=True,
         rss_feeds="http://example.com/rss",
         chroma_db_path="./var/test_chroma_db"
