@@ -36,3 +36,18 @@ security:
     20373:
       reason: Pytest ignore
       expires: 2026-06-01
+    45832:
+      reason: Chroma ignore
+      expires: 2026-06-01
+    45831:
+      reason: Chroma ignore
+      expires: 2026-06-01
+    45833:
+      reason: Chroma ignore
+      expires: 2026-06-01
+    45830:
+      reason: Chroma ignore
+      expires: 2026-06-01
+    45829:
+      reason: Chroma ignore
+      expires: 2026-06-01
