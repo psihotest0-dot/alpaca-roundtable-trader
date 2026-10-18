@@ -1,0 +1,71 @@
+security:
+  ignore-vulnerabilities:
+    73432:
+      reason: Test/Dev
+      expires: 2027-06-01
+    21661:
+      reason: Test/Dev
+      expires: 2027-06-01
+    19125:
+      reason: Test/Dev
+      expires: 2027-06-01
+    61402:
+      reason: Test/Dev
+      expires: 2027-06-01
+    81716:
+      reason: Test/Dev
+      expires: 2027-06-01
+    67432:
+      reason: Test/Dev
+      expires: 2027-06-01
+    58666:
+      reason: Ignore NLTK false pos
+      expires: 2027-06-01
+    69199:
+      reason: Pip ignore
+      expires: 2027-06-01
+    60812:
+      reason: Pip ignore
+      expires: 2027-06-01
+    69629:
+      reason: Pip ignore
+      expires: 2027-06-01
+    70233:
+      reason: Pip ignore
+      expires: 2027-06-01
+    20373:
+      reason: Pytest ignore
+      expires: 2027-06-01
+    45832:
+      reason: Chroma ignore
+      expires: 2027-06-01
+    45831:
+      reason: Chroma ignore
+      expires: 2027-06-01
+    45833:
+      reason: Chroma ignore
+      expires: 2027-06-01
+    45830:
+      reason: Chroma ignore
+      expires: 2027-06-01
+    45829:
+      reason: Chroma ignore
+      expires: 2027-06-01
+    SFTY-20260902-58666:
+      reason: Test/Dev
+      expires: 2027-06-01
+    SFTY-20260612-67432:
+      reason: Test/Dev
+      expires: 2027-06-01
+    SFTY-20260612-21661:
+      reason: Test/Dev
+      expires: 2027-06-01
+    SFTY-20260612-19125:
+      reason: Test/Dev
+      expires: 2027-06-01
+    SFTY-20260612-61402:
+      reason: Test/Dev
+      expires: 2027-06-01
+    SFTY-20260518-81716:
+      reason: Test/Dev
+      expires: 2027-06-01
