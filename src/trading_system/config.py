@@ -23,6 +23,20 @@ class Settings(BaseSettings):
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 9100
 
+    # RSS Pipeline Settings
+    rss_enabled: bool = False
+    rss_feeds: str = ""
+    rss_update_interval_minutes: int = Field(60, gt=0)
+    rss_max_concurrent_requests: int = Field(5, gt=0)
+    rss_max_response_bytes: int = Field(5 * 1024 * 1024, gt=0)  # 5MB
+    rss_max_entries_per_feed: int = Field(50, gt=0)
+    chroma_db_path: str = "./var/chroma_db"
+    chroma_collection_name: str = "news"
+    embedding_provider: str = "chroma_default"
+    chunk_size: int = Field(500, gt=0)
+    chunk_overlap: int = Field(50, ge=0)
+    retrieval_top_k: int = Field(5, gt=0)
+
     timeframe_minutes: int = Field(15, gt=0)
     htf_timeframe_minutes: int = Field(60, gt=0)
     lookback_days: int = Field(30, gt=0)

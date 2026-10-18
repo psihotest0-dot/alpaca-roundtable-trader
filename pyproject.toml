@@ -17,14 +17,19 @@ SQLAlchemy = "^2.0.29"
 alembic = "^1.13.1"
 tenacity = "^9.1.4"
 prometheus-client = "^0.26.0"
+beautifulsoup4 = "^4.15.0"
+chromadb = ">=0.6.0"
+feedparser = "^6.0.14"
+safety = "^3.8.1"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.1.1"
-pytest-asyncio = "^0.23.6"
+pytest = ">=9.0.3"
+pytest-asyncio = ">=0.24.0"
 ruff = "^0.3.5"
 mypy = "^1.9.0"
 respx = "^0.23.1"
 pytest-mock = "^3.16.0"
+safety = "^3.8.1"
 
 [build-system]
 requires = ["poetry-core"]
@@ -45,3 +50,11 @@ addopts = "-ra -q"
 testpaths = [
     "tests",
 ]
+
+[tool.pydantic-mypy]
+init_forbid_extra = true
+init_typed = true
+warn_required_dynamic_aliases = true
+warn_untyped_fields = true
+
+plugins = ["pydantic.mypy"]
