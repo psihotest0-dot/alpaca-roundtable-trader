@@ -123,9 +123,9 @@ class AlpacaBroker:
         return self.client.get_calendar(filters=req)
 
     def submit_order(self, order_data: Any) -> Any:
-        logger.info(f"Initiating Alpaca order submission")
+        logger.info("Initiating Alpaca order submission")
         result = self.client.submit_order(order_data=order_data)
-        logger.info(f"Successfully completed Alpaca order submission")
+        logger.info("Successfully completed Alpaca order submission")
         return result
 
     def cancel_order_by_id(self, order_id: str) -> Any:
