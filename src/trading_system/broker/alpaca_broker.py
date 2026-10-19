@@ -128,8 +128,8 @@ class AlpacaBroker:
         logger.info("Successfully completed Alpaca order submission")
         return result
 
-    def cancel_order_by_id(self, order_id: str) -> Any:
+    def cancel_order_by_id(self, order_id: str) -> None:
         logger.info(f"Initiating Alpaca order cancellation for order_id={order_id}")
-        result = self.client.cancel_order_by_id(order_id=order_id)
+        self.client.cancel_order_by_id(order_id=order_id)
         logger.info(f"Successfully completed Alpaca order cancellation for order_id={order_id}")
-        return result
+        return None
