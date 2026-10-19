@@ -1,4 +1,5 @@
 import logging
+import re
 from typing import Dict
 
 from trading_system.config import Settings
@@ -57,9 +58,17 @@ class RSSIngestionPipeline:
                     entries = self.parser.parse(feed_url, content)
                     logger.info(f"Parsed {len(entries)} entries from {feed_url}")
 
+                    watchlist_symbols = [s.strip() for s in self.settings.watchlist.split(",") if s.strip()]
+
                     for entry in entries:
                         report["entries_seen"] += 1
                         article_text = f"{entry.title}\n{entry.summary}"
+
+                        matched_symbols = []
+                        for symbol in watchlist_symbols:
+                            # Case-sensitive match to avoid matching common words like "Open" or "Shop"
+                            if re.search(rf"\b{re.escape(symbol)}\b", article_text):
+                                matched_symbols.append(symbol)
 
                         ids = self.adapter.generate_ids(entry.source_id, entry.entry_id, article_text, 0)
 
@@ -105,6 +114,9 @@ class RSSIngestionPipeline:
                                     "embedding_model_version": self.provider.get_model_version(),
                                     "is_active": False
                                 }
+                                # Store boolean flags for each matched symbol to allow easy ChromaDB filtering
+                                for symbol in matched_symbols:
+                                    meta[f"has_symbol_{symbol}"] = True
 
                                 if entry.published_at:
                                     meta["published_at"] = entry.published_at.timestamp()

@@ -38,11 +38,7 @@ class NewsSearchService:
             where_clause: Dict[str, Any] = {"is_active": True}
 
             if symbol_filter:
-                # Assuming symbol extraction stores a comma-separated list of symbols in 'symbols' metadata
-                # Since we can't do regex easily in all chromadb setups, we might just have a symbol exact match or use "$contains".
-                # For simplicity, if we have a simple metadata 'symbol', we can use "$eq".
-                # If we don't have ticker extraction yet, we might skip filtering or use it later.
-                pass
+                where_clause[f"has_symbol_{symbol_filter}"] = True
 
             if time_filter:
                 # time_filter could be a unix timestamp we only want documents strictly newer than.
