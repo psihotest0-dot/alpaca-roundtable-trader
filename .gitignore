@@ -34,3 +34,4 @@ secrets/
 .vscode/
 .idea/
 .DS_Store
+alpaca_trading.log
