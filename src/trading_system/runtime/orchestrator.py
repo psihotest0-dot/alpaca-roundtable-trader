@@ -83,7 +83,9 @@ class Orchestrator:
                     sleep_secs = (clock.next_open - clock.timestamp).total_seconds()
                     # Ensure sleep_secs is strictly positive
                     sleep_secs = max(sleep_secs, 1.0)
-                    logger.info(f"Market is closed. Sleeping for {sleep_secs:.2f} seconds until next open.")
+                    logger.info(
+                        f"Market is closed. Sleeping for {sleep_secs:.2f} seconds until next open."
+                    )
                     time.sleep(sleep_secs)
                     continue
 
@@ -91,9 +93,13 @@ class Orchestrator:
                 state = self.state_repo.get_state()
                 if state and state.is_trading_halted:
                     now_time = datetime.now(timezone.utc)
-                    next_minute = (now_time + dt.timedelta(minutes=1)).replace(second=0, microsecond=0)
+                    next_minute = (now_time + dt.timedelta(minutes=1)).replace(
+                        second=0, microsecond=0
+                    )
                     sleep_secs = max((next_minute - now_time).total_seconds(), 1.0)
-                    logger.info(f"Trading is halted. Sleeping for {sleep_secs:.2f} seconds until next minute.")
+                    logger.info(
+                        f"Trading is halted. Sleeping for {sleep_secs:.2f} seconds until next minute."
+                    )
                     time.sleep(sleep_secs)
                     continue
 
