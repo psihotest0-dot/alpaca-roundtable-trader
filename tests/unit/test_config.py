@@ -71,7 +71,7 @@ def test_oracle_constraints():
             alpaca_secret_key="s",
             oracle_enabled=True,
             anythingllm_api_key="llm_key",
-            anythingllm_workspace_slug=None
+            anythingllm_workspace_slug=None,
         )
 
     # Missing api key when enabled
@@ -81,7 +81,7 @@ def test_oracle_constraints():
             alpaca_secret_key="s",
             oracle_enabled=True,
             anythingllm_workspace_slug="slug",
-            anythingllm_api_key=None
+            anythingllm_api_key=None,
         )
 
     # Remote URL must be https
