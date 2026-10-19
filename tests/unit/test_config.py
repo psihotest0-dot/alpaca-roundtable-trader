@@ -18,7 +18,7 @@ def test_strict_boolean_validation():
         Settings(
             alpaca_api_key="k",
             alpaca_secret_key="s",
-            oracle_enabled="yes",  # Not a valid StrictBool (should be True/False, 'true'/'false' might be parsed but we test pydantic behavior)
+            oracle_enabled="invalid_bool",
         )
 
 
@@ -71,6 +71,7 @@ def test_oracle_constraints():
             alpaca_secret_key="s",
             oracle_enabled=True,
             anythingllm_api_key="llm_key",
+            anythingllm_workspace_slug=None,
         )
 
     # Missing api key when enabled
@@ -80,6 +81,7 @@ def test_oracle_constraints():
             alpaca_secret_key="s",
             oracle_enabled=True,
             anythingllm_workspace_slug="slug",
+            anythingllm_api_key=None,
         )
 
     # Remote URL must be https
