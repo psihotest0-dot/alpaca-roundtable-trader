@@ -79,7 +79,7 @@ class Orchestrator:
         if self.settings.rss_enabled and self.settings.oracle_enabled:
             logger.info("Starting background RSS ingestion thread...")
 
-            def rss_worker():
+            def rss_worker() -> None:
                 while True:
                     try:
                         asyncio.run(RSSIngestionPipeline(self.settings).run())
