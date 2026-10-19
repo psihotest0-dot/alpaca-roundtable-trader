@@ -72,6 +72,10 @@ def create_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    import logging
+    from trading_system.observability.logging import setup_json_logger
+    setup_json_logger("", level=logging.INFO, log_file="var/alpaca_trading.log")
+
     parser = create_parser()
     args = parser.parse_args(argv)
 

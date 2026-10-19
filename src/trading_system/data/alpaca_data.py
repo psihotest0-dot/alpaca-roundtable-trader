@@ -26,7 +26,10 @@ def retry_read_request(
             retries = 0
             while True:
                 try:
-                    return func(*args, **kwargs)
+                    logger.info(f"Initiating Alpaca data read request: {func.__name__}")
+                    result = func(*args, **kwargs)
+                    logger.info(f"Successfully completed Alpaca data read request: {func.__name__}")
+                    return result
                 except Exception as e:
                     if retries >= max_retries:
                         logger.error(f"Failed {func.__name__} after {max_retries} retries: {e}")

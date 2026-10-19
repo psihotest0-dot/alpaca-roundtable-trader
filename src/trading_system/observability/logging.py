@@ -101,7 +101,7 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(redacted_data)
 
 
-def setup_json_logger(name: str, level: int = logging.INFO) -> logging.Logger:
+def setup_json_logger(name: str, level: int = logging.INFO, log_file: str | None = None) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
@@ -109,8 +109,20 @@ def setup_json_logger(name: str, level: int = logging.INFO) -> logging.Logger:
     for handler in logger.handlers[:]:
         logger.removeHandler(handler)
 
-    handler = logging.StreamHandler()
-    handler.setFormatter(JSONFormatter())
-    logger.addHandler(handler)
+    # Add stream handler
+    stream_handler = logging.StreamHandler()
+    stream_handler.setFormatter(JSONFormatter())
+    logger.addHandler(stream_handler)
+
+    # Add file handler if log_file is provided
+    if log_file:
+        import os
+        # Ensure directory exists
+        log_dir = os.path.dirname(log_file)
+        if log_dir:
+            os.makedirs(log_dir, exist_ok=True)
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(JSONFormatter())
+        logger.addHandler(file_handler)
 
     return logger

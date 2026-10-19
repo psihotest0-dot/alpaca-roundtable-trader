@@ -29,7 +29,10 @@ def retry_read_request(
             retries = 0
             while True:
                 try:
-                    return func(*args, **kwargs)
+                    logger.info(f"Initiating Alpaca read request: {func.__name__}")
+                    result = func(*args, **kwargs)
+                    logger.info(f"Successfully completed Alpaca read request: {func.__name__}")
+                    return result
                 except Exception as e:
                     # In a real app we might catch specific rate limit or network exceptions here
                     # For alpaca-py this might be APIError (HTTP 429, etc)
@@ -120,7 +123,13 @@ class AlpacaBroker:
         return self.client.get_calendar(filters=req)
 
     def submit_order(self, order_data: Any) -> Any:
-        return self.client.submit_order(order_data=order_data)
+        logger.info(f"Initiating Alpaca order submission")
+        result = self.client.submit_order(order_data=order_data)
+        logger.info(f"Successfully completed Alpaca order submission")
+        return result
 
     def cancel_order_by_id(self, order_id: str) -> Any:
-        return self.client.cancel_order_by_id(order_id=order_id)
+        logger.info(f"Initiating Alpaca order cancellation for order_id={order_id}")
+        result = self.client.cancel_order_by_id(order_id=order_id)
+        logger.info(f"Successfully completed Alpaca order cancellation for order_id={order_id}")
+        return result
