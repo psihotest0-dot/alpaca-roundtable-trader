@@ -101,7 +101,9 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(redacted_data)
 
 
-def setup_json_logger(name: str, level: int = logging.INFO, log_file: str | None = None) -> logging.Logger:
+def setup_json_logger(
+    name: str, level: int = logging.INFO, log_file: str | None = None
+) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(level)
 
@@ -117,6 +119,7 @@ def setup_json_logger(name: str, level: int = logging.INFO, log_file: str | None
     # Add file handler if log_file is provided
     if log_file:
         import os
+
         # Ensure directory exists
         log_dir = os.path.dirname(log_file)
         if log_dir:
