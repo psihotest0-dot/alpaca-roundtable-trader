@@ -35,14 +35,16 @@ class NewsSearchService:
             query_embedding = self.embedding_provider.embed_query(query)
 
             # Construct where clause based on active chunks and optional filters
-            where_clause: Dict[str, Any] = {"is_active": True}
+            conditions: list[Dict[str, Any]] = [{"is_active": True}]
 
             if symbol_filter:
-                where_clause[f"has_symbol_{symbol_filter}"] = True
+                conditions.append({f"has_symbol_{symbol_filter}": True})
 
             if time_filter:
                 # time_filter could be a unix timestamp we only want documents strictly newer than.
-                where_clause["published_at"] = {"$gt": time_filter}
+                conditions.append({"published_at": {"$gt": time_filter}})
+
+            where_clause: Dict[str, Any] = conditions[0] if len(conditions) == 1 else {"$and": conditions}
 
             # Perform search in Chroma
             results = self.chroma_adapter.collection.query(

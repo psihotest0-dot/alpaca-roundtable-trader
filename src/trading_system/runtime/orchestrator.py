@@ -1,8 +1,11 @@
+import asyncio
 import logging
+import threading
 import time
 from typing import Any
 
 from trading_system.config import Settings
+from trading_system.data.rss_pipeline import RSSIngestionPipeline
 from trading_system.storage.repositories import StateRepository
 from trading_system.domain.models import TradingState
 
@@ -72,6 +75,19 @@ class Orchestrator:
             settings=self.settings,
             is_dry_run=not is_paper,
         )
+
+        if self.settings.rss_enabled and self.settings.oracle_enabled:
+            logger.info("Starting background RSS ingestion thread...")
+            def rss_worker():
+                while True:
+                    try:
+                        asyncio.run(RSSIngestionPipeline(self.settings).run())
+                    except Exception as e:
+                        logger.error(f"RSS Ingestion error: {e}")
+                    time.sleep(self.settings.rss_update_interval_minutes * 60)
+
+            rss_thread = threading.Thread(target=rss_worker, daemon=True)
+            rss_thread.start()
 
         try:
             while True:
@@ -276,9 +292,7 @@ class Orchestrator:
                     except Exception as e:
                         logger.error(f"Error in risk evaluation / execution: {e}")
 
-                # Optional: RSS update here
-                # (Skipping RSS pipeline invocation per loop for simplicity; in a real scenario
-                # this would run in a separate background thread/task as orchestrated in RSSIngestionPipeline)
+                # RSS update is handled by the background rss_worker thread
 
                 # Check for bounded expiry and emergency halts
                 execution_engine.check_bounded_entry_expiry()
