@@ -35,7 +35,7 @@ class NewsSearchService:
             query_embedding = self.embedding_provider.embed_query(query)
 
             # Construct where clause based on active chunks and optional filters
-            conditions: list[Dict[str, Any]] = [{"is_active": True}]
+            conditions: List[Dict[str, Any]] = [{"is_active": True}]
 
             if symbol_filter:
                 conditions.append({f"has_symbol_{symbol_filter}": True})

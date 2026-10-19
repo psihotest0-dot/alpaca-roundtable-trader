@@ -53,7 +53,10 @@ class Settings(BaseSettings):
     take_profit_pct: float = Field(0.05, ge=0.0, le=1.0)
     allow_fractional: bool = False
 
-    watchlist: str = "AAPL,MSFT,NVDA,AMD,GOOGL,TSLA,INTC,META,AMZN,SOFI,PLTR,COIN,MSTR,SHOP,ORCL,MU,NKE,AAL,RIG,MARA,OPEN,PATH"
+    watchlist: str = (
+        "AAPL,MSFT,NVDA,AMD,GOOGL,TSLA,INTC,META,AMZN,SOFI,PLTR,"
+        "COIN,MSTR,SHOP,ORCL,MU,NKE,AAL,RIG,MARA,OPEN,PATH"
+    )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

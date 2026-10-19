@@ -78,6 +78,7 @@ class Orchestrator:
 
         if self.settings.rss_enabled and self.settings.oracle_enabled:
             logger.info("Starting background RSS ingestion thread...")
+
             def rss_worker():
                 while True:
                     try:
