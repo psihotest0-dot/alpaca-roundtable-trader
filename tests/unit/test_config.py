@@ -1,22 +1,16 @@
 import pytest
-import os
 from pydantic import ValidationError
 from trading_system.config import Settings
 
 
-def test_missing_required_keys():
-    # Remove env vars temporarily to test validation
-    api_key = os.environ.pop("ALPACA_API_KEY", None)
-    secret_key = os.environ.pop("ALPACA_SECRET_KEY", None)
-    try:
-        with pytest.raises(ValidationError) as exc:
-            Settings(alpaca_api_key="key_only")
-        assert "alpaca_secret_key" in str(exc.value)
-    finally:
-        if api_key:
-            os.environ["ALPACA_API_KEY"] = api_key
-        if secret_key:
-            os.environ["ALPACA_SECRET_KEY"] = secret_key
+def test_missing_required_keys(monkeypatch):
+    # Provide _env_file=None to disable reading from .env file
+    # and clear os.environ completely just in case
+    monkeypatch.delenv("ALPACA_API_KEY", raising=False)
+    monkeypatch.delenv("ALPACA_SECRET_KEY", raising=False)
+    with pytest.raises(ValidationError) as exc:
+        Settings(alpaca_api_key="key_only", _env_file=None)
+    assert "alpaca_secret_key" in str(exc.value)
 
 
 def test_strict_boolean_validation():
