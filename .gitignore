@@ -20,6 +20,7 @@ htmlcov/
 *.sqlite
 *.db
 local.db
+alpaca_trading.log
 
 # Generated data, caches, embeddings
 data/
@@ -34,4 +35,3 @@ secrets/
 .vscode/
 .idea/
 .DS_Store
-alpaca_trading.log
