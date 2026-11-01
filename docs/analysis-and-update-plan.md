@@ -119,13 +119,13 @@ CLI run [--paper]
 **C3. Risk и Execution говорят различни езици** · [Проверено]
 `RiskEngine` връща `OrderType.MARKET` без `limit_price` и `stop_price` (`risk/engine.py:239-247`). `ExecutionEngine.submit_order` приема само LIMIT с лимит и стоп (`execution/engine.py:89-95`) и връща `None` с „Only limit entries are supported“. Проверките са *преди* dry-run клона, така че **и dry-run никога не стига до „симулирана“ поръчка**. Тестовете на двата модула ползват собствени, несъвместими фикстури.
 
-**C4. Сесиите никога не се commit-ват: kill switch-ът не работи** · [Проверено]
+**C4. Сесиите никога не се commit-ват: kill switch-ът не работи** · [Проверено] · ✅ **Поправено** в `0ce0d10` (задача 1.1, клон `phase-1-core`): всяко извикване на хранилище е къса транзакция с commit. Описанието по-долу е на състоянието преди поправката.
 `StateRepository.save_state` и `OrderRepository.save_broker_order/save_intent` правят само `flush()` (`repositories.py:86-160`). Оркестраторът държи по една дългоживееща сесия за state и за ордери (`orchestrator.py:25,73`) и не commit-ва. Резултат:
 - `pause-entries` от CLI не се запазва. Скриптът показва `halted … seen by a fresh session = False`. **Документираният kill switch (`docs/operations.md`) е празна операция.**
 - `halt_trading()` (аварийният халт) важи само в паметта на процеса.
 - Ордерите и намеренията (intents) не се запазват в базата.
 
-**C5. Дългоживеещата сесия държи SQLite write lock** · [Проверено]
+**C5. Дългоживеещата сесия държи SQLite write lock** · [Проверено] · ✅ **Поправено** в `0ce0d10` (виж C4).
 Първият `get_state()` вмъква ред и прави `flush`. Транзакцията остава отворена, а SQLite позволява един писач. Втора сесия, която пише, получава `OperationalError: database is locked` след около 5 s. Оркестраторът има три сесии и така ще се самоблокира веднага щом C4 бъде частично поправен.
 
 **C6. Повторен запис на ордера нарушава `UNIQUE(client_order_id)`** · [Проверено]

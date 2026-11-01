@@ -50,15 +50,14 @@ def test_cycle_risk_engine_approves_a_healthy_signal(run_cycle: RunCycle) -> Non
 
 @pytest.mark.xfail(
     strict=True,
-    reason="C2 + C3 + C4: the end-to-end result. A dry-run cycle on a healthy signal should leave "
-    "a simulated order that another process can read. Today risk rejects the signal (C2); "
-    "then execution rejects the MARKET intent (C3); then nothing is committed (C4).",
+    reason="C2 + C3: the end-to-end result. A dry-run cycle on a healthy signal should leave a "
+    "simulated order that another process can read. Today risk rejects the signal (C2) and, "
+    "once it does not, execution rejects the MARKET intent (C3).",
 )
 def test_dry_run_cycle_persists_a_simulated_order(
     run_cycle: RunCycle, session_factory: Any
 ) -> None:
-    cycle = run_cycle()
-    cycle.orchestrator.state_repo.session.close()  # end of "process": uncommitted work is lost
+    run_cycle()
 
     with session_factory() as fresh:
         assert fresh.query(BrokerOrderModel).count() == 1
