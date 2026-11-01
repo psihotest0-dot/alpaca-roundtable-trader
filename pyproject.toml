@@ -24,7 +24,7 @@ feedparser = "^6.0.14"
 [tool.poetry.group.dev.dependencies]
 pytest = ">=9.0.3"
 pytest-asyncio = ">=0.24.0"
-ruff = "^0.3.5"
+ruff = ">=0.3.5,<0.18.0"
 mypy = ">=1.9,<3.0"
 respx = "^0.23.1"
 pytest-mock = "^3.16.0"
@@ -37,6 +37,13 @@ build-backend = "poetry.core.masonry.api"
 [tool.ruff]
 target-version = "py311"
 line-length = 100
+
+[tool.ruff.lint]
+# Pin the rules explicitly. Ruff's *default* rule set grows between releases: moving from
+# 0.3 to 0.17 turned on pyupgrade, import sorting, blind-except and more, which flagged
+# 385 places in code that had always passed. These are the rules the project has enforced
+# all along (the defaults of the 0.3 line); widen the list on purpose, not by upgrading.
+select = ["E4", "E7", "E9", "F"]
 
 [tool.mypy]
 python_version = "3.11"
