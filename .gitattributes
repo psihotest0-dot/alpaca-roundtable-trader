@@ -12,5 +12,6 @@
 *.sqlite binary
 *.sqlite3 binary
 
-# Lock files are generated: do not diff or merge them line by line.
-poetry.lock -diff linguist-generated=true
+# The lock file is generated: GitHub collapses it in pull requests, but keep it
+# diffable locally so dependency changes can still be reviewed.
+poetry.lock linguist-generated=true
