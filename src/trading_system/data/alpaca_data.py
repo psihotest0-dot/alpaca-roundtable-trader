@@ -15,10 +15,9 @@ logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
 
+
 def retry_read_request(
-    max_retries: int = 5,
-    base_delay: float = 1.0,
-    max_delay: float = 60.0
+    max_retries: int = 5, base_delay: float = 1.0, max_delay: float = 60.0
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         @functools.wraps(func)
@@ -34,7 +33,7 @@ def retry_read_request(
                     if retries >= max_retries:
                         logger.error(f"Failed {func.__name__} after {max_retries} retries: {e}")
                         raise
-                    delay = min(base_delay * (2 ** retries), max_delay)
+                    delay = min(base_delay * (2**retries), max_delay)
                     delay = delay * random.uniform(0.5, 1.5)
                     logger.warning(
                         f"Exception in {func.__name__} (attempt {retries + 1}/{max_retries}): {e}. "
@@ -42,7 +41,9 @@ def retry_read_request(
                     )
                     time.sleep(delay)
                     retries += 1
+
         return wrapper
+
     return decorator
 
 
@@ -53,25 +54,30 @@ class AlpacaData:
     If configured to use 'iex' feed, note that IEX data limitations apply (less volume,
     potentially missing trades that occurred on other exchanges). Use 'sip' for full market data.
     """
+
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
-        api_key = settings.alpaca_api_key.get_secret_value() if isinstance(settings.alpaca_api_key, SecretStr) else settings.alpaca_api_key
-        secret_key = settings.alpaca_secret_key.get_secret_value() if isinstance(settings.alpaca_secret_key, SecretStr) else settings.alpaca_secret_key
-
-        self.client = StockHistoricalDataClient(
-            api_key=api_key,
-            secret_key=secret_key
+        api_key = (
+            settings.alpaca_api_key.get_secret_value()
+            if isinstance(settings.alpaca_api_key, SecretStr)
+            else settings.alpaca_api_key
         )
-        self.feed = settings.data_feed.lower() # 'iex' or 'sip'
+        secret_key = (
+            settings.alpaca_secret_key.get_secret_value()
+            if isinstance(settings.alpaca_secret_key, SecretStr)
+            else settings.alpaca_secret_key
+        )
 
+        self.client = StockHistoricalDataClient(api_key=api_key, secret_key=secret_key)
+        self.feed = settings.data_feed.lower()  # 'iex' or 'sip'
 
     @retry_read_request()
     def fetch_bars(
         self,
         symbol: str,
-        timeframe: Any, # alpaca.data.timeframe.TimeFrame
+        timeframe: Any,  # alpaca.data.timeframe.TimeFrame
         start: "datetime",
-        end: "datetime"
+        end: "datetime",
     ) -> "pd.DataFrame":
         from alpaca.data.requests import StockBarsRequest
         from alpaca.data.enums import DataFeed
@@ -81,17 +87,19 @@ class AlpacaData:
             timeframe=timeframe,
             start=start,
             end=end,
-            feed=DataFeed(self.feed) if self.feed else None
+            feed=DataFeed(self.feed) if self.feed else None,
         )
 
         bars = self.client.get_stock_bars(req)
-        if not hasattr(bars, 'data') or not bars.data or symbol not in bars.data:
+        if not hasattr(bars, "data") or not bars.data or symbol not in bars.data:
             import pandas as pd
+
             return pd.DataFrame()
 
-        df = getattr(bars, 'df', pd.DataFrame())
+        df = getattr(bars, "df", pd.DataFrame())
         if df.empty:
             import pandas as pd
+
             return pd.DataFrame()
 
         # Alpaca returns multi-index (symbol, timestamp) for df. We drop symbol.
@@ -109,21 +117,18 @@ class AlpacaData:
 
         # Ensure UTC
         if df.index.tz is None:
-            df.index = df.index.tz_localize('UTC')
-        elif str(df.index.tz) != 'UTC':
-            df.index = df.index.tz_convert('UTC')
+            df.index = df.index.tz_localize("UTC")
+        elif str(df.index.tz) != "UTC":
+            df.index = df.index.tz_convert("UTC")
 
         # Deduplicate and sort
-        df = df[~df.index.duplicated(keep='last')]
+        df = df[~df.index.duplicated(keep="last")]
         df = df.sort_index()
 
         return df
 
     def align_and_filter(
-        self,
-        df_15m: pd.DataFrame,
-        df_1h: pd.DataFrame,
-        current_time: datetime
+        self, df_15m: pd.DataFrame, df_1h: pd.DataFrame, current_time: datetime
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Applies business logic:
@@ -136,6 +141,7 @@ class AlpacaData:
         # Ensure UTC
         if current_time.tzinfo is None:
             from datetime import timezone
+
             current_time = current_time.replace(tzinfo=timezone.utc)
 
         # 1. Filter out unclosed bars

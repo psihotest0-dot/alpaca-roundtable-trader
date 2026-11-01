@@ -1,0 +1,51 @@
+# Local guard rails, also enforced in CI (`pre-commit run --all-files`) so they
+# cannot be skipped with `git commit --no-verify`.
+#
+# One-time setup on a new machine:
+#   pip install pre-commit     (or: pipx install pre-commit)
+#   pre-commit install
+#
+# The ruff rev below must match the ruff version locked in poetry.lock.
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+        exclude: ^poetry\.lock$
+      - id: check-merge-conflict
+      - id: check-toml
+      - id: check-yaml
+      - id: detect-private-key
+      - id: end-of-file-fixer
+        exclude: ^poetry\.lock$
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+      - id: trailing-whitespace
+        exclude: ^poetry\.lock$
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.3.7
+    hooks:
+      - id: ruff
+      - id: ruff-format
+
+  - repo: local
+    hooks:
+      # Files that must never be committed: real env files, databases, logs,
+      # keys and certificates. `.env.example` is the only env file allowed.
+      - id: forbid-secret-and-runtime-files
+        name: forbid secret and runtime files
+        language: fail
+        entry: "This file type must not be committed (secrets or runtime state). If it is intentional, add an exception here."
+        files: (^|/)(\.env(\..+)?|[^/]+\.(db|sqlite3?|db-wal|db-shm|log|pem|key|p12|pfx))$
+        exclude: (^|/)\.env\.example$
+
+      # Cheap content check for broker credentials. This is a safety net, not a
+      # replacement for GitHub secret scanning (enable it in the repo settings).
+      - id: no-broker-credentials
+        name: block Alpaca key ids and AnythingLLM-style keys
+        language: pygrep
+        entry: \b(PK|AK|CK)[A-Z0-9]{18}\b|\b[A-Z0-9]{7}(-[A-Z0-9]{7}){3}\b
+        types: [text]
+        exclude: ^poetry\.lock$

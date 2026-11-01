@@ -1,4 +1,4 @@
-from typing import Any, List, Optional
+from typing import Any
 import pytest
 import os
 from datetime import datetime, timezone
@@ -15,17 +15,20 @@ from trading_system.data.retrieval import NewsSearchService
 def settings() -> Settings:
     os.environ["ALPACA_API_KEY"] = "dummy"
     os.environ["ALPACA_SECRET_KEY"] = "dummy"
-    return Settings(alpaca_api_key="dummy", alpaca_secret_key="dummy",  # type: ignore
-
+    return Settings(
+        alpaca_api_key="dummy",
+        alpaca_secret_key="dummy",  # type: ignore
         rss_enabled=True,
         rss_feeds="http://example.com/rss",
-        chroma_db_path="./var/test_chroma_db"
+        chroma_db_path="./var/test_chroma_db",
     )
+
 
 def test_html_cleaner() -> None:
     html = "<script>alert('xss');</script><p>Hello <b>World</b></p><style>.hidden { display: none; }</style>"
     cleaned = HTMLCleaner.clean(html)
     assert cleaned == "Hello World"
+
 
 def test_rss_parser(settings: Settings) -> None:
     parser = RSSParser(settings)
@@ -49,6 +52,7 @@ def test_rss_parser(settings: Settings) -> None:
     assert entries[0].summary == "New RSS tutorial on W3Schools"
     assert entries[0].source_id == "W3Schools Home Page"
 
+
 def test_text_chunker() -> None:
     chunker = TextChunker(chunk_size=20, chunk_overlap=5)
     text = "This is a sentence. And another one. Finally, the last one."
@@ -58,6 +62,7 @@ def test_text_chunker() -> None:
     # Check that chunks are not exceeding size limit
     for chunk in chunks:
         assert len(chunk) <= 20
+
 
 def test_chroma_storage_and_retrieval(settings: Settings, tmp_path: Any) -> None:
     settings.chroma_db_path = str(tmp_path)
@@ -78,18 +83,20 @@ def test_chroma_storage_and_retrieval(settings: Settings, tmp_path: Any) -> None
     chunk_ids = [ids["chunk_id"]]
 
     now = datetime.now(timezone.utc).timestamp()
-    metadatas = [{
-        "source_id": source_id,
-        "article_id": ids["article_id"],
-        "content_hash": ids["content_hash"],
-        "url": url,
-        "title": "Test Title",
-        "chunk_index": 0,
-        "chunk_count": 1,
-        "ingested_at": now,
-        "first_seen_at": now,
-        "is_active": False
-    }]
+    metadatas = [
+        {
+            "source_id": source_id,
+            "article_id": ids["article_id"],
+            "content_hash": ids["content_hash"],
+            "url": url,
+            "title": "Test Title",
+            "chunk_index": 0,
+            "chunk_count": 1,
+            "ingested_at": now,
+            "first_seen_at": now,
+            "is_active": False,
+        }
+    ]
 
     success = adapter.store_chunks(chunks, embeddings, metadatas, chunk_ids)
     assert success is True

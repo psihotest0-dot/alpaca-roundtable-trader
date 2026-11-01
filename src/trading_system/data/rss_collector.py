@@ -47,13 +47,15 @@ class AsyncRSSCollector:
                         async for chunk in response.aiter_bytes():
                             content += chunk
                             if len(content) > self.max_response_bytes:
-                                logger.error(f"Feed {url} exceeded max response size of {self.max_response_bytes} bytes")
+                                logger.error(
+                                    f"Feed {url} exceeded max response size of {self.max_response_bytes} bytes"
+                                )
                                 return None
 
                         return content
                 except (httpx.RequestError, httpx.HTTPStatusError) as e:
                     logger.error(f"Error fetching feed {url}: {e}")
-                    raise # Re-raise for tenacity to handle retries
+                    raise  # Re-raise for tenacity to handle retries
 
 
 class RSSEntry(BaseModel):
@@ -115,12 +117,12 @@ class RSSParser:
         now = datetime.now(timezone.utc)
 
         # We need a stable source_id. Let's use the feed's base URL or title, or fallback to the provided url
-        source_title = getattr(feed.feed, 'title', feed_url)
+        source_title = getattr(feed.feed, "title", feed_url)
         source_id = source_title.strip() if source_title else feed_url
 
-        for item in feed.entries[:self.settings.rss_max_entries_per_feed]:
-            entry_id = getattr(item, 'id', getattr(item, 'link', ''))
-            url = getattr(item, 'link', '')
+        for item in feed.entries[: self.settings.rss_max_entries_per_feed]:
+            entry_id = getattr(item, "id", getattr(item, "link", ""))
+            url = getattr(item, "link", "")
 
             # Skip if we don't have enough data
             if not entry_id and not url:
@@ -129,17 +131,19 @@ class RSSParser:
             if not entry_id:
                 entry_id = url
 
-            title = getattr(item, 'title', '')
-            summary = getattr(item, 'summary', getattr(item, 'description', ''))
+            title = getattr(item, "title", "")
+            summary = getattr(item, "summary", getattr(item, "description", ""))
 
             # Clean up fields a bit
             title = HTMLCleaner.clean(title) if title else ""
             summary = HTMLCleaner.clean(summary) if summary else ""
 
             published_at = None
-            if hasattr(item, 'published_parsed') and item.published_parsed:
+            if hasattr(item, "published_parsed") and item.published_parsed:
                 try:
-                    published_at = datetime.fromtimestamp(time.mktime(item.published_parsed), tz=timezone.utc)
+                    published_at = datetime.fromtimestamp(
+                        time.mktime(item.published_parsed), tz=timezone.utc
+                    )
                 except Exception:
                     # Invalid dates should not be represented as the current date
                     pass
@@ -154,7 +158,7 @@ class RSSParser:
                     summary=summary,
                     published_at=published_at,
                     first_seen_at=now,
-                    ingested_at=now
+                    ingested_at=now,
                 )
             )
 

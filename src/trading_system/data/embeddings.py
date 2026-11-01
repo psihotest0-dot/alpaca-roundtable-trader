@@ -46,6 +46,7 @@ class ChromaDefaultEmbeddingProvider(EmbeddingProvider):
 
 class FakeEmbeddingProvider(EmbeddingProvider):
     """A fake provider for tests that returns deterministic dummy vectors."""
+
     def __init__(self, dimension: int = 3):
         self.dimension = dimension
 

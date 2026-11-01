@@ -8,6 +8,7 @@ from trading_system.data.embeddings import EmbeddingProvider
 
 logger = logging.getLogger(__name__)
 
+
 class NewsSearchResult(BaseModel):
     title: str
     text: str
@@ -17,13 +18,25 @@ class NewsSearchResult(BaseModel):
     article_id: str
     score: float
 
+
 class NewsSearchService:
-    def __init__(self, settings: Settings, chroma_adapter: ChromaAdapter, embedding_provider: EmbeddingProvider):
+    def __init__(
+        self,
+        settings: Settings,
+        chroma_adapter: ChromaAdapter,
+        embedding_provider: EmbeddingProvider,
+    ):
         self.settings = settings
         self.chroma_adapter = chroma_adapter
         self.embedding_provider = embedding_provider
 
-    def search(self, query: str, top_k: int = 5, symbol_filter: Optional[str] = None, time_filter: Optional[float] = None) -> List[NewsSearchResult]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 5,
+        symbol_filter: Optional[str] = None,
+        time_filter: Optional[float] = None,
+    ) -> List[NewsSearchResult]:
         """
         Searches for news documents related to a query.
         """
@@ -44,14 +57,16 @@ class NewsSearchService:
                 # time_filter could be a unix timestamp we only want documents strictly newer than.
                 conditions.append({"published_at": {"$gt": time_filter}})
 
-            where_clause: Dict[str, Any] = conditions[0] if len(conditions) == 1 else {"$and": conditions}
+            where_clause: Dict[str, Any] = (
+                conditions[0] if len(conditions) == 1 else {"$and": conditions}
+            )
 
             # Perform search in Chroma
             results = self.chroma_adapter.collection.query(
                 query_embeddings=[query_embedding],  # type: ignore
                 n_results=top_k,
                 where=where_clause,
-                include=["documents", "metadatas", "distances"]
+                include=["documents", "metadatas", "distances"],
             )
 
             search_results: list[NewsSearchResult] = []
@@ -76,17 +91,22 @@ class NewsSearchService:
 
                 seen_articles.add(article_id)
 
+                published_raw = meta.get("published_at")
+                published_at = (
+                    float(published_raw) if isinstance(published_raw, (int, float)) else None
+                )
+
                 search_results.append(
                     NewsSearchResult(
                         title=str(meta.get("title", "")),
                         text=documents[i],
                         url=str(meta.get("url", "")),
                         source_id=str(meta.get("source_id", "")),
-                        published_at=float(meta.get("published_at")) if meta.get("published_at") is not None else None,  # type: ignore
+                        published_at=published_at,
                         article_id=str(article_id),
                         # Distance is L2 typically, smaller is better. We can invert or return as is.
                         # Let's return distance directly and clearly define it as distance.
-                        score=distances[i]
+                        score=distances[i],
                     )
                 )
 
