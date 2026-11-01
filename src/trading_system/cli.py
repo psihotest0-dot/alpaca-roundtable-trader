@@ -83,7 +83,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if args.command == "validate-config":
         try:
             inject_offline_dummy_keys()
-            Settings()  # type: ignore
+            Settings()
             print("Configuration is valid.")
             return 0
         except ValidationError as e:
@@ -94,7 +94,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             if not args.network:
                 inject_offline_dummy_keys()
-            settings = Settings()  # type: ignore
+            settings = Settings()
             print("Local configuration is valid.")
 
             if args.network:
@@ -127,7 +127,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             os.environ["ALPACA_API_KEY"] = os.environ.get("ALPACA_API_KEY", "dummy")
             os.environ["ALPACA_SECRET_KEY"] = os.environ.get("ALPACA_SECRET_KEY", "dummy")
-            settings = Settings()  # type: ignore
+            settings = Settings()
             from trading_system.backtest.models import BacktestConfig
             from trading_system.backtest.engine import BacktestEngine
             import pandas as pd
@@ -210,7 +210,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             from trading_system.runtime.orchestrator import Orchestrator
 
-            settings = Settings()  # type: ignore
+            settings = Settings()
 
             # Use appropriate repo logic here
             orchestrator = Orchestrator(settings)
@@ -234,7 +234,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             from trading_system.runtime.orchestrator import Orchestrator
 
-            settings = Settings()  # type: ignore
+            settings = Settings()
             orchestrator = Orchestrator(settings)
             orchestrator.pause_entries()
             return 0
@@ -247,7 +247,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             from trading_system.runtime.orchestrator import Orchestrator
 
-            settings = Settings()  # type: ignore
+            settings = Settings()
             orchestrator = Orchestrator(settings)
             orchestrator.resume_entries()
             return 0
@@ -260,7 +260,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             from trading_system.runtime.orchestrator import Orchestrator
 
-            settings = Settings()  # type: ignore
+            settings = Settings()
             orchestrator = Orchestrator(settings)
             orchestrator.status()
             return 0
