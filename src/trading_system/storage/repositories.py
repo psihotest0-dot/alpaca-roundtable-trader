@@ -74,6 +74,10 @@ class OrderRepository:
             return int(cast(int, model.id))
 
     def save_broker_order(self, order: BrokerOrder) -> None:
+        """Inserts the order, or updates it when this client_order_id is already stored.
+
+        That is how the in-flight placeholder (no broker id yet) turns into the
+        confirmed order without creating a second row."""
         model = BrokerOrderModel(
             broker_id=order.broker_id,
             client_order_id=order.client_order_id,

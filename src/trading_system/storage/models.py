@@ -63,8 +63,12 @@ class OrderIntentModel(Base):
 class BrokerOrderModel(Base):
     __tablename__ = "broker_orders"
 
-    broker_id = Column(String, primary_key=True)
-    client_order_id = Column(String, unique=True, nullable=False)
+    # Our own id is the identity of an order: we generate it before anything is sent, so
+    # it exists for the whole life of the order. The broker's id only exists once the
+    # broker has answered, hence nullable. Saving the same client_order_id again updates
+    # the row (the in-flight placeholder becomes the confirmed order).
+    client_order_id = Column(String, primary_key=True)
+    broker_id = Column(String, unique=True, nullable=True)
     symbol = Column(String, nullable=False)
     side: Column[OrderSide] = Column(Enum(OrderSide), nullable=False)
     type: Column[OrderType] = Column(Enum(OrderType), nullable=False)

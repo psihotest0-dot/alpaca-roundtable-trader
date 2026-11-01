@@ -72,8 +72,9 @@ class OrderIntent(BaseModel):
 
 
 class BrokerOrder(BaseModel):
-    broker_id: str
     client_order_id: str
+    # None until the broker has acknowledged the order (e.g. while it is SUBMITTING).
+    broker_id: Optional[str] = None
     symbol: str
     side: OrderSide
     type: OrderType

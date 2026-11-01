@@ -1,7 +1,7 @@
 """Does state survive, and can the runtime's repositories work side by side?
 
-C4 and C5 are fixed (every repository call is its own committed transaction);
-the C6 tests below still document an open defect.
+C4 and C5 are fixed (every repository call is its own committed transaction) and
+C6 is fixed (an order is identified by its client_order_id).
 """
 
 import itertools
@@ -21,7 +21,7 @@ from trading_system.storage.models import BrokerOrderModel, StrategySignalModel
 from trading_system.storage.repositories import OrderRepository, SignalRepository, StateRepository
 
 
-def _broker_order(broker_id: str, client_order_id: str, **overrides: Any) -> BrokerOrder:
+def _broker_order(broker_id: str | None, client_order_id: str, **overrides: Any) -> BrokerOrder:
     now = datetime.now(timezone.utc)
     values: dict[str, Any] = {
         "broker_id": broker_id,
@@ -66,7 +66,7 @@ def test_every_enum_survives_a_database_round_trip(session_factory: Any) -> None
 
     with session_factory() as fresh:
         for i, (side, type_, status) in enumerate(combos):
-            row = fresh.get(BrokerOrderModel, f"b{i}")
+            row = fresh.get(BrokerOrderModel, f"c{i}")
             assert (row.side, row.type, row.status) == (side, type_, status)
         for i, direction in enumerate(SignalDirection):
             assert fresh.get(StrategySignalModel, f"s{i}").direction == direction
@@ -106,38 +106,48 @@ def test_a_failed_write_does_not_break_the_next_one(session_factory: Any) -> Non
     """A rejected write rolls back cleanly. Before, the failed flush left the
     long-lived order session unusable (PendingRollbackError) for the rest of the run."""
     repo = OrderRepository(session_factory)
-    repo.save_broker_order(_broker_order("b1", "same-client-id"))
+    repo.save_broker_order(_broker_order("b1", "client-1"))
 
-    with pytest.raises(IntegrityError):
-        repo.save_broker_order(_broker_order("b2", "same-client-id"))
+    with pytest.raises(IntegrityError):  # broker id b1 already belongs to client-1
+        repo.save_broker_order(_broker_order("b1", "client-2"))
 
-    repo.save_broker_order(_broker_order("b3", "another-client-id"))
+    repo.save_broker_order(_broker_order("b3", "client-3"))
     with session_factory() as fresh:
-        assert {r.broker_id for r in fresh.query(BrokerOrderModel)} == {"b1", "b3"}
+        assert {r.client_order_id for r in fresh.query(BrokerOrderModel)} == {
+            "client-1",
+            "client-3",
+        }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=IntegrityError,
-    reason="C6: ExecutionEngine saves a placeholder row with broker_id=client_order_id, then the "
-    "real row with Alpaca's id and the same client_order_id: UNIQUE(client_order_id) fails.",
-)
-def test_broker_confirmation_can_replace_the_inflight_placeholder(session_factory: Any) -> None:
+def test_broker_confirmation_replaces_the_inflight_placeholder(session_factory: Any) -> None:
+    """C6. The placeholder (no broker id yet) and the broker's confirmation are the same
+    order, so saving the confirmation updates the row instead of clashing with it."""
     repo = OrderRepository(session_factory)
-    repo.save_broker_order(_broker_order("exec_abc", "exec_abc", status=OrderStatus.SUBMITTING))
+    repo.save_broker_order(_broker_order(None, "exec_abc", status=OrderStatus.SUBMITTING))
     repo.save_broker_order(_broker_order("alpaca-uuid-1", "exec_abc"))
 
+    with session_factory() as fresh:
+        (row,) = fresh.query(BrokerOrderModel).all()
+        assert (row.client_order_id, row.broker_id) == ("exec_abc", "alpaca-uuid-1")
+        assert row.status == OrderStatus.SUBMITTED
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C6: a successful live submission is treated as a failure because of the duplicate "
-    "client_order_id. The reconcile step fails the same way, trading gets halted, and "
-    "submit_order returns None although the order is live at the broker.",
-)
+
+def test_two_unconfirmed_orders_can_coexist(session_factory: Any) -> None:
+    """Several placeholders have no broker id at the same time; NULLs are not duplicates."""
+    repo = OrderRepository(session_factory)
+    repo.save_broker_order(_broker_order(None, "exec_a", status=OrderStatus.SUBMITTING))
+    repo.save_broker_order(_broker_order(None, "exec_b", status=OrderStatus.SUBMITTING))
+
+    with session_factory() as fresh:
+        assert fresh.query(BrokerOrderModel).count() == 2
+
+
 def test_successful_live_submission_does_not_halt_trading(
     settings: Any, session_factory: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("time.sleep", lambda _s: None)  # submit_order sleeps 1s before reconcile
+    """C6. Before, the confirmation clashed with the placeholder, the order was treated as
+    failed, reconcile failed the same way and trading was halted while the order was live."""
+    monkeypatch.setattr("time.sleep", lambda _s: None)  # only used on the failure path
     broker = FakeBroker()
     signal = StrategySignal(
         version="1",
@@ -166,3 +176,9 @@ def test_successful_live_submission_does_not_halt_trading(
     assert len(broker.submitted) == 1  # the order really reached the (fake) broker
     assert order is not None
     assert state_repo.get_state().is_trading_halted is False
+    # One row, keyed by our client id, now carrying the broker's id and the confirmed status.
+    with session_factory() as fresh:
+        (row,) = fresh.query(BrokerOrderModel).all()
+        assert row.client_order_id == order.client_order_id
+        assert row.broker_id == broker.submitted[0].id
+        assert row.status == OrderStatus.SUBMITTED

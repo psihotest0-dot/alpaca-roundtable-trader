@@ -171,7 +171,7 @@ class ExecutionEngine:
             # Persist an initial broker order in SUBMITTING state to track the in-flight API call
             # This handles the "crash after submission before DB update" by leaving a SUBMITTING record
             inflight_order = BrokerOrder(
-                broker_id=client_order_id,  # Temporary ID
+                broker_id=None,  # the broker has not answered yet
                 client_order_id=client_order_id,
                 symbol=intent.symbol,
                 side=intent.side,
