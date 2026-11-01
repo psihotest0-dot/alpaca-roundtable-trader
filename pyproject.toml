@@ -54,6 +54,8 @@ plugins = ["pydantic.mypy"]
 [tool.pytest.ini_options]
 minversion = "6.0"
 addopts = "-ra -q"
+# pytest-asyncio 1.x warns when this is unset; "function" is its documented default.
+asyncio_default_fixture_loop_scope = "function"
 testpaths = [
     "tests",
 ]
