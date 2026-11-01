@@ -1,6 +1,6 @@
 """Hand-written fakes for the Alpaca broker and data client.
 
-They replace the network only. Everything else in an integration test (risk,
+They replace the network only. Everything else in an integration test (data layer, risk,
 execution, repositories, SQLite) is the real code.
 """
 
@@ -11,39 +11,30 @@ from typing import Any
 
 import pandas as pd
 
-from tests.fixtures.bars import alpaca_shaped, with_timestamp_column
-from trading_system.data.alpaca_data import AlpacaData
+from tests.fixtures.bars import alpaca_shaped
 
 
 class FakeStockClient:
-    """Stands in for alpaca's StockHistoricalDataClient. Returns BarSet-like
-    objects whose `.df` has the real (symbol, timestamp) MultiIndex shape."""
+    """Stands in for alpaca's StockHistoricalDataClient. Returns BarSet-like objects whose
+    `.df` has the real (symbol, timestamp) MultiIndex shape, and records every request so
+    tests can assert on what was asked for."""
 
     def __init__(self, frames_15m: dict[str, pd.DataFrame], frames_1h: dict[str, pd.DataFrame]):
         self._frames = {15: frames_15m, 60: frames_1h}
+        self.requests: list[Any] = []
 
     def get_stock_bars(self, request: Any) -> SimpleNamespace:
+        self.requests.append(request)
         timeframe = request.timeframe
         minutes = timeframe.amount_value * (60 if timeframe.unit_value.name == "Hour" else 1)
-        symbol = request.symbol_or_symbols
-        frame = self._frames[minutes][symbol]
-        return SimpleNamespace(data={symbol: [1]}, df=alpaca_shaped(symbol, frame))
-
-
-class FakeData(AlpacaData):
-    """AlpacaData with the network cut out. It keeps the real
-    clean_and_deduplicate / align_and_filter. fetch_bars returns frames that
-    satisfy BOTH consumers (datetime index and a `timestamp` column), which
-    hides the data-shape defect so that later defects can be observed."""
-
-    def __init__(self, frames_15m: dict[str, pd.DataFrame], frames_1h: dict[str, pd.DataFrame]):
-        self._frames = {15: frames_15m, 60: frames_1h}
-        self.calls: list[tuple[str, str]] = []
-
-    def fetch_bars(self, symbol: str, timeframe: Any, start: Any, end: Any) -> pd.DataFrame:
-        self.calls.append((symbol, str(timeframe)))
-        minutes = timeframe.amount_value * (60 if timeframe.unit_value.name == "Hour" else 1)
-        return with_timestamp_column(self._frames[minutes][symbol])
+        symbols = request.symbol_or_symbols
+        symbols = [symbols] if isinstance(symbols, str) else list(symbols)
+        shaped = [
+            alpaca_shaped(symbol, self._frames[minutes][symbol])
+            for symbol in symbols
+            if symbol in self._frames[minutes]
+        ]
+        return SimpleNamespace(df=pd.concat(shaped) if shaped else pd.DataFrame())
 
 
 class FakeBroker:

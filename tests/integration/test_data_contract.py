@@ -1,20 +1,24 @@
-"""C1: the live data path is broken in three stacked places. These tests pin the two
-that live in AlpacaData and the strategy; the third (the invalid TimeFrame in the
-orchestrator) is in test_runtime_cycle.py.
+"""C1, C1c: the live data path, from Alpaca's response to the strategy's input.
+
+Before task 1.3 this path was broken in three stacked places (the third, the invalid
+TimeFrame in the orchestrator, is covered in test_runtime_cycle.py).
 """
 
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import pytest
-from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
+import pandas as pd
 
-from tests.fixtures.bars import RUNTIME_STRATEGY, alpaca_shaped, make_bars, with_timestamp_column
+from tests.fixtures.bars import RUNTIME_STRATEGY, make_bars, with_timestamp_column
 from tests.fixtures.fakes import FakeStockClient
-from trading_system.data.alpaca_data import AlpacaData
+from trading_system.data.alpaca_data import FIFTEEN_MINUTES, AlpacaData
 from trading_system.strategy.trend import generate_signals
 
-FIFTEEN_MIN = TimeFrame(15, TimeFrameUnit.Minute)
+
+def _data_with(settings: Any, bars_15m: pd.DataFrame, bars_1h: pd.DataFrame) -> AlpacaData:
+    data = AlpacaData(settings)
+    data.client = FakeStockClient({"AAPL": bars_15m}, {"AAPL": bars_1h})
+    return data
 
 
 def test_control_engineered_bars_produce_one_long_signal() -> None:
@@ -33,45 +37,40 @@ def test_control_engineered_bars_produce_one_long_signal() -> None:
     assert [s.symbol for s in signals] == ["AAPL"]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=UnboundLocalError,
-    reason="C1c: fetch_bars imports pandas inside some branches, which makes `pd` a local "
-    "variable for the whole function; the normal path reads it before it is assigned. "
-    "The retry decorator then repeats this deterministic bug 5 times with growing sleeps.",
-)
-def test_fetch_bars_returns_the_bars_alpaca_sent(
-    settings: Any, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setattr("time.sleep", lambda _s: None)  # skip the retry backoff
+def test_fetch_bars_returns_the_bars_alpaca_sent(settings: Any) -> None:
+    """C1c. fetch_bars raised UnboundLocalError on its normal path, because it imported
+    pandas inside some branches and so made `pd` a local name for the whole function."""
     now = datetime.now(timezone.utc)
     bars_15m, bars_1h = make_bars(now)
-    data = AlpacaData(settings)
-    data.client = FakeStockClient({"AAPL": bars_15m}, {"AAPL": bars_1h})
+    data = _data_with(settings, bars_15m, bars_1h)
 
-    frame = data.fetch_bars("AAPL", FIFTEEN_MIN, now - timedelta(days=30), now)
+    frame = data.fetch_bars("AAPL", FIFTEEN_MINUTES, now - timedelta(days=30), now)
 
     assert len(frame) == len(bars_15m)
+    assert str(frame.index.tz) == "UTC"
+    assert list(frame["timestamp"]) == list(frame.index)
+    assert {"open", "high", "low", "close", "volume"} <= set(frame.columns)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=KeyError,
-    reason="C1: fetch_bars is meant to return the timestamp as the index (it drops the symbol "
-    "level of alpaca-py's MultiIndex), but generate_signals reads df['timestamp'].",
-)
-def test_bars_shaped_like_fetch_bars_output_flow_into_generate_signals(settings: Any) -> None:
+def test_bars_loaded_through_the_data_layer_flow_into_generate_signals(settings: Any) -> None:
+    """C1. The data layer used to return the timestamp as the index only, and
+    generate_signals read df['timestamp'] and raised KeyError. Same series, but through
+    the real AlpacaData code with a client that answers in alpaca-py's real shape."""
     now = datetime.now(timezone.utc)
     bars_15m, bars_1h = make_bars(now)
-    data = AlpacaData(settings)
+    data = _data_with(settings, bars_15m, bars_1h)
 
-    # What fetch_bars returns once C1c is fixed: its own `reset_index(level=0, drop=True)`.
-    df_15m = alpaca_shaped("AAPL", bars_15m).reset_index(level=0, drop=True)
-    df_1h = alpaca_shaped("AAPL", bars_1h).reset_index(level=0, drop=True)
-    df_15m, df_1h = data.align_and_filter(
-        data.clean_and_deduplicate(df_15m), data.clean_and_deduplicate(df_1h), now
-    )
+    df_15m, df_1h = data.load_universe(["AAPL"], now, lookback_days=30, htf_lookback_days=90)
+    signals = generate_signals(df_15m, df_1h, RUNTIME_STRATEGY, now)
 
-    signals = generate_signals({"AAPL": df_15m}, {"AAPL": df_1h}, RUNTIME_STRATEGY, now)
+    assert [s.symbol for s in signals] == ["AAPL"]
+
+
+def test_generate_signals_accepts_bars_with_the_timestamp_only_as_index() -> None:
+    """The strategy no longer depends on which of the two shapes it is handed."""
+    now = datetime.now(timezone.utc)
+    bars_15m, bars_1h = make_bars(now)  # DatetimeIndex, no timestamp column
+
+    signals = generate_signals({"AAPL": bars_15m}, {"AAPL": bars_1h}, RUNTIME_STRATEGY, now)
 
     assert [s.symbol for s in signals] == ["AAPL"]

@@ -2,6 +2,7 @@ import pandas as pd
 from typing import Dict, List
 from datetime import datetime
 
+from trading_system.data.bars import normalize_bars
 from trading_system.strategy.config import StrategyConfig
 from trading_system.domain.models import StrategySignal
 from trading_system.domain.enums import SignalDirection
@@ -90,15 +91,14 @@ def generate_signals(
         if df_1h.empty or len(df_1h) < config.min_warmup_bars:
             continue
 
+        # Accept bars as the data layer returns them (timestamp as the index) as well as
+        # frames with a `timestamp` column; everything below reads the column.
+        df_15 = normalize_bars(df_15)
+        df_1h = normalize_bars(df_1h)
+
         # Calculate indicators
         df_15 = calculate_indicators(df_15, config, is_htf=False)
         df_1h = calculate_indicators(df_1h, config, is_htf=True)
-
-        # Ensure index is datetime for alignment/filtering if not already
-        if not pd.api.types.is_datetime64_any_dtype(df_15["timestamp"]):
-            df_15["timestamp"] = pd.to_datetime(df_15["timestamp"], utc=True)
-        if not pd.api.types.is_datetime64_any_dtype(df_1h["timestamp"]):
-            df_1h["timestamp"] = pd.to_datetime(df_1h["timestamp"], utc=True)
 
         # Only use closed bars
         # A bar is considered closed if its start time + its timeframe < eval_timestamp

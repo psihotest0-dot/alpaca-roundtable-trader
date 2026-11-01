@@ -1,62 +1,14 @@
-import functools
 import logging
-import random
-import time
 import datetime
-from typing import Any, Callable, TypeVar
+from typing import Any
 
 from alpaca.trading.client import TradingClient
 from pydantic import SecretStr
 
+from trading_system.common.retry import retry_read_request
 from trading_system.config import Settings
 
 logger = logging.getLogger(__name__)
-
-T = TypeVar("T")
-
-
-def retry_read_request(
-    max_retries: int = 5, base_delay: float = 1.0, max_delay: float = 60.0
-) -> Callable[[Callable[..., T]], Callable[..., T]]:
-    """
-    Retry decorator for read-only requests using bounded exponential backoff with jitter.
-    Will not retry indefinitely, and is not meant for order submission.
-    """
-
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> T:
-            retries = 0
-            while True:
-                try:
-                    logger.info(f"Initiating Alpaca read request: {func.__name__}")
-                    result = func(*args, **kwargs)
-                    logger.info(f"Successfully completed Alpaca read request: {func.__name__}")
-                    return result
-                except Exception as e:
-                    # In a real app we might catch specific rate limit or network exceptions here
-                    # For alpaca-py this might be APIError (HTTP 429, etc)
-                    if retries >= max_retries:
-                        logger.error(f"Failed {func.__name__} after {max_retries} retries: {e}")
-                        raise
-
-                    # Exponential backoff: 2^retries * base_delay
-                    delay = base_delay * (2**retries)
-                    # Cap at max_delay
-                    delay = min(delay, max_delay)
-                    # Add jitter (0 to 100% of delay)
-                    delay = delay * random.uniform(0.5, 1.5)
-
-                    logger.warning(
-                        f"Exception in {func.__name__} (attempt {retries + 1}/{max_retries}): {e}. "
-                        f"Retrying in {delay:.2f}s..."
-                    )
-                    time.sleep(delay)
-                    retries += 1
-
-        return wrapper
-
-    return decorator
 
 
 class AlpacaBroker:

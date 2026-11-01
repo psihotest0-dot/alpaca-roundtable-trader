@@ -1,7 +1,8 @@
-"""One real Orchestrator.run iteration against fakes: C1b, C2 and the end result.
+"""One real Orchestrator.run iteration against a fake Alpaca: data requests, C2 and the end result.
 
-The harness (see conftest.run_cycle) swaps Alpaca for fakes and stops the loop at
-its first sleep. Everything else is the real runtime, risk, execution and SQLite.
+The harness (see conftest.run_cycle) replaces only the network. The data layer, the
+strategy, risk, execution, the repositories and SQLite are the real code, and the loop is
+stopped at its first sleep.
 """
 
 from collections.abc import Callable
@@ -15,24 +16,21 @@ from trading_system.storage.models import BrokerOrderModel
 RunCycle = Callable[..., SimpleNamespace]
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C1b: the orchestrator builds its 15-minute timeframe as `TimeFrame.Minute * 15`, "
-    "which raises TypeError in alpaca-py 0.36 (TimeFrame has no __mul__). The per-symbol "
-    "try/except swallows it, so market data has never been fetched.",
-)
 def test_cycle_requests_bars_with_valid_timeframes(run_cycle: RunCycle) -> None:
-    cycle = run_cycle(timeframe_workaround=False)
-
-    assert ("AAPL", "15Min") in cycle.data.calls
-
-
-def test_control_cycle_reaches_risk_evaluation_with_one_signal(run_cycle: RunCycle) -> None:
-    """Guard for the harness, passes today: with the timeframe defect worked around,
-    the engineered bars become exactly one LONG signal that reaches the risk engine."""
+    """C1b. The orchestrator built the 15-minute timeframe as `TimeFrame.Minute * 15`,
+    which raises TypeError in alpaca-py. The per-symbol try/except swallowed it, so market
+    data was never fetched. Now: one request per timeframe, covering every symbol."""
     cycle = run_cycle()
 
-    assert ("AAPL", "15Min") in cycle.data.calls
+    assert [str(r.timeframe) for r in cycle.client.requests] == ["15Min", "1Hour"]
+    assert all(r.symbol_or_symbols == ["AAPL"] for r in cycle.client.requests)
+
+
+def test_cycle_turns_alpaca_bars_into_one_signal_for_risk(run_cycle: RunCycle) -> None:
+    """The whole data path in one go: Alpaca-shaped bars in, exactly one LONG signal
+    evaluated by the risk engine."""
+    cycle = run_cycle()
+
     assert len(cycle.decisions) == 1
 
 

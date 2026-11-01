@@ -1,50 +1,26 @@
-import functools
 import logging
-import random
-import time
-from datetime import datetime
-import pandas as pd
-from typing import Any, Callable, TypeVar
+from datetime import datetime, timedelta, timezone
+from typing import Sequence
 
+import pandas as pd
+from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from pydantic import SecretStr
 
+from trading_system.common.retry import retry_read_request
 from trading_system.config import Settings
+from trading_system.data.bars import normalize_bars
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
+# alpaca-py 0.36 to 0.44 has no TimeFrame.__mul__, so `TimeFrame.Minute * 15` raises
+# TypeError. Build the 15-minute frame explicitly.
+FIFTEEN_MINUTES = TimeFrame(15, TimeFrameUnit.Minute)
+ONE_HOUR = TimeFrame(1, TimeFrameUnit.Hour)
 
-
-def retry_read_request(
-    max_retries: int = 5, base_delay: float = 1.0, max_delay: float = 60.0
-) -> Callable[[Callable[..., T]], Callable[..., T]]:
-    def decorator(func: Callable[..., T]) -> Callable[..., T]:
-        @functools.wraps(func)
-        def wrapper(*args: Any, **kwargs: Any) -> T:
-            retries = 0
-            while True:
-                try:
-                    logger.info(f"Initiating Alpaca data read request: {func.__name__}")
-                    result = func(*args, **kwargs)
-                    logger.info(f"Successfully completed Alpaca data read request: {func.__name__}")
-                    return result
-                except Exception as e:
-                    if retries >= max_retries:
-                        logger.error(f"Failed {func.__name__} after {max_retries} retries: {e}")
-                        raise
-                    delay = min(base_delay * (2**retries), max_delay)
-                    delay = delay * random.uniform(0.5, 1.5)
-                    logger.warning(
-                        f"Exception in {func.__name__} (attempt {retries + 1}/{max_retries}): {e}. "
-                        f"Retrying in {delay:.2f}s..."
-                    )
-                    time.sleep(delay)
-                    retries += 1
-
-        return wrapper
-
-    return decorator
+_OHLCV = ("open", "high", "low", "close", "volume")
 
 
 class AlpacaData:
@@ -53,6 +29,8 @@ class AlpacaData:
 
     If configured to use 'iex' feed, note that IEX data limitations apply (less volume,
     potentially missing trades that occurred on other exchanges). Use 'sip' for full market data.
+
+    Every frame it returns is in the canonical shape of data.bars.normalize_bars.
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -72,41 +50,85 @@ class AlpacaData:
         self.feed = settings.data_feed.lower()  # 'iex' or 'sip'
 
     @retry_read_request()
-    def fetch_bars(
-        self,
-        symbol: str,
-        timeframe: Any,  # alpaca.data.timeframe.TimeFrame
-        start: "datetime",
-        end: "datetime",
-    ) -> "pd.DataFrame":
-        from alpaca.data.requests import StockBarsRequest
-        from alpaca.data.enums import DataFeed
+    def fetch_bars_bulk(
+        self, symbols: Sequence[str], timeframe: TimeFrame, start: datetime, end: datetime
+    ) -> dict[str, pd.DataFrame]:
+        """Bars for all `symbols` in ONE request (alpaca-py pages through the results).
 
-        req = StockBarsRequest(
-            symbol_or_symbols=symbol,
+        Symbols without any bars are left out of the result. Prices are adjusted for
+        splits and dividends so that a split inside the lookback window cannot look like
+        a crash to the indicators."""
+        if not symbols:
+            return {}
+
+        request = StockBarsRequest(
+            symbol_or_symbols=list(symbols),
             timeframe=timeframe,
             start=start,
             end=end,
-            feed=DataFeed(self.feed) if self.feed else None,
+            feed=DataFeed(self.feed),
+            adjustment=Adjustment.ALL,
+        )
+        # get_stock_bars returns a BarSet (or a raw dict only if raw_data=True, which we never set).
+        frame = getattr(self.client.get_stock_bars(request), "df", None)
+        if frame is None or frame.empty:
+            return {}
+
+        if not isinstance(frame.index, pd.MultiIndex):
+            # Not what alpaca-py returns for a symbol list, but harmless to accept for one symbol.
+            frame = pd.concat({symbols[0]: frame}, names=["symbol"])
+
+        result: dict[str, pd.DataFrame] = {}
+        for symbol, bars in frame.groupby(level="symbol"):
+            missing = [c for c in _OHLCV if c not in bars.columns]
+            if missing:
+                raise ValueError(f"bars for {symbol} lack columns {missing}")
+            result[str(symbol)] = normalize_bars(bars)
+        return result
+
+    def fetch_bars(
+        self, symbol: str, timeframe: TimeFrame, start: datetime, end: datetime
+    ) -> pd.DataFrame:
+        """Bars for one symbol (an empty frame if there are none)."""
+        return self.fetch_bars_bulk([symbol], timeframe, start, end).get(symbol, pd.DataFrame())
+
+    def load_universe(
+        self,
+        symbols: Sequence[str],
+        now: datetime,
+        lookback_days: int,
+        htf_lookback_days: int,
+    ) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
+        """15-minute and 1-hour bars for every symbol, cleaned, cut to closed bars and
+        aligned, ready for strategy.trend.generate_signals. Two requests in total.
+
+        Symbols that lack bars on either timeframe are skipped (logged, not fatal)."""
+        bars_15m = self.fetch_bars_bulk(
+            symbols, FIFTEEN_MINUTES, now - timedelta(days=lookback_days), now
+        )
+        bars_1h = self.fetch_bars_bulk(
+            symbols, ONE_HOUR, now - timedelta(days=htf_lookback_days), now
         )
 
-        bars = self.client.get_stock_bars(req)
-        if not hasattr(bars, "data") or not bars.data or symbol not in bars.data:
-            import pandas as pd
-
-            return pd.DataFrame()
-
-        df = getattr(bars, "df", pd.DataFrame())
-        if df.empty:
-            import pandas as pd
-
-            return pd.DataFrame()
-
-        # Alpaca returns multi-index (symbol, timestamp) for df. We drop symbol.
-        if isinstance(df.index, pd.MultiIndex):
-            df = df.reset_index(level=0, drop=True)
-
-        return df
+        out_15m: dict[str, pd.DataFrame] = {}
+        out_1h: dict[str, pd.DataFrame] = {}
+        for symbol in symbols:
+            df_15m, df_1h = bars_15m.get(symbol), bars_1h.get(symbol)
+            if df_15m is None or df_1h is None:
+                logger.warning(
+                    "No bars returned for %s (15m: %s, 1h: %s)",
+                    symbol,
+                    df_15m is not None,
+                    df_1h is not None,
+                )
+                continue
+            df_15m, df_1h = self.align_and_filter(
+                self.clean_and_deduplicate(df_15m), self.clean_and_deduplicate(df_1h), now
+            )
+            if not df_15m.empty and not df_1h.empty:
+                out_15m[symbol] = df_15m
+                out_1h[symbol] = df_1h
+        return out_15m, out_1h
 
     def clean_and_deduplicate(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -140,8 +162,6 @@ class AlpacaData:
         """
         # Ensure UTC
         if current_time.tzinfo is None:
-            from datetime import timezone
-
             current_time = current_time.replace(tzinfo=timezone.utc)
 
         # 1. Filter out unclosed bars

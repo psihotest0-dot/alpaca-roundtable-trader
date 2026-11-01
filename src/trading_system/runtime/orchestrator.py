@@ -45,7 +45,6 @@ class Orchestrator:
         from trading_system.execution.engine import ExecutionEngine
         from trading_system.storage.repositories import SignalRepository, OrderRepository
         from datetime import datetime, timezone
-        from alpaca.data.timeframe import TimeFrame
         import datetime as dt
 
         broker = AlpacaBroker(self.settings)
@@ -125,31 +124,16 @@ class Orchestrator:
                 # Fetch data
                 logger.info("Fetching market data...")
                 now = datetime.now(timezone.utc)
-                start_15m = now - dt.timedelta(days=self.settings.lookback_days)
-                start_1h = now - dt.timedelta(days=self.settings.htf_lookback_days)
-
-                watchlist = self.settings.watchlist.split(",") if self.settings.watchlist else []
-                df_15m_all = {}
-                df_1h_all = {}
-                for symbol in watchlist:
-                    symbol = symbol.strip()
-                    if not symbol:
-                        continue
-
-                    try:
-                        df_15 = data.fetch_bars(symbol, TimeFrame.Minute * 15, start_15m, now)
-                        df_h = data.fetch_bars(symbol, TimeFrame.Hour, start_1h, now)
-
-                        df_15 = data.clean_and_deduplicate(df_15)
-                        df_h = data.clean_and_deduplicate(df_h)
-
-                        df_15, df_h = data.align_and_filter(df_15, df_h, now)
-
-                        if not df_15.empty and not df_h.empty:
-                            df_15m_all[symbol] = df_15
-                            df_1h_all[symbol] = df_h
-                    except Exception as e:
-                        logger.error(f"Error fetching data for {symbol}: {e}")
+                watchlist = [
+                    sym.strip() for sym in self.settings.watchlist.split(",") if sym.strip()
+                ]
+                try:
+                    df_15m_all, df_1h_all = data.load_universe(
+                        watchlist, now, self.settings.lookback_days, self.settings.htf_lookback_days
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to load market data: {e}")
+                    df_15m_all, df_1h_all = {}, {}
 
                 # Generate signals
                 logger.info("Generating strategy signals...")

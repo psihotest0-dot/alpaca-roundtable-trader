@@ -14,11 +14,11 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
-from alpaca.data.timeframe import TimeFrame
 
 from tests.fixtures.bars import make_bars
-from tests.fixtures.fakes import FakeBroker, FakeData
+from tests.fixtures.fakes import FakeBroker, FakeStockClient
 from trading_system.config import Settings
+from trading_system.data.alpaca_data import AlpacaData
 from trading_system.domain.enums import SignalDirection
 from trading_system.domain.models import AccountSnapshot, StrategySignal
 from trading_system.risk.engine import RiskEngine
@@ -94,18 +94,20 @@ class StopLoop(Exception):
 def run_cycle(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> Callable[..., SimpleNamespace]:
-    """Run exactly one Orchestrator.run iteration against fakes and a real SQLite
+    """Run exactly one Orchestrator.run iteration against a fake Alpaca and a real SQLite
     database, then return what happened.
 
-    `timeframe_workaround=True` patches TimeFrame so that `TimeFrame.Minute * 15`
-    (invalid in alpaca-py, defect C1b) does not stop the cycle. Downstream tests
-    need it to get as far as risk and execution; the C1b test turns it off.
+    The data layer is the real AlpacaData; only its network client is replaced, by one
+    that answers in alpaca-py's real shape. Broker and data requests are both visible to
+    the test (`broker.submitted`, `client.requests`).
     """
 
-    def _run(*, timeframe_workaround: bool = True, is_paper: bool = False) -> SimpleNamespace:
+    def _run(*, is_paper: bool = False) -> SimpleNamespace:
         bars_15m, bars_1h = make_bars()
         broker = FakeBroker()
-        data = FakeData({"AAPL": bars_15m}, {"AAPL": bars_1h})
+        client = FakeStockClient({"AAPL": bars_15m}, {"AAPL": bars_1h})
+        data = AlpacaData(settings)
+        data.client = client
         decisions: list[Any] = []
 
         original = RiskEngine.evaluate_signal
@@ -122,18 +124,13 @@ def run_cycle(
         monkeypatch.setattr("trading_system.broker.alpaca_broker.AlpacaBroker", lambda _s: broker)
         monkeypatch.setattr("trading_system.data.alpaca_data.AlpacaData", lambda _s: data)
         monkeypatch.setattr("time.sleep", stop)
-        if timeframe_workaround:
-            monkeypatch.setattr(
-                TimeFrame, "__mul__", lambda self, n: TimeFrame(n, self.unit_value), raising=False
-            )
-
         orchestrator = Orchestrator(settings)
         try:
             orchestrator.run(is_paper)
         except StopLoop:
             pass
         return SimpleNamespace(
-            orchestrator=orchestrator, broker=broker, data=data, decisions=decisions
+            orchestrator=orchestrator, broker=broker, client=client, decisions=decisions
         )
 
     return _run
