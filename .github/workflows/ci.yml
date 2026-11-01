@@ -33,6 +33,23 @@ jobs:
       - name: Run pre-commit on all files
         run: pre-commit run --all-files --show-diff-on-failure
 
+  docker:
+    # Builds the image and runs it. A bumped base image that cannot install the locked
+    # dependencies (PR #25 moved it to Python 3.15) now fails here instead of being merged.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build the image
+        run: docker build --tag alpaca-roundtable-trader:ci .
+      - name: Smoke test the image
+        run: |
+          docker run --rm alpaca-roundtable-trader:ci python -m trading_system --help
+          docker run --rm alpaca-roundtable-trader:ci python -m alembic upgrade head
+          docker run --rm alpaca-roundtable-trader:ci python -m pip check
+
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 25
