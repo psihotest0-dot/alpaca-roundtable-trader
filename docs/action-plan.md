@@ -73,7 +73,7 @@
 | 4 | 1.2 | Идентичност на ордер по `client_order_id` + миграция `c3f1a9e47d52` (запазва данните, има `downgrade`, подравнява и `orderstatus`) *(C6, M5)*. **Съществуващи бази:** `alembic upgrade head`. | `phase-1-core` | ✅ `eb87251` |
 | 5 | 1.3 | Пътят на данните *(C1, C1б, C1в, M2)*: `TimeFrame(15, ...)`, `fetch_bars` без `UnboundLocalError`, един формат на баровете (`normalize_bars`), **една заявка за всички символи** вместо 44 в минута, ретраи само за временни грешки. Проверено и върху реалния Alpaca (само четене): 6 символа за 6.3 s. | `main` | ✅ `53f1bad` |
 | 5а | 1.3а | `LivePriceProvider` през WebSocket (цена на живо за лимита на входа, с поправките от Money_bot) | `main` | ☐ |
-| 6 | 1.4 | Дневен начален капитал и дневен лимит *(C2)* | `main` | ☐ |
+| 6 | 1.4 | Дневен начален капитал *(C2)*: база = капиталът при предишното затваряне (`last_equity`) или при първия цикъл; записва се веднъж на търговски ден (по Ню Йорк, не по UTC); рестарт през деня не я мести; риск отхвърля остаряла база. Проверено и с реалния акаунт. | `main` | ✅ `db59907` |
 | 7 | 1.5 | Договор Risk → Execution (`EntryPlan`) *(C3)* | `main` | ☐ |
 | 8 | 1.6 | Проверка за защита на позициите през вложени легове, **проверена на paper акаунт** *(C7)* | `main` | ☐ |
 | 9 | 1.7 | Оркестратор: `TradingCycle` + `Runner`, `SIGTERM`, reconciliation, fills | `main` | ☐ |
@@ -93,9 +93,9 @@
 | 1.1 ✅ | C4, C5 | `test_pause_entries_survives_process_exit`, `test_emergency_halt_survives_process_exit`, `test_reading_state_does_not_block_other_writers` (вече зелени, маркерите са махнати) |
 | 1.2 ✅ | C6 | `test_broker_confirmation_replaces_the_inflight_placeholder`, `test_successful_live_submission_does_not_halt_trading` (вече зелени) |
 | 1.3 ✅ | C1б, C1в, C1 | `test_cycle_requests_bars_with_valid_timeframes`, `test_fetch_bars_returns_the_bars_alpaca_sent`, `test_bars_loaded_through_the_data_layer_flow_into_generate_signals` (вече зелени) |
-| 1.4 | C2 | `test_cycle_risk_engine_approves_a_healthy_signal` |
+| 1.4 ✅ | C2 | `test_cycle_risk_engine_approves_a_healthy_signal` (вече зелен) |
 | 1.5 | C3 | `test_execution_engine_accepts_what_the_risk_engine_approves` |
-| 1.4 + 1.5 | краен резултат (останаха C2 и C3; C4 е поправен) | `test_dry_run_cycle_persists_a_simulated_order` |
+| 1.5 | краен резултат (остана само C3; C2 и C4 са поправени) | `test_dry_run_cycle_persists_a_simulated_order` |
 
 Защитни тестове, които минават още сега и трябва да останат зелени: `test_every_enum_survives_a_database_round_trip` (урокът от Money_bot: `BUY` се връщаше като `SELL`), `test_control_*` (самите фикстури произвеждат валиден сигнал).
 
