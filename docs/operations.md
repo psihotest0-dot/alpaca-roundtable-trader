@@ -57,6 +57,23 @@
   - On Windows: Usually `C:\opper-data\chroma`.
   Inside Docker (`compose.yaml`), the container resolves host endpoints using OS-specific gateways (e.g., `host.docker.internal` for Mac/Win or `172.17.0.1` for Linux). Do NOT use `127.0.0.1` inside Docker for AnythingLLM/Chroma URLs.
 
+## Docker image
+
+The image is built from `Dockerfile` on Python 3.11, the version the project is tested on (the
+locked numpy has no wheels beyond 3.12, so a newer base image cannot install the dependencies).
+It contains runtime dependencies only: no pytest, ruff, mypy or safety, and never `.env` or `var/`.
+
+```bash
+docker build -t alpaca-roundtable-trader:latest .
+docker run --rm alpaca-roundtable-trader:latest python -m trading_system --help
+# Keep the database and logs outside the container:
+docker run --rm -e ALPACA_API_KEY=... -e ALPACA_SECRET_KEY=... -v "$PWD/var:/app/var"     alpaca-roundtable-trader:latest python -m alembic upgrade head
+```
+
+`docker compose build` produces the same image name. CI builds the image and smoke-tests it on every
+push and pull request. Do not change the Python tag on its own; change it together with `pyproject.toml`
+and the CI Python version.
+
 ## Simulation Limitations
 - **Backtest Fills**: Conservative assumptions apply (assume stops hit first if both triggered in same bar).
 - **Paper Fills**: Slippage is generally zero on limit orders in paper environments compared to live. Real market depth is not fully simulated. Survivorship bias exists as the watchlist is fixed in testing.
