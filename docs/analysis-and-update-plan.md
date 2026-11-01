@@ -128,7 +128,7 @@ CLI run [--paper]
 **C5. Дългоживеещата сесия държи SQLite write lock** · [Проверено] · ✅ **Поправено** в `0ce0d10` (виж C4).
 Първият `get_state()` вмъква ред и прави `flush`. Транзакцията остава отворена, а SQLite позволява един писач. Втора сесия, която пише, получава `OperationalError: database is locked` след около 5 s. Оркестраторът има три сесии и така ще се самоблокира веднага щом C4 бъде частично поправен.
 
-**C6. Повторен запис на ордера нарушава `UNIQUE(client_order_id)`** · [Проверено]
+**C6. Повторен запис на ордера нарушава `UNIQUE(client_order_id)`** ✅ **Поправено** в `eb87251` (задача 1.2): ключът е `client_order_id`, а `broker_id` е попълваем. · [Проверено]
 Преди изпращане се записва ред с `broker_id = client_order_id` (`execution/engine.py:173-191`). След отговора се записва ред с `broker_id = <Alpaca UUID>` и същия `client_order_id`. `merge()` търси по `broker_id`, не намира ред и прави INSERT, което дава `IntegrityError: UNIQUE constraint failed: broker_orders.client_order_id`. Изпълнението го третира като провал на изпращането, `reconcile_order` пада по същата причина и накрая вика **`halt_trading("Reconciliation failed…")`, докато истинският ордер вече е в брокера**. Днес е маскирано от C4. Ще се прояви веднага след поправянето му.
 
 **C7. Аварийната проверка вероятно ще вижда всяка позиция като „без защита“** · [Непроверено срещу акаунт, подкрепено от документацията на Alpaca]
@@ -190,8 +190,8 @@ CLI run [--paper]
 
 **M5. База данни:**
 - `Numeric(18,8)` в SQLite се превръща във float с предупреждения.
-- Миграцията и моделът се разминават. Enum-ът `orderstatus` в миграцията е `PENDING_NEW/ACCEPTED/NEW…`, а в домейна е `CREATED/RISK_APPROVED/SUBMITTING…`. На SQLite е скрито, на Postgres би се счупило.
-- `repositories.py` създава engine при импорт от `os.getenv("DATABASE_URL")` (игнорира `.env`) и не се ползва от оркестратора.
+- ✅ *Поправено в `eb87251`; тест `test_migrations_build_exactly_what_the_models_describe` пази срещу ново разминаване.* Миграцията и моделът се разминават. Enum-ът `orderstatus` в миграцията е `PENDING_NEW/ACCEPTED/NEW…`, а в домейна е `CREATED/RISK_APPROVED/SUBMITTING…`. На SQLite е скрито, на Postgres би се счупило.
+- ✅ *Поправено в `0ce0d10`.* `repositories.py` създава engine при импорт от `os.getenv("DATABASE_URL")` (игнорира `.env`) и не се ползва от оркестратора.
 - CI не пуска `alembic check` за дрейф на схемата.
 
 **M6. Репо хигиена:**
