@@ -1,0 +1,16 @@
+# Keep line endings stable no matter who commits (Windows autocrlf, CI, Docker).
+* text=auto eol=lf
+
+# Binary files: never touch.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary
+*.db binary
+*.sqlite binary
+*.sqlite3 binary
+
+# Lock files are generated: do not diff or merge them line by line.
+poetry.lock -diff linguist-generated=true

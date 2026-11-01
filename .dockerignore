@@ -1,16 +1,37 @@
+# Never bake secrets, local state or tooling caches into the image.
 .env
-.venv
+.env.*
+!.env.example
+.git/
+.github/
+
+# Local environments
+.venv/
+venv/
+env/
+ENV/
+
+# Runtime state and caches
+var/
+*.log
+*.db
+*.sqlite
+*.sqlite3
+local.db
+data/
+embeddings/
+chroma/
+chroma_data/
+secrets/
+*.pem
+*.key
+
 __pycache__/
 *.py[cod]
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.sqlite
-*.db
-local.db
-data/
-embeddings/
-chroma/
-secrets/
-.git/
-.github/
+.coverage
+htmlcov/
+.vscode/
+.idea/
