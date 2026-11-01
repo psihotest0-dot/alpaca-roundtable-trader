@@ -6,12 +6,42 @@ on:
   pull_request:
     branches: [ main ]
 
+# CI only reads the repository; it needs no write access and uses no secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
-  test:
+  hygiene:
+    # Same checks as the local pre-commit hooks, so they cannot be skipped with
+    # `git commit --no-verify`: secret patterns, forbidden runtime files, ruff,
+    # whitespace and line endings.
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install pre-commit
+        run: python -m pip install pre-commit==4.6.2
+      - name: Run pre-commit on all files
+        run: pre-commit run --all-files --show-diff-on-failure
+
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - name: Set up Python 3.11
+        id: setup-python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
