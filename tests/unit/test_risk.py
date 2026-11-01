@@ -11,6 +11,7 @@ from trading_system.domain.models import (
     BrokerOrder,
     TradingState,
 )
+from trading_system.risk.daily_equity import day_marker, trading_day
 from trading_system.risk.engine import RiskEngine
 
 
@@ -65,7 +66,11 @@ def base_account():
 
 @pytest.fixture
 def base_state():
-    return TradingState(is_trading_halted=False, daily_start_equity=Decimal("100000"))
+    return TradingState(
+        is_trading_halted=False,
+        daily_start_equity=Decimal("100000"),
+        daily_equity_date=day_marker(trading_day(_now_utc())),
+    )
 
 
 def test_valid_long_signal(risk_engine, base_signal, base_account, base_state):
@@ -137,6 +142,36 @@ def test_missing_daily_equity_rejected(risk_engine, base_signal, base_account, b
     )
     assert decision.approved is False
     assert "Missing daily start equity" in decision.reasoning
+
+
+def test_baseline_from_an_earlier_day_rejected(risk_engine, base_signal, base_account, base_state):
+    """If recording today's baseline failed, yesterday's number must not be used silently."""
+    base_state.daily_equity_date = day_marker(trading_day(_now_utc() - timedelta(days=1)))
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[],
+        current_price=Decimal("150"),
+        state=base_state,
+    )
+    assert decision.approved is False
+    assert "not from today's trading day" in decision.reasoning
+    assert intent is None
+
+
+def test_baseline_without_a_date_rejected(risk_engine, base_signal, base_account, base_state):
+    base_state.daily_equity_date = None
+    decision, _ = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[],
+        current_price=Decimal("150"),
+        state=base_state,
+    )
+    assert decision.approved is False
+    assert "not from today's trading day" in decision.reasoning
 
 
 def test_existing_position_rejected(risk_engine, base_signal, base_account, base_state):

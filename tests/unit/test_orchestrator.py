@@ -3,6 +3,10 @@
 The loop itself is covered by tests/integration/test_runtime_cycle.py.
 """
 
+from datetime import datetime
+from decimal import Decimal
+from types import SimpleNamespace
+
 import pytest
 
 from trading_system.config import Settings
@@ -19,6 +23,11 @@ class InMemoryStateRepo:
 
     def save_state(self, state: TradingState) -> None:
         self.state = state
+
+    def save_daily_start_equity(self, equity: Decimal, equity_date: datetime) -> None:
+        self.state = (self.state or TradingState()).model_copy(
+            update={"daily_start_equity": equity, "daily_equity_date": equity_date}
+        )
 
 
 @pytest.fixture
@@ -74,3 +83,46 @@ def test_status_reports_the_halt_reason(
     out = capsys.readouterr().out
     assert "Trading Halted: True" in out
     assert "Manual CLI pause" in out
+
+
+class _Broker:
+    def __init__(self, equity: str | None = "100000", last_equity: str | None = None):
+        self.equity, self.last_equity = equity, last_equity
+
+    def get_account(self) -> SimpleNamespace:
+        if self.equity is None:
+            raise ConnectionError("broker unreachable")
+        return SimpleNamespace(equity=self.equity, last_equity=self.last_equity)
+
+
+def test_the_daily_equity_is_recorded_on_the_first_cycle_of_the_day(settings: Settings) -> None:
+    repo = InMemoryStateRepo(TradingState())
+
+    state = Orchestrator(settings, state_repo=repo)._with_daily_equity(
+        _Broker("100000"), repo.state
+    )
+
+    assert state.daily_start_equity == Decimal("100000")
+    assert repo.state is not None and repo.state.daily_start_equity == Decimal("100000")
+
+
+def test_a_second_call_the_same_day_changes_nothing(settings: Settings) -> None:
+    repo = InMemoryStateRepo(TradingState())
+    orchestrator = Orchestrator(settings, state_repo=repo)
+    first = orchestrator._with_daily_equity(_Broker("100000"), repo.state)
+
+    second = orchestrator._with_daily_equity(_Broker("90000"), first)
+
+    assert second is first
+    assert second.daily_start_equity == Decimal("100000")
+
+
+def test_a_broker_failure_is_not_fatal_and_leaves_the_state_alone(settings: Settings) -> None:
+    """Fail closed: with no baseline from today, risk rejects every entry."""
+    repo = InMemoryStateRepo(TradingState(is_trading_halted=True, halt_reason="manual"))
+    before = repo.state
+
+    state = Orchestrator(settings, state_repo=repo)._with_daily_equity(_Broker(None), before)
+
+    assert state is before
+    assert repo.state is before

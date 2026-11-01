@@ -40,8 +40,11 @@ class FakeStockClient:
 class FakeBroker:
     """The subset of AlpacaBroker that the runtime and ExecutionEngine use."""
 
-    def __init__(self, equity: str = "100000", market_open: bool = True):
+    def __init__(
+        self, equity: str = "100000", market_open: bool = True, last_equity: str | None = None
+    ):
         self.equity = equity
+        self.last_equity = last_equity
         self.market_open = market_open
         self.positions: list[Any] = []
         self.open_orders: list[Any] = []
@@ -60,6 +63,7 @@ class FakeBroker:
             cash=self.equity,
             buying_power=str(float(self.equity) * 4),
             daytrade_count=0,
+            **({} if self.last_equity is None else {"last_equity": self.last_equity}),
         )
 
     def get_positions(self) -> list[Any]:

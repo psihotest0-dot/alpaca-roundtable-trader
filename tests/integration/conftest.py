@@ -102,15 +102,18 @@ def run_cycle(
     the test (`broker.submitted`, `client.requests`).
     """
 
-    def _run(*, is_paper: bool = False) -> SimpleNamespace:
+    # Taken once: running several cycles in one test must not wrap the spy in another spy.
+    original = RiskEngine.evaluate_signal
+
+    def _run(
+        *, is_paper: bool = False, equity: str = "100000", last_equity: str | None = None
+    ) -> SimpleNamespace:
         bars_15m, bars_1h = make_bars()
-        broker = FakeBroker()
+        broker = FakeBroker(equity=equity, last_equity=last_equity)
         client = FakeStockClient({"AAPL": bars_15m}, {"AAPL": bars_1h})
         data = AlpacaData(settings)
         data.client = client
         decisions: list[Any] = []
-
-        original = RiskEngine.evaluate_signal
 
         def spy(self: RiskEngine, *args: Any, **kwargs: Any) -> Any:
             result = original(self, *args, **kwargs)

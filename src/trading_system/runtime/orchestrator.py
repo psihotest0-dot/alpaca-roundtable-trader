@@ -2,6 +2,8 @@ import asyncio
 import logging
 import threading
 import time
+from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Optional
 
 from trading_system.config import Settings
@@ -9,6 +11,7 @@ from trading_system.data.rss_pipeline import RSSIngestionPipeline
 from trading_system.storage.database import get_engine, get_session_factory
 from trading_system.storage.repositories import SessionFactory, StateRepository
 from trading_system.domain.models import TradingState
+from trading_system.risk.daily_equity import with_daily_start_equity
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,6 @@ class Orchestrator:
         from trading_system.risk.engine import RiskEngine
         from trading_system.execution.engine import ExecutionEngine
         from trading_system.storage.repositories import SignalRepository, OrderRepository
-        from datetime import datetime, timezone
         import datetime as dt
 
         broker = AlpacaBroker(self.settings)
@@ -107,9 +109,10 @@ class Orchestrator:
                     time.sleep(sleep_secs)
                     continue
 
-                # Check state
-                state = self.state_repo.get_state()
-                if state and state.is_trading_halted:
+                # Check state. Today's start-of-day equity is recorded first, so it exists even
+                # on a day that begins halted (the daily loss guard needs it after a resume).
+                state = self._with_daily_equity(broker, self.state_repo.get_state())
+                if state.is_trading_halted:
                     now_time = datetime.now(timezone.utc)
                     next_minute = (now_time + dt.timedelta(minutes=1)).replace(
                         second=0, microsecond=0
@@ -294,6 +297,34 @@ class Orchestrator:
             # Graceful shutdown logic: stop new entries, persist state
             self.pause_entries()
 
+    def _with_daily_equity(self, broker: Any, state: TradingState) -> TradingState:
+        """`state` with today's start-of-day equity, recorded once per trading day.
+
+        Without it the risk engine rejected every signal ("Missing daily start equity"), so
+        the system could never open a position. Failure to record it is logged, not fatal:
+        the risk engine then rejects entries (fail closed) and the next cycle tries again."""
+        try:
+            account = broker.get_account()
+            previous_close = getattr(account, "last_equity", None)
+            updated = with_daily_start_equity(
+                state,
+                now=datetime.now(timezone.utc),
+                equity=Decimal(str(account.equity)),
+                previous_close_equity=Decimal(str(previous_close)) if previous_close else None,
+            )
+            if updated is not state and updated.daily_start_equity and updated.daily_equity_date:
+                self.state_repo.save_daily_start_equity(
+                    updated.daily_start_equity, updated.daily_equity_date
+                )
+                logger.info(
+                    f"Daily start equity for {updated.daily_equity_date.date()}: "
+                    f"{updated.daily_start_equity}"
+                )
+            return updated
+        except Exception as e:
+            logger.error(f"Could not record the daily start equity: {e}")
+            return state
+
     def pause_entries(self) -> None:
         logger.info("Pausing new entries...")
         state = self.state_repo.get_state()
@@ -329,4 +360,5 @@ class Orchestrator:
             if state.is_trading_halted:
                 print(f"Halt Reason: {state.halt_reason}")
             print(f"Daily Start Equity: {state.daily_start_equity}")
+            print(f"Daily Equity Date: {state.daily_equity_date}")
             print(f"Last Updated: {state.last_updated}")

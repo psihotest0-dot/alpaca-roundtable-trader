@@ -4,6 +4,7 @@ from typing import Optional, Tuple
 
 from trading_system.config import Settings
 from trading_system.domain.enums import SignalDirection, OrderSide, OrderType
+from trading_system.risk.daily_equity import has_start_equity_for, trading_day
 from trading_system.domain.models import (
     StrategySignal,
     AccountSnapshot,
@@ -78,6 +79,15 @@ class RiskEngine:
                 signal_id=signal.signal_id or "",
                 approved=False,
                 reasoning="Invalid daily start equity.",
+            ), None
+
+        # A baseline from an earlier day would silently measure today's loss against the
+        # wrong number (yesterday's equity), e.g. when recording today's baseline failed.
+        if not has_start_equity_for(state, trading_day(now)):
+            return RiskDecision(
+                signal_id=signal.signal_id or "",
+                approved=False,
+                reasoning="Daily start equity is not from today's trading day.",
             ), None
 
         daily_loss_pct = (state.daily_start_equity - account.equity) / state.daily_start_equity

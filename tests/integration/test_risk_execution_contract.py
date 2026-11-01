@@ -1,5 +1,6 @@
 """C3: an entry the risk engine approves must be something execution can send."""
 
+from datetime import datetime, timezone
 from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
@@ -10,11 +11,15 @@ from tests.fixtures.fakes import FakeBroker
 from trading_system.domain.enums import OrderType
 from trading_system.domain.models import TradingState
 from trading_system.execution.engine import ExecutionEngine
+from trading_system.risk.daily_equity import day_marker, trading_day
 from trading_system.risk.engine import RiskEngine
 
 
 def _approved(settings: Any, signal: Any, account: Any) -> Any:
-    state = TradingState(daily_start_equity=Decimal("100000"))
+    state = TradingState(
+        daily_start_equity=Decimal("100000"),
+        daily_equity_date=day_marker(trading_day(datetime.now(timezone.utc))),
+    )
     return RiskEngine(settings).evaluate_signal(
         signal=signal,
         account=account,

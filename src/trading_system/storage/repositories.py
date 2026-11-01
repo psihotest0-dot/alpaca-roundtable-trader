@@ -153,6 +153,20 @@ class StateRepository:
             model.daily_start_equity = state.daily_start_equity  # type: ignore
             model.daily_equity_date = state.daily_equity_date  # type: ignore
 
+    def save_daily_start_equity(self, equity: Decimal, equity_date: datetime) -> None:
+        """Records the start-of-day equity and its trading day, touching nothing else.
+
+        A full save_state() writes every column from a possibly stale copy. If the
+        orchestrator did that while `pause-entries` ran in another process, the halt
+        could be overwritten with "not halted". These two columns are all this updates."""
+        with self._session_factory.begin() as session:
+            model = session.get(RuntimeStateModel, _STATE_ROW_ID)
+            if model is None:
+                model = RuntimeStateModel(id=_STATE_ROW_ID)
+                session.add(model)
+            model.daily_start_equity = equity  # type: ignore
+            model.daily_equity_date = equity_date  # type: ignore
+
     def _read(self) -> Optional[TradingState]:
         with self._session_factory.begin() as session:
             model = session.get(RuntimeStateModel, _STATE_ROW_ID)

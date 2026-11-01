@@ -14,7 +14,7 @@ from sqlalchemy.exc import IntegrityError
 
 from tests.fixtures.fakes import FakeBroker
 from trading_system.domain.enums import OrderSide, OrderStatus, OrderType, SignalDirection
-from trading_system.domain.models import BrokerOrder, OrderIntent, StrategySignal
+from trading_system.domain.models import BrokerOrder, OrderIntent, StrategySignal, TradingState
 from trading_system.execution.engine import ExecutionEngine
 from trading_system.runtime.orchestrator import Orchestrator
 from trading_system.storage.models import BrokerOrderModel, StrategySignalModel
@@ -100,6 +100,28 @@ def test_reading_state_does_not_block_other_writers(session_factory: Any, signal
     StateRepository(session_factory).get_state()
 
     assert SignalRepository(session_factory).save_signal(signal) is True
+
+
+def test_saving_the_daily_equity_does_not_touch_the_halt(session_factory: Any) -> None:
+    """The orchestrator records the baseline while `pause-entries` may run in another
+    process. A full save_state() from a stale copy could overwrite the halt with
+    "not halted"; the partial update must leave it alone."""
+    repo = StateRepository(session_factory)
+    stale_copy = repo.get_state()  # read before the halt happens
+    other_process = StateRepository(session_factory)
+    other_process.save_state(TradingState(is_trading_halted=True, halt_reason="manual"))
+
+    repo.save_daily_start_equity(Decimal("100000"), datetime(2026, 11, 2, tzinfo=timezone.utc))
+
+    state = repo.get_state()
+    assert stale_copy.is_trading_halted is False
+    assert state.is_trading_halted is True
+    assert state.halt_reason == "manual"
+    assert state.daily_start_equity == Decimal("100000")
+    assert (
+        state.daily_equity_date is not None
+        and state.daily_equity_date.date().isoformat() == "2026-11-02"
+    )
 
 
 def test_a_failed_write_does_not_break_the_next_one(session_factory: Any) -> None:
