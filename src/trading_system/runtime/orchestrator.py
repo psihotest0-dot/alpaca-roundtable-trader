@@ -2,11 +2,12 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Any
+from typing import Any, Optional
 
 from trading_system.config import Settings
 from trading_system.data.rss_pipeline import RSSIngestionPipeline
-from trading_system.storage.repositories import StateRepository
+from trading_system.storage.database import get_engine, get_session_factory
+from trading_system.storage.repositories import SessionFactory, StateRepository
 from trading_system.domain.models import TradingState
 
 logger = logging.getLogger(__name__)
@@ -15,14 +16,19 @@ logger = logging.getLogger(__name__)
 class Orchestrator:
     def __init__(self, settings: Settings, state_repo: Any = None):
         self.settings = settings
-        # Use provided repo or initialize a real one (for MVP, maybe mock or minimal init)
-        self.state_repo = state_repo
-        if self.state_repo is None:
-            from trading_system.storage.database import get_engine, get_session_factory
+        self._session_factory: Optional[SessionFactory] = None
+        # Use the provided repo (tests) or a real one on the configured database.
+        self.state_repo = (
+            state_repo if state_repo is not None else StateRepository(self.session_factory)
+        )
 
-            engine = get_engine(settings.database_url)
-            session_factory = get_session_factory(engine)
-            self.state_repo = StateRepository(session_factory())
+    @property
+    def session_factory(self) -> SessionFactory:
+        """One engine per Orchestrator, created on first use so that an injected
+        state repository never needs a database."""
+        if self._session_factory is None:
+            self._session_factory = get_session_factory(get_engine(self.settings.database_url))
+        return self._session_factory
 
     def run(self, is_paper: bool) -> None:
         if is_paper:
@@ -63,14 +69,10 @@ class Orchestrator:
 
         risk_engine = RiskEngine(self.settings)
 
-        from trading_system.storage.database import get_engine, get_session_factory
-
-        db_engine = get_engine(self.settings.database_url)
-        session_factory = get_session_factory(db_engine)
-
+        signal_repo = SignalRepository(self.session_factory)
         execution_engine = ExecutionEngine(
             broker=broker,
-            order_repo=OrderRepository(session_factory()),
+            order_repo=OrderRepository(self.session_factory),
             state_repo=self.state_repo,
             settings=self.settings,
             is_dry_run=not is_paper,
@@ -172,10 +174,7 @@ class Orchestrator:
 
                     # Store signal
                     try:
-                        with session_factory() as session:
-                            sig_repo = SignalRepository(session)
-                            sig_repo.save_signal(signal)
-                            session.commit()
+                        signal_repo.save_signal(signal)
                     except Exception as e:
                         logger.error(f"Failed to save signal: {e}")
 

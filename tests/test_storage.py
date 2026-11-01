@@ -12,7 +12,6 @@ from trading_system.storage.repositories import (
     SignalRepository,
     OrderRepository,
     StateRepository,
-    transaction,
 )
 from trading_system.domain.models import StrategySignal, BrokerOrder, TradingState
 from trading_system.domain.enums import SignalDirection, OrderSide, OrderType, OrderStatus
@@ -54,25 +53,6 @@ def test_migration_and_empty_db(engine, monkeypatch):
         assert result == 0
 
 
-def test_transaction_rollback(engine, session_factory, monkeypatch):
-    eng, url = engine
-    Base.metadata.create_all(eng)
-    monkeypatch.setattr("trading_system.storage.repositories.SessionFactory", session_factory)
-
-    with pytest.raises(Exception, match="Test Error"):
-        with transaction() as session:
-            repo = StateRepository(session)
-            state = TradingState(is_trading_halted=True, halt_reason="Test")
-            repo.save_state(state)
-            raise Exception("Test Error")
-
-    # Verify rollback happened (state should not be saved)
-    with transaction() as session:
-        repo = StateRepository(session)
-        state = repo.get_state()
-        assert state.is_trading_halted is False
-
-
 def test_duplicate_signal(engine, session_factory):
     eng, url = engine
     Base.metadata.create_all(eng)
@@ -83,27 +63,23 @@ def test_duplicate_signal(engine, session_factory):
         closed_bar_timestamp=datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc),
         direction=SignalDirection.LONG,
     )
-
-    session = session_factory()
-    repo = SignalRepository(session)
+    repo = SignalRepository(session_factory)
 
     # First save should succeed
-    success1 = repo.save_signal(signal)
-    session.commit()
-    assert success1 is True
+    assert repo.save_signal(signal) is True
 
     # Second save of same signal should return False and not raise
-    success2 = repo.save_signal(signal)
-    session.commit()
-    assert success2 is False
-    session.close()
+    assert repo.save_signal(signal) is False
+
+    # The duplicate did not disturb the stored row or the repository
+    other = signal.model_copy(update={"signal_id": "another-id"})
+    assert repo.save_signal(other) is True
 
 
 def test_duplicate_fill(engine, session_factory):
     eng, url = engine
     Base.metadata.create_all(eng)
-    session = session_factory()
-    repo = OrderRepository(session)
+    repo = OrderRepository(session_factory)
 
     # Needs a broker order to satisfy foreign key
     broker_order = BrokerOrder(
@@ -119,45 +95,56 @@ def test_duplicate_fill(engine, session_factory):
         updated_at=datetime.now(timezone.utc),
     )
     repo.save_broker_order(broker_order)
-    session.commit()
 
     # First save of fill should succeed
-    success1 = repo.save_fill("broker123", "exec123", 150.0, 10.0, datetime.now(timezone.utc))
-    session.commit()
-    assert success1 is True
+    assert repo.save_fill("broker123", "exec123", 150.0, 10.0, datetime.now(timezone.utc)) is True
 
     # Second save with same execution ID should return False and not raise
-    success2 = repo.save_fill("broker123", "exec123", 150.0, 10.0, datetime.now(timezone.utc))
-    session.commit()
-    assert success2 is False
-    session.close()
+    assert repo.save_fill("broker123", "exec123", 150.0, 10.0, datetime.now(timezone.utc)) is False
 
 
 def test_state_persistence(engine, session_factory):
     eng, url = engine
     Base.metadata.create_all(eng)
-    session = session_factory()
-    repo = StateRepository(session)
+    repo = StateRepository(session_factory)
 
     # Get default state
     state = repo.get_state()
     assert state.is_trading_halted is False
     assert state.daily_start_equity is None
 
-    # Update and save state
+    # Update and save state: no commit step, the repository commits by itself
     state.is_trading_halted = True
     state.halt_reason = "Circuit Breaker"
     state.daily_start_equity = Decimal("100000.00")
     repo.save_state(state)
-    session.commit()
 
-    # Retrieve in new session
-    session2 = session_factory()
-    repo2 = StateRepository(session2)
-    loaded_state = repo2.get_state()
+    # Retrieve through a brand-new engine, as a different process would
+    other = StateRepository(get_session_factory(get_engine(url)))
+    loaded_state = other.get_state()
 
     assert loaded_state.is_trading_halted is True
     assert loaded_state.halt_reason == "Circuit Breaker"
     assert loaded_state.daily_start_equity == Decimal("100000.00")
-    session.close()
-    session2.close()
+
+
+def test_get_state_is_stable_across_repeated_calls(engine, session_factory):
+    eng, url = engine
+    Base.metadata.create_all(eng)
+    repo = StateRepository(session_factory)
+
+    first = repo.get_state()
+    second = repo.get_state()
+
+    assert first.is_trading_halted is second.is_trading_halted is False
+    assert first.daily_start_equity is second.daily_start_equity is None
+
+
+def test_save_state_before_any_read_creates_the_row(engine, session_factory):
+    eng, url = engine
+    Base.metadata.create_all(eng)
+    repo = StateRepository(session_factory)
+
+    repo.save_state(TradingState(is_trading_halted=True, halt_reason="first write"))
+
+    assert repo.get_state().halt_reason == "first write"
