@@ -59,3 +59,16 @@ poetry run ruff check .
 poetry run mypy src
 poetry run pytest
 ```
+
+### Guard rails against leaking secrets
+
+Install the pre-commit hooks once per machine. They block env files, databases,
+logs, keys and broker credentials from being committed (CI runs the same checks):
+
+```bash
+pip install pre-commit
+pre-commit install
+```
+
+See `SECURITY.md` and `docs/action-plan.md` for the workflow and what to do if a
+key is ever committed.
