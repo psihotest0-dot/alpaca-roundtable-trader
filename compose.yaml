@@ -1,6 +1,8 @@
 services:
   app:
     build: .
+    # One name for the image whether it is built with `docker build -t` or `docker compose build`.
+    image: alpaca-roundtable-trader:latest
     volumes:
       - .:/app
     environment:
