@@ -10,7 +10,7 @@ packages = [{include = "trading_system", from = "src"}]
 python = "^3.11"
 alpaca-py = ">=0.36,<0.45"
 pandas = "^2.2.0"
-numpy = "^1.26.0"
+numpy = ">=1.26,<3.0"
 pydantic-settings = "^2.2.0"
 httpx = ">=0.27,<0.29"
 SQLAlchemy = "^2.0.29"
