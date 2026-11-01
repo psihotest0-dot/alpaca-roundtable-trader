@@ -1,37 +1,56 @@
-# Environments
+# Environments and secrets
 .env
-.venv
-env/
+.env.*
+!.env.example
+.venv/
 venv/
+env/
 ENV/
+secrets/
+*.pem
+*.key
+*.p12
+*.pfx
 
 # Python
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
+*.egg-info/
+build/
+dist/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
 .coverage
+.coverage.*
 htmlcov/
 
-# Databases
+# Runtime state: databases, logs and the local vector store. Everything the app
+# writes lives in var/; the directory itself is kept so a fresh clone can run
+# `alembic upgrade head` without creating it by hand.
+/var/*
+!/var/.gitkeep
 *.sqlite
+*.sqlite3
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 local.db
-alpaca_trading.log
+*.log
 
-# Generated data, caches, embeddings
-data/
-embeddings/
-chroma/
-
-# Secrets
-secrets/
-*.pem
+# Generated data and embeddings. Anchored to the repository root on purpose:
+# an unanchored `data/` also matched the src/trading_system/data package and
+# tests/data, which hid them from git add and from ruff.
+/data/
+/embeddings/
+/chroma/
+/chroma_data/
 
 # Editor/OS
 .vscode/
 .idea/
 .DS_Store
+Thumbs.db
