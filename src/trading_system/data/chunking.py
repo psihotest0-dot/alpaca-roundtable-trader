@@ -1,5 +1,6 @@
 from typing import List
 
+
 class TextChunker:
     def __init__(self, chunk_size: int, chunk_overlap: int):
         if chunk_size <= 0:
@@ -37,16 +38,18 @@ class TextChunker:
 
             # Try to find a sentence boundary
             best_end = -1
-            for separator in ['. ', '! ', '? ', '\n']:
+            for separator in [". ", "! ", "? ", "\n"]:
                 sep_pos = text.rfind(separator, start + self.chunk_size // 2, end)
                 if sep_pos != -1:
-                    best_end = max(best_end, sep_pos + 1) # include the separator mark but not the space
+                    best_end = max(
+                        best_end, sep_pos + 1
+                    )  # include the separator mark but not the space
 
             if best_end != -1:
                 end = best_end
             else:
                 # Fallback to word boundary
-                word_bound = text.rfind(' ', start + self.chunk_size // 2, end)
+                word_bound = text.rfind(" ", start + self.chunk_size // 2, end)
                 if word_bound != -1:
                     end = word_bound
 
@@ -65,8 +68,8 @@ class TextChunker:
                 next_start = start + 1
 
             # If we're inside a word, try to move to the beginning of the word to avoid breaking words in overlap
-            if next_start > 0 and next_start < text_length and text[next_start - 1] != ' ':
-                word_start = text.rfind(' ', start, next_start)
+            if next_start > 0 and next_start < text_length and text[next_start - 1] != " ":
+                word_start = text.rfind(" ", start, next_start)
                 if word_start != -1:
                     next_start = word_start + 1
 

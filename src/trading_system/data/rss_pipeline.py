@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # Global lock to protect against overlapping executions within the same process
 _INGESTION_LOCK = threading.Lock()
 
+
 class RSSIngestionPipeline:
     def __init__(self, settings: Settings):
         self.settings = settings
@@ -58,7 +59,9 @@ class RSSIngestionPipeline:
                     entries = self.parser.parse(feed_url, content)
                     logger.info(f"Parsed {len(entries)} entries from {feed_url}")
 
-                    watchlist_symbols = [s.strip() for s in self.settings.watchlist.split(",") if s.strip()]
+                    watchlist_symbols = [
+                        s.strip() for s in self.settings.watchlist.split(",") if s.strip()
+                    ]
 
                     for entry in entries:
                         report["entries_seen"] += 1
@@ -70,10 +73,14 @@ class RSSIngestionPipeline:
                             if re.search(rf"\b{re.escape(symbol)}\b", article_text):
                                 matched_symbols.append(symbol)
 
-                        ids = self.adapter.generate_ids(entry.source_id, entry.entry_id, article_text, 0)
+                        ids = self.adapter.generate_ids(
+                            entry.source_id, entry.entry_id, article_text, 0
+                        )
 
                         # Check if this exact content is already active
-                        if self.adapter.check_existing_version(ids["article_id"], ids["content_hash"]):
+                        if self.adapter.check_existing_version(
+                            ids["article_id"], ids["content_hash"]
+                        ):
                             report["articles_skipped"] += 1
                             continue
 
@@ -92,13 +99,18 @@ class RSSIngestionPipeline:
                         try:
                             # Avoid blocking the event loop with synchronous embedding & chroma calls by yielding to a thread
                             import asyncio
-                            embeddings = await asyncio.to_thread(self.provider.embed_documents, chunks)
+
+                            embeddings = await asyncio.to_thread(
+                                self.provider.embed_documents, chunks
+                            )
 
                             chunk_ids = []
                             metadatas = []
 
                             for i, chunk in enumerate(chunks):
-                                c_ids = self.adapter.generate_ids(entry.source_id, entry.entry_id, article_text, i)
+                                c_ids = self.adapter.generate_ids(
+                                    entry.source_id, entry.entry_id, article_text, i
+                                )
                                 chunk_ids.append(c_ids["chunk_id"])
 
                                 meta = {
@@ -112,7 +124,7 @@ class RSSIngestionPipeline:
                                     "ingested_at": entry.ingested_at.timestamp(),
                                     "first_seen_at": first_seen,
                                     "embedding_model_version": self.provider.get_model_version(),
-                                    "is_active": False
+                                    "is_active": False,
                                 }
                                 # Store boolean flags for each matched symbol to allow easy ChromaDB filtering
                                 for symbol in matched_symbols:
@@ -123,9 +135,16 @@ class RSSIngestionPipeline:
 
                                 metadatas.append(meta)
 
-                            success = await asyncio.to_thread(self.adapter.store_chunks, chunks, embeddings, metadatas, chunk_ids)
+                            success = await asyncio.to_thread(
+                                self.adapter.store_chunks, chunks, embeddings, metadatas, chunk_ids
+                            )
                             if success:
-                                activated = await asyncio.to_thread(self.adapter.activate_version, ids["article_id"], ids["content_hash"], chunk_ids)
+                                activated = await asyncio.to_thread(
+                                    self.adapter.activate_version,
+                                    ids["article_id"],
+                                    ids["content_hash"],
+                                    chunk_ids,
+                                )
                                 if activated:
                                     report["articles_indexed"] += 1
                                     report["chunks_written"] += len(chunks)
