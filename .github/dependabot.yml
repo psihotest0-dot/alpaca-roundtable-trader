@@ -1,0 +1,24 @@
+# Weekly dependency and workflow updates. Security alerts themselves must be
+# enabled in the repository settings (Code security and analysis).
+version: 2
+updates:
+  # Covers pyproject.toml / poetry.lock.
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels: ["dependencies"]
+
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels: ["dependencies"]
