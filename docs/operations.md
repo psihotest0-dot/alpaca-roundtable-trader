@@ -9,6 +9,10 @@
    poetry run alembic upgrade head
    ```
 
+## Upgrading an existing installation
+
+After pulling new code, run `poetry install` and then `poetry run alembic upgrade head`. The revision `c3f1a9e47d52` (2026-11-01) rebuilds `broker_orders` so that orders are keyed by `client_order_id`; it keeps all rows and has a working `downgrade`. A database created before it (for example the old `var/trading.db`) is empty or migrated in place.
+
 ## Local Operations Commands
 
 - **Config Validation**: `poetry run python -m trading_system validate-config` (Verifies Pydantic settings).
@@ -24,6 +28,7 @@
 - **Resume**: `poetry run python -m trading_system resume-entries`
   *WARNING*: Before resuming, you MUST perform a manual reconciliation to ensure local state matches the broker.
 - **Status**: `poetry run python -m trading_system status`
+  Shows whether entries are halted and the daily loss baseline (start-of-day equity and the trading day it belongs to).
 
 ### Incident Procedures
 - **Reconciliation**: If the system crashes mid-submission or enters an unknown state, it halts entries. The `reconcile_order` function attempts to recover status on restart.

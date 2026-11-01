@@ -2,6 +2,10 @@
 
 Automated trading system for US stocks using Alpaca for market data and paper trading. This project utilizes a 15-minute technical strategy with a 1-hour confirmation and an optional AnythingLLM Oracle.
 
+## Status
+
+Under active development and **paper-only**. The data path, persistence, the order model and the daily loss baseline work and are covered by tests; the risk-to-execution hand-off (so that an approved entry becomes an order) is the next task, so the system does not place orders yet. Where things stand and what comes next: [`docs/action-plan.md`](docs/action-plan.md). Why: [`docs/analysis-and-update-plan.md`](docs/analysis-and-update-plan.md). Decisions: [`docs/decisions.md`](docs/decisions.md).
+
 ## Installation (Clean Install)
 
 This project uses [Poetry](https://python-poetry.org/) for dependency management.
