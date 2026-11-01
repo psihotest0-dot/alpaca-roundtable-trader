@@ -68,7 +68,7 @@
 |---|---|---|---|---|
 | 1 | 0.3 | `safety` само в dev зависимостите (18 пакета излизат от производствения lock), `plugins` под `[tool.mypy]` (7 ненужни `type: ignore` махнати), `.gitattributes` вече показва промените по lock файла. Poetry 1.8.2 проверен с `check --lock`. | `phase-0-tests` | ✅ `b2223e2` |
 | 2 | 0.4 | **Тестове за известните дефекти** (виж таблицата по-долу): 11 теста `xfail(strict)`, всеки проверен с `--runxfail`, че пада от правилната причина, плюс контролни тестове и 5 теста за празния `test_orchestrator.py`. | `phase-0-tests` | ✅ `31ca0d9`, `8965e09`, `db061e4` |
-| 3 | 1.1 | Транзакции: къси сесии с commit, без глобален engine *(C4, C5)* | `phase-1-core` | ☐ |
+| 3 | 1.1 | Транзакции: всяко извикване на хранилище е къса транзактия с commit, без глобален engine *(C4, C5)*. Проверено и с реални CLI процеси: `pause-entries` в един процес, `status` в друг показва `Trading Halted: True`. | `phase-1-core` | ✅ `0ce0d10` |
 | 4 | 1.2 | Идентичност на ордер по `client_order_id` + нова миграция *(C6)* | `phase-1-core` | ☐ |
 | 5 | 1.3 | Договор за данни, заявка за всички символи, `LivePriceProvider` *(C1)* | `phase-1-core` | ☐ |
 | 6 | 1.4 | Дневен начален капитал и дневен лимит *(C2)* | `phase-1-core` | ☐ |
@@ -88,12 +88,12 @@
 
 | Задача | Дефект | Тест, който трябва да стане зелен |
 |---|---|---|
-| 1.1 | C4, C5 | `test_pause_entries_survives_process_exit`, `test_emergency_halt_survives_process_exit`, `test_reading_state_does_not_block_other_writers` |
+| 1.1 ✅ | C4, C5 | `test_pause_entries_survives_process_exit`, `test_emergency_halt_survives_process_exit`, `test_reading_state_does_not_block_other_writers` (вече зелени, маркерите са махнати) |
 | 1.2 | C6 | `test_broker_confirmation_can_replace_the_inflight_placeholder`, `test_successful_live_submission_does_not_halt_trading` |
 | 1.3 | C1б, C1в, C1 | `test_cycle_requests_bars_with_valid_timeframes`, `test_fetch_bars_returns_the_bars_alpaca_sent`, `test_bars_shaped_like_fetch_bars_output_flow_into_generate_signals` |
 | 1.4 | C2 | `test_cycle_risk_engine_approves_a_healthy_signal` |
 | 1.5 | C3 | `test_execution_engine_accepts_what_the_risk_engine_approves` |
-| 1.1 + 1.4 + 1.5 | краен резултат | `test_dry_run_cycle_persists_a_simulated_order` |
+| 1.4 + 1.5 | краен резултат (останаха C2 и C3; C4 е поправен) | `test_dry_run_cycle_persists_a_simulated_order` |
 
 Защитни тестове, които минават още сега и трябва да останат зелени: `test_every_enum_survives_a_database_round_trip` (урокът от Money_bot: `BUY` се връщаше като `SELL`), `test_control_*` (самите фикстури произвеждат валиден сигнал).
 
