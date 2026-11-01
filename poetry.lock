@@ -249,20 +249,21 @@ tz = ["tzdata"]
 
 [[package]]
 name = "alpaca-py"
-version = "0.36.0"
+version = "0.44.0"
 description = "The Official Python SDK for Alpaca APIs"
 optional = false
-python-versions = "<4.0.0,>=3.8.0"
+python-versions = "<4.0.0,>=3.10.0"
 groups = ["main"]
 files = [
-    {file = "alpaca_py-0.36.0-py3-none-any.whl", hash = "sha256:68f1dbefb865affe10d23cbafb9344c2c94cfdea511782bd29e78fa2d9c0d9ad"},
-    {file = "alpaca_py-0.36.0.tar.gz", hash = "sha256:66ebb67c316a8ee03fad409f9d0755363249d5807df35f293bf43d497f592643"},
+    {file = "alpaca_py-0.44.0-py3-none-any.whl", hash = "sha256:b54673f967c0c814a5e0223cbb0211a5d9d75a8d107e792872b14e5bae957c03"},
+    {file = "alpaca_py-0.44.0.tar.gz", hash = "sha256:5388715b67b51ad30fa07308e89299d48b19bed65b81013b8a1158fa5837337b"},
 ]
 
 [package.dependencies]
 msgpack = ">=1.0.3,<2.0.0"
 pandas = ">=1.5.3"
 pydantic = ">=2.0.3,<3.0.0"
+pytz = ">=2020.1"
 requests = ">=2.30.0,<3.0.0"
 sseclient-py = ">=1.7.2,<2.0.0"
 websockets = ">=10.4"
@@ -3547,7 +3548,7 @@ description = "C parser in Python"
 optional = false
 python-versions = ">=3.10"
 groups = ["dev"]
-markers = "platform_python_implementation != \"PyPy\" and implementation_name != \"PyPy\""
+markers = "implementation_name != \"PyPy\" and platform_python_implementation != \"PyPy\""
 files = [
     {file = "pycparser-3.0-py3-none-any.whl", hash = "sha256:b727414169a36b7d524c1c3e31839a521725078d7b2ff038656844266160a992"},
     {file = "pycparser-3.0.tar.gz", hash = "sha256:600f49d217304a5902ac3c37e1281c9fe94e4d0489de643a9504c5cdfdfc6b29"},
@@ -4790,7 +4791,7 @@ description = "Fast implementation of asyncio event loop on top of libuv"
 optional = false
 python-versions = ">=3.8.1"
 groups = ["main"]
-markers = "sys_platform != \"win32\" and sys_platform != \"cygwin\" and platform_python_implementation != \"PyPy\""
+markers = "platform_python_implementation != \"PyPy\" and sys_platform != \"win32\" and sys_platform != \"cygwin\""
 files = [
     {file = "uvloop-0.23.0-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:ce17bc317d089f361b33521654c13e30eacfd3d2034fd34e613ca9c51c969686"},
     {file = "uvloop-0.23.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:53c2c5d7e2024e46776c2d90e6c637d01102126b61aaf5faa5edaf05f8b5722a"},
@@ -5237,4 +5238,4 @@ propcache = ">=0.2.1"
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.11"
-content-hash = "ea5128631bdd3575323ba1a5482d394f8d68b81dbfbfcbcf1424d044a511479a"
+content-hash = "9310b14a9dad688b6c5431ba01803b7d44e510e1e0724285295d8686e448ff11"
