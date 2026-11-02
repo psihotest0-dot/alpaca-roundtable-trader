@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     # A position without an active stop halts trading and raises an alarm. Closing it at market
     # is a separate, explicit choice (see ExecutionEngine.emergency_check_unprotected_positions).
     emergency_close_unprotected: bool = False
+    # What stopping the system does (SIGTERM, Ctrl+C, `docker stop`). False: nothing, so a restart
+    # carries on by itself. True: new entries are paused, and the next start waits for
+    # `resume-entries`. `run --pause-on-exit` asks for True for one run.
+    pause_on_shutdown: bool = False
 
     watchlist: str = (
         "AAPL,MSFT,NVDA,AMD,GOOGL,TSLA,INTC,META,AMZN,SOFI,PLTR,"

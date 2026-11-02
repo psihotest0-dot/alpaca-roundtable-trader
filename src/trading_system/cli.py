@@ -56,6 +56,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Run in dry-run mode (no live broker execution).",
     )
     run_parser.add_argument("--paper", action="store_true", help="Run in paper trading mode.")
+    run_parser.add_argument(
+        "--pause-on-exit",
+        action="store_true",
+        help="When stopped, pause new entries, so the next start waits for resume-entries "
+        "(the PAUSE_ON_SHUTDOWN setting does the same for every run).",
+    )
 
     # pause-entries command
     subparsers.add_parser("pause-entries", help="Halts the trading system, preventing new entries.")
@@ -217,7 +223,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             # Simple simulation for CLI demo
             print("Orchestrator running. (Press Ctrl+C to stop)")
-            orchestrator.run(is_paper)
+            # None leaves it to the PAUSE_ON_SHUTDOWN setting; the flag can only add a pause.
+            orchestrator.run(is_paper, pause_on_shutdown=True if args.pause_on_exit else None)
             return 0
         except ValidationError as e:
             print(f"Configuration validation failed:\n{e}")

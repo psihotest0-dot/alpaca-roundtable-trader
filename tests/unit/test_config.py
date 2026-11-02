@@ -136,3 +136,12 @@ def test_watchlist_normalization_and_dedup():
     # Invalid symbols
     with pytest.raises(ValidationError, match="Invalid symbol"):
         Settings(alpaca_api_key="k", alpaca_secret_key="s", watchlist="AAPL, MSFT1*, NVDA")
+
+
+def test_stopping_does_not_pause_entries_unless_asked_to():
+    default = Settings(alpaca_api_key="k", alpaca_secret_key="s", _env_file=None)
+    asked = Settings(
+        alpaca_api_key="k", alpaca_secret_key="s", pause_on_shutdown=True, _env_file=None
+    )
+    assert default.pause_on_shutdown is False
+    assert asked.pause_on_shutdown is True

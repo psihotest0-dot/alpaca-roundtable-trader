@@ -64,8 +64,16 @@ class Orchestrator:
             oracle=AnythingLLMAdapter(self.settings) if self.settings.oracle_enabled else None,
         )
 
-    def run(self, is_paper: bool, handle_signals: bool = True) -> None:
-        """Runs until SIGINT or SIGTERM (Ctrl+C, `docker stop`), then pauses new entries.
+    def run(
+        self,
+        is_paper: bool,
+        handle_signals: bool = True,
+        pause_on_shutdown: Optional[bool] = None,
+    ) -> None:
+        """Runs until SIGINT or SIGTERM (Ctrl+C, `docker stop`).
+
+        When it stops, new entries are paused only if `pause_on_shutdown` says so (default: the
+        PAUSE_ON_SHUTDOWN setting, which is off). Otherwise the next start carries on by itself.
 
         `handle_signals=False` leaves the signals alone (tests, or a host that has its own)."""
         if is_paper:
@@ -86,9 +94,12 @@ class Orchestrator:
                 restore()
 
         logger.info("Orchestrator shutting down gracefully...")
-        # Graceful shutdown: stop new entries and persist that. Protective stops of positions
-        # that are already open stay at the broker.
-        self.pause_entries()
+        if pause_on_shutdown if pause_on_shutdown is not None else self.settings.pause_on_shutdown:
+            # Stop new entries and persist that: the next start waits for `resume-entries`.
+            self.pause_entries()
+        else:
+            logger.info("Entries are not paused: the next start carries on by itself.")
+        # Either way, the protective stops of open positions stay at the broker.
 
     def _stop_on_signals(self, runner: Runner) -> Optional[Callable[[], None]]:
         """Makes SIGINT and SIGTERM end the runner's wait at once. Returns a function that puts

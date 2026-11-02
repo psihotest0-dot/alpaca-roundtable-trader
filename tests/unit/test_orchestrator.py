@@ -147,13 +147,20 @@ class _RunnerThatReceivesASignal:
         signal.raise_signal(signal.SIGTERM)  # delivered to the handler the orchestrator installed
 
 
-def test_sigterm_stops_the_runner_pauses_entries_and_restores_the_handlers(
+def _orchestrator_with(
+    runner: type, repo: InMemoryStateRepo, settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> Orchestrator:
+    orchestrator = Orchestrator(settings, state_repo=repo)
+    monkeypatch.setattr(orchestrator, "build_cycle", lambda _is_paper: SimpleNamespace(broker=None))
+    monkeypatch.setattr("trading_system.runtime.orchestrator.Runner", runner)
+    return orchestrator
+
+
+def test_sigterm_stops_the_runner_and_restores_the_handlers(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     repo = InMemoryStateRepo()
-    orchestrator = Orchestrator(settings, state_repo=repo)
-    monkeypatch.setattr(orchestrator, "build_cycle", lambda _is_paper: SimpleNamespace(broker=None))
-    monkeypatch.setattr("trading_system.runtime.orchestrator.Runner", _RunnerThatReceivesASignal)
+    orchestrator = _orchestrator_with(_RunnerThatReceivesASignal, repo, settings, monkeypatch)
     before = signal.getsignal(signal.SIGTERM)
 
     orchestrator.run(is_paper=False)
@@ -162,11 +169,45 @@ def test_sigterm_stops_the_runner_pauses_entries_and_restores_the_handlers(
     assert runner.stopped is True  # the handler told the runner to stop
     assert runner.handler_during_run is not before  # ... and was installed only for the run
     assert signal.getsignal(signal.SIGTERM) is before
+
+
+def test_stopping_does_not_pause_entries_by_default(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A restart (docker stop and start, a reboot) carries on by itself."""
+    repo = InMemoryStateRepo()
+    orchestrator = _orchestrator_with(_RunnerThatReceivesASignal, repo, settings, monkeypatch)
+
+    orchestrator.run(is_paper=False)
+
+    assert repo.state is None or repo.state.is_trading_halted is False
+
+
+def test_the_setting_makes_stopping_pause_entries(monkeypatch: pytest.MonkeyPatch) -> None:
+    repo = InMemoryStateRepo()
+    settings = Settings(
+        _env_file=None, alpaca_api_key="k", alpaca_secret_key="s", pause_on_shutdown=True
+    )
+    orchestrator = _orchestrator_with(_RunnerThatReceivesASignal, repo, settings, monkeypatch)
+
+    orchestrator.run(is_paper=False)
+
     assert repo.state is not None and repo.state.is_trading_halted is True
     assert repo.state.halt_reason == "Manual CLI pause"
 
 
-def test_a_keyboard_interrupt_also_ends_in_a_pause(
+def test_the_option_makes_one_run_pause_entries_when_the_setting_is_off(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo = InMemoryStateRepo()
+    orchestrator = _orchestrator_with(_RunnerThatReceivesASignal, repo, settings, monkeypatch)
+
+    orchestrator.run(is_paper=False, pause_on_shutdown=True)
+
+    assert repo.state is not None and repo.state.is_trading_halted is True
+
+
+def test_a_keyboard_interrupt_ends_the_run_like_a_signal(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Interrupted:
@@ -176,10 +217,10 @@ def test_a_keyboard_interrupt_also_ends_in_a_pause(
             raise KeyboardInterrupt
 
     repo = InMemoryStateRepo()
-    orchestrator = Orchestrator(settings, state_repo=repo)
-    monkeypatch.setattr(orchestrator, "build_cycle", lambda _is_paper: SimpleNamespace(broker=None))
-    monkeypatch.setattr("trading_system.runtime.orchestrator.Runner", Interrupted)
+    orchestrator = _orchestrator_with(Interrupted, repo, settings, monkeypatch)
 
-    orchestrator.run(is_paper=False, handle_signals=False)
+    orchestrator.run(is_paper=False, handle_signals=False)  # returns instead of raising
+    assert repo.state is None or repo.state.is_trading_halted is False
 
+    orchestrator.run(is_paper=False, handle_signals=False, pause_on_shutdown=True)
     assert repo.state is not None and repo.state.is_trading_halted is True
