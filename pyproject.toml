@@ -1,7 +1,7 @@
 [tool.poetry]
 name = "alpaca-roundtable-trader"
 version = "0.1.0"
-description = "Automated trading system for US stocks using Alpaca, with an optional AnythingLLM Oracle."
+description = "Automated trading system for US stocks using Alpaca, with an optional Oracle second opinion."
 authors = ["AI <ai@example.com>"]
 readme = "README.md"
 packages = [{include = "trading_system", from = "src"}]

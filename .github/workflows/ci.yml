@@ -91,13 +91,6 @@ jobs:
             exit 1
           fi
 
-          bad_llm=$(grep -rnIE "ANYTHINGLLM_API_KEY\s*=\s*['\"][A-Za-z0-9]{10,}['\"]" src/ tests/ | grep -v -i "dummy" | grep -v -i "secret" | grep -v -i "test" | grep -v -i "mock" | grep -v "test_key" | grep -v "test_secret" || true)
-          if [ -n "$bad_llm" ]; then
-            echo "AnythingLLM secrets found in codebase!"
-            echo "$bad_llm"
-            exit 1
-          fi
-
       - name: Dependency Vulnerability Check
         run: |
           poetry run pip install safety

@@ -44,7 +44,7 @@ repos:
       # Cheap content check for broker credentials. This is a safety net, not a
       # replacement for GitHub secret scanning (enable it in the repo settings).
       - id: no-broker-credentials
-        name: block Alpaca key ids and AnythingLLM-style keys
+        name: block Alpaca key ids and dashed API-key patterns
         language: pygrep
         entry: \b(PK|AK|CK)[A-Z0-9]{18}\b|\b[A-Z0-9]{7}(-[A-Z0-9]{7}){3}\b
         types: [text]

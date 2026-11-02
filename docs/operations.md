@@ -32,7 +32,7 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 
 ### Incident Procedures
 - **Reconciliation**: If the system crashes mid-submission or enters an unknown state, it halts entries. The `reconcile_order` function attempts to recover status on restart.
-- **Unprotected Positions**: The emergency monitor (`emergency_check_unprotected_positions`) liquidates any open positions lacking a covering Stop/TakeProfit order.
+- **Unprotected Positions**: The check `emergency_check_unprotected_positions` runs on every tick of the runner, also while entries are halted or the market is closed. A position without a covering stop halts new entries and raises an alarm; it is not sold. Closing it at market happens only with `EMERGENCY_CLOSE_UNPROTECTED=true` (default `false`). Undo the halt with `resume-entries` after checking the account.
 
 ## Database Backup and Restore (SQLite)
 
@@ -56,11 +56,9 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 
 ## Docker & Connectivity
 
-- **Chroma & AnythingLLM Networking**: The local Chroma database MUST run on the host system outside of Docker.
-  - **Access Mode**: Chroma must be accessed via `PersistentClient` locally or via a strictly local HTTP server on the host, preventing external exposure unless explicitly required by deployment.
-  - On macOS/Linux: Usually `~/opper-data/chroma`.
-  - On Windows: Usually `C:\opper-data\chroma`.
-  Inside Docker (`compose.yaml`), the container resolves host endpoints using OS-specific gateways (e.g., `host.docker.internal` for Mac/Win or `172.17.0.1` for Linux). Do NOT use `127.0.0.1` inside Docker for AnythingLLM/Chroma URLs.
+- **News store (Chroma)**: a local directory (`CHROMA_DB_PATH`, default `./var/chroma_db`) opened in-process with `PersistentClient`. There is no Chroma server to run or to reach over the network. With `compose.yaml` the repository is mounted at `/app`, so the store ends up in the repository's `var/` (git-ignored) on the host.
+- **Database**: the trading state is the project's own SQLite file. The Go backend's containers and their SQL database are separate and are not used by this project.
+- **Host services from a container**: when a real Oracle provider is added (Phase 2.2), a container reaches a service on the host through the OS-specific gateway (`host.docker.internal` on Mac/Win, `172.17.0.1` on Linux), never through `127.0.0.1`.
 
 ## Docker image
 

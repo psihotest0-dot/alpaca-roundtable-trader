@@ -1,9 +1,11 @@
 # RSS Pipeline Plan
 
+*Status: the pipeline itself (collector, chunker, embeddings, Chroma adapter, search service, background worker) is built; the CLI commands in the list below and the Oracle integration are not. Giving the Oracle a short summary of a matching item is Phase 5.*
+
 ## Existing Components
 - Configuration: `pydantic-settings` via `src/trading_system/config.py`
 - Network Client: `httpx` (async support available)
-- Bot Engine / LLM: AnythingLLM Oracle Adapter (`src/trading_system/oracle/anythingllm.py`)
+- Bot Engine / LLM: the `OracleProvider` interface (`src/trading_system/oracle/contract.py`); the request it receives is built in `src/trading_system/oracle/inputs.py`
 - Lifecycle / Scheduler: Orchestrator loop (`src/trading_system/runtime/orchestrator.py`)
 - Logging: Standard Python `logging`
 - Testing: `pytest` and `pytest-mock` / `respx`
@@ -30,7 +32,7 @@
 - `pyproject.toml` (add `feedparser`, `beautifulsoup4`, `chromadb`)
 - `src/trading_system/config.py` (add RSS pipeline configuration)
 - `src/trading_system/cli.py` (add commands for single-run ingestion and testing)
-- `src/trading_system/oracle/anythingllm.py` (inject retrieved news context into the prompt)
+- `src/trading_system/oracle/inputs.py` (put a short summary of the matched news into `OracleRequest.context`; Phase 5, with prompt-injection handling)
 - `src/trading_system/runtime/orchestrator.py` (add periodic or background execution hook)
 - `.env.example` (add configuration defaults)
 
@@ -46,4 +48,4 @@ Default to `chromadb` default embedding function (all-MiniLM-L6-v2) for simplici
 - **Recovery & Safe Activation:** Write all chunks of a new version. The active status is maintained using a simple key-value state (or just checking if all chunks count is matched). If an ingestion fails mid-way, `upsert` will overwrite the chunks or we use the deterministic IDs to safely retry.
 
 ## Point of Integration
-The retrieval service will be injected into `AnythingLLMAdapter` or the Orchestrator. When `evaluate_signal` is called, the Orchestrator or Oracle will first query the search service with the trading symbol / timeframe, fetch the top `K` most relevant news chunks, and inject them into the LLM prompt context as external data.
+The retrieval service will be used where the Oracle's request is built (`oracle/inputs.py`). When a signal is judged, the search service is queried with the trading symbol; if an item matches, a short, length-limited summary of it (no URLs or commands, marked as data) is added to the request next to the numbers from Alpaca, and the model answers `APPROVE` / `VETO` / `HOLD`. If nothing matches, the request goes out without news. This is the owner's design (2026-11-02).

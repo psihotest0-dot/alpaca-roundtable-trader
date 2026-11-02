@@ -7,4 +7,4 @@ services:
       - .:/app
     environment:
       - DATABASE_URL=sqlite:///local.db
-    # Chroma service is intentionally excluded as it runs as a host process
+    # No Chroma service: the news store is a local directory (CHROMA_DB_PATH), opened in-process.

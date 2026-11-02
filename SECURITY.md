@@ -15,8 +15,8 @@ could be exploited, and never paste API keys or logs containing them.
 - Real credentials live only in `.env`, which is git-ignored. Only
   `.env.example` (placeholders) is tracked.
 - Install the local guard rails once per machine: `pip install pre-commit`, then
-  `pre-commit install`. They block env files, databases, logs, keys and Alpaca
-  or AnythingLLM-style key patterns. CI runs the same checks on every push and
+  `pre-commit install`. They block env files, databases, logs, keys, Alpaca key
+  ids and long dashed API-key patterns. CI runs the same checks on every push and
   pull request, so `--no-verify` does not bypass them.
 - Runtime state (database, logs, vector store) lives in `var/`, which is ignored.
 

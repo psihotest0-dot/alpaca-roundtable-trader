@@ -1,9 +1,9 @@
 # Decisions
 
 - **Dependency Manager**: We chose `poetry` to ensure reproducible builds across local, CI, and Docker environments via `poetry.lock`.
-- **Database**: SQLite is used for the MVP to minimize setup friction and keep local persistence simple.
+- **Database**: SQLite is used for the MVP to minimize setup friction and keep local persistence simple. This project keeps its state only in its own file (`var/trading.db`); the SQL database in the Go backend's Docker containers belongs to that backend and is not used here (owner, 2026-11-02).
 - **Scope**: The MVP strictly implements paper trading. Live trading features have been explicitly excluded.
-- **Chroma**: Chroma must run on the host machine to maintain persistent data (`~/opper-data/chroma`) outside the Git repo and Docker lifecycle. *Superseded: AnythingLLM is being removed (see below), and the news pipeline uses its own local store; revisit in Phase 5.*
+- **Chroma**: the news store is a local Chroma `PersistentClient` directory (`CHROMA_DB_PATH`, default `./var/chroma_db`), opened in-process; there is no Chroma server. *This replaces the earlier decision to run Chroma as a host process behind AnythingLLM, which went away with AnythingLLM. Revisit in Phase 5.*
 
 ## Decisions of 2026-11-01
 
@@ -11,7 +11,7 @@ Owner decisions and the engineering decisions that follow from the analysis (`an
 
 **Product**
 - **Oracle answers yes / no / hold** (`APPROVE` / `VETO` / `HOLD`) and nothing else: it never proposes orders, sizes or prices. `HOLD` means "not now, ask again next cycle while the signal is valid"; `VETO` is final for that signal. Risk keeps the last word.
-- **AnythingLLM is replaced.** The model will be served by a Lemonade server behind the owner's chat-only Go backend, with a Flet UI. **All trading logic stays in this Python project**; there is no plan to port it to Go. Provider details are still open.
+- **AnythingLLM is gone.** Its code and settings were removed in Phase 2 and its documents in 2.4. The Oracle is an interface (`OracleProvider`, answers `APPROVE` / `VETO` / `HOLD`); `NullOracle` is the only provider so far. The real model will be served by a Lemonade server behind the owner's chat-only Go backend, with a Flet UI. **All trading logic stays in this Python project**; there is no plan to port it to Go. Provider details are still open.
 - **Live trading is a future goal.** Today the system is paper-only (enforced in `Settings` and `AlpacaBroker`); Risk, Execution and reconciliation are built as if real money were at stake.
 - **News come after the core is stable**, starting with the Alpaca News API (symbol-tagged) rather than RSS keyword matching.
 
@@ -25,3 +25,11 @@ Owner decisions and the engineering decisions that follow from the analysis (`an
 - **Market data:** one bulk request for all symbols per timeframe, prices adjusted for splits and dividends, one canonical bar shape (`data/bars.py`). Known gap: IEX bars include extended hours (Phase 4 adds a regular-session filter).
 - **Retries only for transient failures** (network, timeouts, HTTP 408/429/5xx). Bugs and 4xx fail at once.
 - **Dependabot updates are merged together, after checking the combination**; `poetry.lock` conflicts are resolved with `poetry update <pkg> --lock`, never by hand.
+
+## Decisions of 2026-11-02
+
+- **Entry limit buffer stays 0.1 %.** The strategies will be thought through later.
+- **Stopping the system does not pause entries.** A restart carries on by itself. `PAUSE_ON_SHUTDOWN=true` or `run --pause-on-exit` make the next start wait for `resume-entries`.
+- **An unprotected position halts and raises an alarm; it is not closed automatically.** Closing at market needs `EMERGENCY_CLOSE_UNPROTECTED=true` (default `false`). Bracket orders are `GTC`, because the legs inherit the entry's time in force and a `DAY` bracket loses its stop at the close.
+- **The model connection (Phase 2.2) is postponed to the end.** The owner will show the Go backend and the Flet app first. Until then the Oracle is `NullOracle`.
+- **Owner's idea for the Oracle input:** the data from Alpaca plus, when an RSS item matches the symbol, a short summary of it; the model then answers `APPROVE` / `VETO` / `HOLD`. News text is the first outside text in a request, so Phase 5 needs prompt-injection handling for it (a length-limited summary, no URLs or commands, framed as data, not instructions).

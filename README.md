@@ -1,10 +1,10 @@
 # Alpaca Roundtable Trader
 
-Automated trading system for US stocks using Alpaca for market data and paper trading. This project utilizes a 15-minute technical strategy with a 1-hour confirmation and an optional AnythingLLM Oracle.
+Automated trading system for US stocks using Alpaca for market data and paper trading. This project utilizes a 15-minute technical strategy with a 1-hour confirmation and an optional Oracle: a yes / no / hold second opinion on each signal.
 
 ## Status
 
-Under active development and **paper-only**. The data path, persistence, the order model and the daily loss baseline work and are covered by tests; the risk-to-execution hand-off (so that an approved entry becomes an order) is the next task, so the system does not place orders yet. Where things stand and what comes next: [`docs/action-plan.md`](docs/action-plan.md). Why: [`docs/analysis-and-update-plan.md`](docs/analysis-and-update-plan.md). Decisions: [`docs/decisions.md`](docs/decisions.md).
+Under active development and **paper-only**. The trading loop runs against Alpaca's paper account: data, strategy, the optional Oracle, risk, bracket orders with a protection check, reconciliation and a daily loss guard, all covered by tests. A full session on live data that produced a signal has not been observed yet. The Oracle is an interface (`APPROVE` / `VETO` / `HOLD`); no real model is connected, and `ORACLE_PROVIDER=null` lets every signal through. Where things stand and what comes next: [`docs/action-plan.md`](docs/action-plan.md). Why: [`docs/analysis-and-update-plan.md`](docs/analysis-and-update-plan.md). Decisions: [`docs/decisions.md`](docs/decisions.md).
 
 ## Installation (Clean Install)
 
