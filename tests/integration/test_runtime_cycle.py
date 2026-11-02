@@ -11,9 +11,12 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
 from trading_system.domain.enums import OrderStatus, OrderType
 from trading_system.domain.models import TradingState
 from trading_system.risk.daily_equity import trading_day
+from trading_system.risk.entry_plan import build_entry_plan
 from trading_system.storage.models import BrokerOrderModel
 from trading_system.storage.repositories import StateRepository
 
@@ -103,6 +106,59 @@ def test_the_baseline_is_recorded_even_when_trading_is_halted(
     state = state_repo.get_state()
     assert state.is_trading_halted is True  # and the halt survived the update
     assert state.daily_start_equity == Decimal("100000")
+
+
+def test_the_entry_is_planned_around_the_live_price_not_the_bar_close(
+    run_cycle: RunCycle, settings: Any
+) -> None:
+    """1.3a. The strategy sees the close of a bar that ended up to 15 minutes ago; the
+    limit, stop and target are measured from the last trade instead. One request, for the
+    one symbol with a signal."""
+    cycle = run_cycle(live_price_factor=1.02)
+
+    assert cycle.risk_prices == [cycle.live_price]
+    assert cycle.live_price != cycle.bar_close
+    (decision,) = cycle.decisions
+    assert decision.approved, decision.reasoning
+    plan = build_entry_plan(
+        cycle.live_price,
+        limit_buffer_pct=Decimal(str(settings.entry_limit_buffer_pct)),
+        stop_loss_pct=Decimal(str(settings.stop_loss_pct)),
+        take_profit_pct=Decimal(str(settings.take_profit_pct)),
+    )
+    assert decision.suggested_limit_price == plan.limit_price
+    assert [r.symbol_or_symbols for r in cycle.client.trade_requests] == [["AAPL"]]
+
+
+@pytest.mark.parametrize(
+    "problem, expected_log",
+    [
+        ({"live_age_seconds": 600}, "last trade is 600s old"),
+        ({"live_price_factor": 1.10}, "from the last bar close"),
+        ({"live_price_missing": True}, "no trade price was returned"),
+        ({"live_error": ConnectionError("boom")}, "no trade price was returned"),
+    ],
+    ids=["stale", "outlier", "no-trade", "request-fails"],
+)
+def test_no_entry_without_a_trustworthy_live_price(
+    run_cycle: RunCycle,
+    session_factory: Any,
+    caplog: pytest.LogCaptureFixture,
+    problem: dict[str, Any],
+    expected_log: str,
+) -> None:
+    """Fail closed: a stale or odd price would put the whole bracket in the wrong place."""
+    with caplog.at_level("WARNING"):
+        cycle = run_cycle(**problem)
+
+    assert cycle.risk_prices == []  # the signal never reached the risk engine
+    assert cycle.broker.submitted == []
+    with session_factory() as fresh:
+        assert fresh.query(BrokerOrderModel).count() == 0
+    assert any(
+        "No entry for AAPL" in r.getMessage() and expected_log in r.getMessage()
+        for r in caplog.records
+    )
 
 
 def test_dry_run_cycle_persists_a_simulated_order(

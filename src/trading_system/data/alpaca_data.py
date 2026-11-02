@@ -1,17 +1,19 @@
 import logging
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal
 from typing import Sequence
 
 import pandas as pd
 from alpaca.data.enums import Adjustment, DataFeed
 from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.requests import StockBarsRequest, StockLatestTradeRequest
 from alpaca.data.timeframe import TimeFrame, TimeFrameUnit
 from pydantic import SecretStr
 
 from trading_system.common.retry import retry_read_request
 from trading_system.config import Settings
 from trading_system.data.bars import normalize_bars
+from trading_system.data.live_price import LivePrice
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +87,21 @@ class AlpacaData:
                 raise ValueError(f"bars for {symbol} lack columns {missing}")
             result[str(symbol)] = normalize_bars(bars)
         return result
+
+    @retry_read_request()
+    def fetch_latest_prices(self, symbols: Sequence[str]) -> dict[str, LivePrice]:
+        """The last trade of every symbol in ONE request. Symbols that have not traded are
+        left out. The caller decides whether a price is fresh enough (data.live_price)."""
+        if not symbols:
+            return {}
+
+        request = StockLatestTradeRequest(symbol_or_symbols=list(symbols), feed=DataFeed(self.feed))
+        # get_stock_latest_trade returns {symbol: Trade} (a raw dict only if raw_data=True).
+        trades = self.client.get_stock_latest_trade(request)
+        return {
+            str(symbol): LivePrice(price=Decimal(str(trade.price)), timestamp=trade.timestamp)
+            for symbol, trade in trades.items()
+        }
 
     def fetch_bars(
         self, symbol: str, timeframe: TimeFrame, start: datetime, end: datetime

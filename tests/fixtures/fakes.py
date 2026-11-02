@@ -10,6 +10,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pandas as pd
+from alpaca.data.models import Trade
 
 from tests.fixtures.bars import alpaca_shaped
 
@@ -19,9 +20,27 @@ class FakeStockClient:
     `.df` has the real (symbol, timestamp) MultiIndex shape, and records every request so
     tests can assert on what was asked for."""
 
-    def __init__(self, frames_15m: dict[str, pd.DataFrame], frames_1h: dict[str, pd.DataFrame]):
+    def __init__(
+        self,
+        frames_15m: dict[str, pd.DataFrame],
+        frames_1h: dict[str, pd.DataFrame],
+        *,
+        live_prices: dict[str, float] | None = None,
+        live_age_seconds: float = 0.0,
+        live_error: Exception | None = None,
+    ):
         self._frames = {15: frames_15m, 60: frames_1h}
         self.requests: list[Any] = []
+        # Latest trades. Default: every symbol last traded, just now, at its last 15m close.
+        # `live_prices` replaces that table (a symbol left out has not traded).
+        self._live_prices = (
+            live_prices
+            if live_prices is not None
+            else {symbol: float(frame["close"].iloc[-1]) for symbol, frame in frames_15m.items()}
+        )
+        self._live_age = timedelta(seconds=live_age_seconds)
+        self._live_error = live_error
+        self.trade_requests: list[Any] = []
 
     def get_stock_bars(self, request: Any) -> SimpleNamespace:
         self.requests.append(request)
@@ -35,6 +54,30 @@ class FakeStockClient:
             if symbol in self._frames[minutes]
         ]
         return SimpleNamespace(df=pd.concat(shaped) if shaped else pd.DataFrame())
+
+    def get_stock_latest_trade(self, request: Any) -> dict[str, Trade]:
+        """{symbol: alpaca Trade}, the real model, as StockHistoricalDataClient returns it."""
+        self.trade_requests.append(request)
+        if self._live_error is not None:
+            raise self._live_error
+        symbols = request.symbol_or_symbols
+        symbols = [symbols] if isinstance(symbols, str) else list(symbols)
+        stamp = (datetime.now(timezone.utc) - self._live_age).isoformat().replace("+00:00", "Z")
+        return {
+            symbol: Trade(
+                symbol,
+                {
+                    "t": stamp,
+                    "x": "V",
+                    "p": self._live_prices[symbol],
+                    "s": 100,
+                    "i": 1,
+                    "c": ["@"],
+                },
+            )
+            for symbol in symbols
+            if symbol in self._live_prices
+        }
 
 
 class FakeBroker:

@@ -106,18 +106,37 @@ def run_cycle(
     original = RiskEngine.evaluate_signal
 
     def _run(
-        *, is_paper: bool = False, equity: str = "100000", last_equity: str | None = None
+        *,
+        is_paper: bool = False,
+        equity: str = "100000",
+        last_equity: str | None = None,
+        live_price_factor: float = 1.0,
+        live_age_seconds: float = 0.0,
+        live_error: Exception | None = None,
+        live_price_missing: bool = False,
     ) -> SimpleNamespace:
+        """`live_price_factor`: the last trade as a multiple of the last bar close (1.0 =
+        unchanged). The other live_* arguments make that trade old, missing or fail."""
         bars_15m, bars_1h = make_bars()
         broker = FakeBroker(equity=equity, last_equity=last_equity)
-        client = FakeStockClient({"AAPL": bars_15m}, {"AAPL": bars_1h})
+        bar_close = float(bars_15m["close"].iloc[-1])
+        live_price = round(bar_close * live_price_factor, 4)
+        client = FakeStockClient(
+            {"AAPL": bars_15m},
+            {"AAPL": bars_1h},
+            live_prices={} if live_price_missing else {"AAPL": live_price},
+            live_age_seconds=live_age_seconds,
+            live_error=live_error,
+        )
         data = AlpacaData(settings)
         data.client = client
         decisions: list[Any] = []
+        risk_prices: list[Decimal] = []  # the price each signal was evaluated at
 
         def spy(self: RiskEngine, *args: Any, **kwargs: Any) -> Any:
             result = original(self, *args, **kwargs)
             decisions.append(result[0])
+            risk_prices.append(kwargs["current_price"])
             return result
 
         def stop(_seconds: float) -> None:
@@ -133,7 +152,13 @@ def run_cycle(
         except StopLoop:
             pass
         return SimpleNamespace(
-            orchestrator=orchestrator, broker=broker, client=client, decisions=decisions
+            orchestrator=orchestrator,
+            broker=broker,
+            client=client,
+            decisions=decisions,
+            risk_prices=risk_prices,
+            bar_close=Decimal(str(bar_close)),
+            live_price=Decimal(str(live_price)),
         )
 
     return _run

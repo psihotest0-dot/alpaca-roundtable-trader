@@ -41,6 +41,7 @@ class Orchestrator:
 
         from trading_system.broker.alpaca_broker import AlpacaBroker
         from trading_system.data.alpaca_data import AlpacaData
+        from trading_system.data.live_price import UnusableLivePrice, check_live_price
         from trading_system.strategy.config import StrategyConfig
         from trading_system.strategy.trend import generate_signals, filter_signals
         from trading_system.oracle.anythingllm import AnythingLLMAdapter
@@ -259,7 +260,31 @@ class Orchestrator:
                                 )
                             )
 
-                        current_price = Decimal(str(df_15m_all[signal.symbol].iloc[-1]["close"]))
+                        # The entry is planned around the last trade. The bar close is up to
+                        # 15 minutes old and only serves as the yardstick for a bad print.
+                        bar_close = Decimal(str(df_15m_all[signal.symbol].iloc[-1]["close"]))
+                        try:
+                            live = data.fetch_latest_prices([signal.symbol]).get(signal.symbol)
+                        except Exception as e:
+                            logger.error(f"Could not fetch a live price for {signal.symbol}: {e}")
+                            live = None
+                        try:
+                            current_price = check_live_price(
+                                live,
+                                reference_close=bar_close,
+                                now=datetime.now(timezone.utc),
+                                max_age_seconds=self.settings.live_price_max_age_seconds,
+                                max_deviation_pct=Decimal(
+                                    str(self.settings.live_price_max_deviation_pct)
+                                ),
+                            )
+                        except UnusableLivePrice as e:
+                            logger.warning(f"No entry for {signal.symbol}: {e}")
+                            continue
+                        logger.info(
+                            f"Live price for {signal.symbol}: {current_price} "
+                            f"(last bar close {bar_close})"
+                        )
 
                         risk_decision, intent = risk_engine.evaluate_signal(
                             signal=signal,

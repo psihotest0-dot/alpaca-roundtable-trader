@@ -53,6 +53,12 @@ class Settings(BaseSettings):
     take_profit_pct: float = Field(0.05, ge=0.0, le=1.0)
     # How far above the last price the entry limit sits (see risk/entry_plan.py).
     entry_limit_buffer_pct: float = Field(0.001, ge=0.0, le=0.05)
+    # An entry is planned around the last trade (data/live_price.py): no entry if that trade is
+    # older than this, or further from the last closed bar than this. Measured on the IEX feed
+    # (2026-11-02, mid-session): most watchlist symbols trade every few seconds, the quietest
+    # ones (MARA, OPEN) go 1 to 2 minutes between prints.
+    live_price_max_age_seconds: int = Field(120, gt=0)
+    live_price_max_deviation_pct: float = Field(0.05, ge=0.0, le=1.0)
     allow_fractional: bool = False
 
     watchlist: str = (
@@ -78,6 +84,7 @@ class Settings(BaseSettings):
         "stop_loss_pct",
         "take_profit_pct",
         "entry_limit_buffer_pct",
+        "live_price_max_deviation_pct",
     )
     @classmethod
     def check_finite_pct(cls, v: float) -> float:
