@@ -26,7 +26,7 @@ from trading_system.domain.models import (
     StrategySignal,
     TradingState,
 )
-from trading_system.oracle.contract import OracleRequest
+from trading_system.oracle.inputs import build_oracle_request
 from trading_system.risk.daily_equity import with_daily_start_equity
 from trading_system.runtime.reconciliation import reconcile_orders, record_fills
 from trading_system.strategy.config import StrategyConfig
@@ -60,7 +60,9 @@ class Outcome(Enum):
 @dataclass
 class HeldSignal:
     signal: StrategySignal
-    bars: dict[str, pd.DataFrame]  # what the signal was generated from, for asking again
+    # What the signal was generated from, for asking again.
+    bars_15m: dict[str, pd.DataFrame]
+    bars_1h: dict[str, pd.DataFrame]
     asked: int = 1
 
 
@@ -180,7 +182,7 @@ class TradingCycle:
         report = EntriesReport(signals=len(signals))
         for signal in signals:
             try:
-                outcome = self._enter(signal, state, bars_15m, now)
+                outcome = self._enter(signal, state, bars_15m, bars_1h, now)
             except Exception as e:
                 logger.error(f"Error in risk evaluation / execution for {signal.symbol}: {e}")
                 continue
@@ -188,7 +190,7 @@ class TradingCycle:
                 report.submitted += 1
             elif outcome is Outcome.HELD:
                 report.held += 1
-                self._held[signal.signal_id or ""] = HeldSignal(signal, bars_15m)
+                self._held[signal.signal_id or ""] = HeldSignal(signal, bars_15m, bars_1h)
         return report
 
     def revisit_held(self, now: datetime) -> int:
@@ -211,7 +213,7 @@ class TradingCycle:
                 continue
             held.asked += 1
             try:
-                outcome = self._enter(signal, state, held.bars, now)
+                outcome = self._enter(signal, state, held.bars_15m, held.bars_1h, now)
             except Exception as e:
                 logger.error(f"Error re-examining held signal {signal.symbol}: {e}")
                 continue
@@ -226,21 +228,16 @@ class TradingCycle:
         signal: StrategySignal,
         state: TradingState,
         bars_15m: dict[str, pd.DataFrame],
+        bars_1h: dict[str, pd.DataFrame],
         now: datetime,
     ) -> Outcome:
-        """One signal through Oracle, live price, risk and execution."""
+        """One signal through live price, Oracle, risk and execution. The cheap check comes
+        first: no Oracle call is spent on a signal that cannot be traded at a usable price."""
         logger.info(f"Processing signal: {signal.symbol} {signal.direction.value}")
         try:
             self.signal_repo.save_signal(signal)
         except Exception as e:
             logger.error(f"Failed to save signal: {e}")
-
-        if self.oracle:
-            verdict = self._ask_oracle(signal, bars_15m).verdict
-            if verdict is OracleVerdict.VETO:
-                return Outcome.DROPPED
-            if verdict is OracleVerdict.HOLD:
-                return Outcome.HELD
 
         # The entry is planned around the last trade. The bar close is up to 15 minutes old
         # and only serves as the yardstick for a bad print.
@@ -259,9 +256,18 @@ class TradingCycle:
                 max_deviation_pct=Decimal(str(self.settings.live_price_max_deviation_pct)),
             )
         except UnusableLivePrice as e:
-            logger.warning(f"No entry for {signal.symbol}: {e}")
-            return Outcome.DROPPED
+            # Not final: a quiet symbol prints again in a minute. The signal is tried on the
+            # next tick and lapses with its own expiry if the price never becomes usable.
+            logger.warning(f"No entry for {signal.symbol} yet: {e}")
+            return Outcome.HELD
         logger.info(f"Live price for {signal.symbol}: {price} (last bar close {bar_close})")
+
+        if self.oracle:
+            verdict = self._ask_oracle(signal, state, bars_15m, bars_1h, price, now).verdict
+            if verdict is OracleVerdict.VETO:
+                return Outcome.DROPPED
+            if verdict is OracleVerdict.HOLD:
+                return Outcome.HELD
 
         logger.info("Evaluating risk...")
         account, positions, active_orders = self._snapshot(now)
@@ -283,22 +289,39 @@ class TradingCycle:
         )
 
     def _ask_oracle(
-        self, signal: StrategySignal, bars_15m: dict[str, pd.DataFrame]
+        self,
+        signal: StrategySignal,
+        state: TradingState,
+        bars_15m: dict[str, pd.DataFrame],
+        bars_1h: dict[str, pd.DataFrame],
+        price: Decimal,
+        now: datetime,
     ) -> OracleDecision:
         """The Oracle's verdict on a signal. A provider is meant never to raise; if one does,
         that is a HOLD marked as a failure, not a veto: an Oracle that could not answer has
         said nothing about the signal."""
         logger.info("Querying Oracle...")
-        technicals: dict[str, Any] = {}
-        if signal.symbol in bars_15m:
-            last_bar = bars_15m[signal.symbol].iloc[-1]
-            for column in last_bar.index:
-                value = last_bar[column]
-                technicals[str(column)] = (
-                    float(value) if isinstance(value, (int, float)) else str(value)
-                )
-        request = OracleRequest(
-            signal=signal, technicals=technicals, rationale="Trend strategy signal generated."
+        account, positions, _ = self._snapshot(now)
+        daily_pnl_pct = None
+        if state.daily_start_equity:
+            daily_pnl_pct = round(
+                float((account.equity - state.daily_start_equity) / state.daily_start_equity * 100),
+                3,
+            )
+        request = build_oracle_request(
+            signal,
+            bars_15m[signal.symbol],
+            bars_1h[signal.symbol],
+            self.strategy_config,
+            live_price=price,
+            context={
+                "equity": float(account.equity),
+                "daily_pnl_pct": daily_pnl_pct,
+                "open_positions": len(positions),
+                "max_open_positions": self.settings.max_open_positions,
+                "stop_loss_pct": self.settings.stop_loss_pct * 100,
+                "take_profit_pct": self.settings.take_profit_pct * 100,
+            },
         )
         try:
             decision: OracleDecision = self.oracle.evaluate(request)

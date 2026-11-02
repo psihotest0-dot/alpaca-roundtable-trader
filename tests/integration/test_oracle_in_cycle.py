@@ -127,3 +127,33 @@ def test_nothing_is_asked_while_trading_is_halted(
 
     assert ordered == 0 and len(oracle.requests) == 1  # it stays held, unasked
     assert len(cycle.cycle._held) == 1
+
+
+def test_the_oracle_is_given_the_facts_to_judge_by(run_cycle: RunCycle) -> None:
+    oracle = ScriptedOracle(APPROVE)
+
+    cycle = run_cycle(oracle=oracle, live_price_factor=1.01)
+
+    (request,) = oracle.requests
+    assert request.live_price == cycle.live_price  # the price of right now, not of the bar
+    assert {"close", "ema_fast", "ema_slow", "rsi", "atr", "hourly_trend_up"} <= set(
+        request.technicals
+    )
+    assert len(request.recent_bars) == 12 and request.volume_ratio is not None
+    assert request.context["open_positions"] == 0
+    assert request.context["max_open_positions"] == 5
+    assert request.context["stop_loss_pct"] == pytest.approx(4.0)
+    assert request.context["daily_pnl_pct"] == 0.0
+
+
+def test_a_signal_without_a_usable_price_is_not_put_to_the_oracle(
+    run_cycle: RunCycle, session_factory: Any
+) -> None:
+    """The cheap check comes first. And an unusable price is not the end of the signal: a quiet
+    symbol prints again, so the signal waits for the next tick."""
+    oracle = ScriptedOracle()
+
+    cycle = run_cycle(oracle=oracle, live_age_seconds=600)
+
+    assert oracle.requests == [] and _orders(session_factory) == 0
+    assert (cycle.report.submitted, cycle.report.held) == (0, 1)
