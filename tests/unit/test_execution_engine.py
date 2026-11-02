@@ -1,12 +1,17 @@
 import pytest
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 from decimal import Decimal
 import datetime
 
 from alpaca.trading.models import Order, Asset
-from alpaca.trading.enums import OrderStatus as AlpacaOrderStatus
+from alpaca.trading.enums import (
+    OrderSide as AlpacaOrderSide,
+    OrderStatus as AlpacaOrderStatus,
+    OrderType as AlpacaOrderType,
+)
 
-from trading_system.execution.engine import ExecutionEngine
+from trading_system.execution.engine import ExecutionEngine, find_unprotected_positions
 from trading_system.broker.alpaca_broker import AlpacaBroker
 from trading_system.storage.repositories import OrderRepository, StateRepository
 from trading_system.domain.models import OrderIntent, TradingState
@@ -340,3 +345,155 @@ def test_dry_run_prevents_mutations(
 
     engine.emergency_check_unprotected_positions()
     mock_broker.submit_order.assert_not_called()
+
+
+# --- C7: the unprotected-position check -------------------------------------------------
+
+
+def _order(symbol, side, order_type, status, qty, *, id=None, legs=None):
+    """An order as the check reads it, with the real alpaca enums."""
+    return SimpleNamespace(
+        id=id or f"{symbol}-{side.value}-{order_type.value}-{status.value}-{qty}",
+        symbol=symbol,
+        side=side,
+        order_type=order_type,
+        status=status,
+        qty=str(qty),
+        legs=legs,
+    )
+
+
+def _stop(symbol, qty, *, side=AlpacaOrderSide.SELL, status=AlpacaOrderStatus.NEW, **kwargs):
+    return _order(symbol, side, AlpacaOrderType.STOP, status, qty, **kwargs)
+
+
+def _position(symbol, qty):
+    return SimpleNamespace(symbol=symbol, qty=str(qty))
+
+
+def test_a_long_position_with_an_active_sell_stop_is_protected():
+    assert find_unprotected_positions([_position("AAPL", 10)], [_stop("AAPL", 10)]) == []
+
+
+def test_a_position_with_no_orders_at_all_is_unprotected():
+    (gap,) = find_unprotected_positions([_position("AAPL", "91.842")], [])
+
+    assert (gap.symbol, gap.quantity, gap.covered) == ("AAPL", Decimal("91.842"), Decimal(0))
+
+
+def test_a_stop_that_covers_only_part_of_the_position_leaves_a_gap():
+    (gap,) = find_unprotected_positions([_position("AAPL", 10)], [_stop("AAPL", 4)])
+
+    assert gap.covered == Decimal(4)
+
+
+def test_stops_of_another_symbol_or_the_wrong_side_do_not_protect():
+    orders = [_stop("MSFT", 10), _stop("AAPL", 10, side=AlpacaOrderSide.BUY)]
+
+    assert [g.symbol for g in find_unprotected_positions([_position("AAPL", 10)], orders)] == [
+        "AAPL"
+    ]
+
+
+def test_a_take_profit_limit_is_not_a_stop():
+    limit = _order("AAPL", AlpacaOrderSide.SELL, AlpacaOrderType.LIMIT, AlpacaOrderStatus.NEW, 10)
+
+    assert find_unprotected_positions([_position("AAPL", 10)], [limit])
+
+
+def test_a_held_stop_protects_nothing_yet():
+    """The legs of a bracket stay held until the entry is completely filled."""
+    held = _stop("AAPL", 10, status=AlpacaOrderStatus.HELD)
+
+    assert find_unprotected_positions([_position("AAPL", 10)], [held])
+
+
+def test_a_stop_leg_nested_under_its_parent_is_found():
+    """get_open_orders asks for nested=True, so the stop of a bracket is not a top-level order."""
+    parent = _order(
+        "AAPL",
+        AlpacaOrderSide.BUY,
+        AlpacaOrderType.LIMIT,
+        AlpacaOrderStatus.PARTIALLY_FILLED,
+        10,
+        legs=[_stop("AAPL", 10)],
+    )
+
+    assert find_unprotected_positions([_position("AAPL", 10)], [parent]) == []
+
+
+def test_a_leg_listed_both_nested_and_on_its_own_is_counted_once():
+    leg = _stop("AAPL", 10, id="same-leg")
+    parent = _order(
+        "AAPL", AlpacaOrderSide.BUY, AlpacaOrderType.LIMIT, AlpacaOrderStatus.NEW, 10, legs=[leg]
+    )
+
+    (gap,) = find_unprotected_positions([_position("AAPL", 20)], [parent, leg])
+
+    assert gap.covered == Decimal(10)
+
+
+def test_a_short_position_is_protected_by_a_buy_stop_and_unprotected_by_a_sell_stop():
+    short = _position("COIN", -88)
+
+    assert find_unprotected_positions([short], [_stop("COIN", 88, side=AlpacaOrderSide.BUY)]) == []
+    (gap,) = find_unprotected_positions([short], [_stop("COIN", 88)])
+    assert gap.quantity == Decimal(-88)
+
+
+def _account_with_unprotected_positions(mock_broker):
+    mock_broker.get_positions.return_value = [_position("AAPL", "91.842"), _position("COIN", -88)]
+    mock_broker.get_open_orders.return_value = []
+
+
+def test_unprotected_positions_halt_trading_once_and_are_left_alone_by_default(
+    engine, mock_broker, mock_state_repo
+):
+    """The paper account holds positions from other tools. Raising the alarm is safe;
+    selling someone's positions on a guess is not."""
+    _account_with_unprotected_positions(mock_broker)
+
+    engine.emergency_check_unprotected_positions()
+
+    mock_state_repo.save_state.assert_called_once()
+    saved = mock_state_repo.save_state.call_args[0][0]
+    assert saved.is_trading_halted is True
+    assert "AAPL" in saved.halt_reason and "COIN" in saved.halt_reason
+    mock_broker.submit_order.assert_not_called()
+
+
+def test_emergency_close_is_sent_only_when_it_is_switched_on(
+    engine, mock_broker, settings, mock_state_repo
+):
+    _account_with_unprotected_positions(mock_broker)
+    settings.emergency_close_unprotected = True
+
+    engine.emergency_check_unprotected_positions()
+
+    sent = {r.symbol: r for r in (c.args[0] for c in mock_broker.submit_order.call_args_list)}
+    assert (sent["AAPL"].side, sent["AAPL"].qty) == (AlpacaOrderSide.SELL, 91.842)
+    assert (sent["COIN"].side, sent["COIN"].qty) == (AlpacaOrderSide.BUY, 88.0)  # covers the short
+
+
+def test_emergency_close_in_dry_run_sends_nothing(
+    mock_broker, mock_order_repo, mock_state_repo, settings
+):
+    settings.emergency_close_unprotected = True
+    engine = ExecutionEngine(
+        mock_broker, mock_order_repo, mock_state_repo, settings, is_dry_run=True
+    )
+    _account_with_unprotected_positions(mock_broker)
+
+    engine.emergency_check_unprotected_positions()
+
+    mock_state_repo.save_state.assert_called_once()  # still halts
+    mock_broker.submit_order.assert_not_called()
+
+
+def test_protected_positions_do_not_halt_anything(engine, mock_broker, mock_state_repo):
+    mock_broker.get_positions.return_value = [_position("AAPL", 10)]
+    mock_broker.get_open_orders.return_value = [_stop("AAPL", 10)]
+
+    engine.emergency_check_unprotected_positions()
+
+    mock_state_repo.save_state.assert_not_called()

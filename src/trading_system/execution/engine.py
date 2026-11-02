@@ -1,6 +1,8 @@
 import logging
 import threading
-from typing import Optional
+from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
+from typing import Any, Optional
 from decimal import Decimal
 import datetime
 import time
@@ -43,8 +45,6 @@ class ExecutionEngine:
         state.is_trading_halted = True
         state.halt_reason = reason
         self.state_repo.save_state(state)
-
-    from typing import Any
 
     def _validate_price_increment(self, price: Decimal, asset: Any) -> bool:
         # Validate price increments based on US Equity rules if not specified by asset
@@ -381,53 +381,117 @@ class ExecutionEngine:
             logger.error(f"Failed to check bounded entry expiry: {e}")
 
     def emergency_check_unprotected_positions(self) -> None:
-        # Paper emergency procedure: Check for open positions without active protective child orders
+        """Halts trading when a position has no active protective stop (C7).
+
+        Policy: an unprotected position raises a CRITICAL alarm and halts new entries. It is
+        closed at market only when EMERGENCY_CLOSE_UNPROTECTED is on; the default leaves the
+        position alone, because it may not be ours (the paper account is shared with other
+        tools) and a forced close is not something to do on a guess."""
         try:
             positions = self.broker.get_positions()
             open_orders = self.broker.get_open_orders()
 
-            # Check for STOP orders which act as stop loss
-            sell_orders = [
-                o
-                for o in open_orders
-                if o.side == "sell"
-                and o.order_type == "stop"
-                and o.status in ["new", "accepted", "partially_filled", "pending_new"]
-            ]
+            unprotected = find_unprotected_positions(positions, open_orders)
+            if not unprotected:
+                return
 
-            for pos in positions:
-                sym = pos.symbol
-                qty = Decimal(str(pos.qty))
+            for gap in unprotected:
+                logger.critical(
+                    f"UNPROTECTED POSITION DETECTED for {gap.symbol}: Position qty {gap.quantity}, "
+                    f"covered {gap.covered}"
+                )
+            symbols = ", ".join(gap.symbol for gap in unprotected)
+            self.halt_trading(f"Unprotected open position(s): {symbols}")
 
-                # Check if we have enough sell stop orders covering this position
-                covering_qty = sum(Decimal(str(o.qty)) for o in sell_orders if o.symbol == sym)
+            if not self.settings.emergency_close_unprotected:
+                logger.critical(
+                    "Not closing the positions above: EMERGENCY_CLOSE_UNPROTECTED is off. "
+                    "Trading stays halted until someone resumes it."
+                )
+                return
 
-                if covering_qty < qty:
-                    # Unprotected position detected!
-                    logger.critical(
-                        f"UNPROTECTED POSITION DETECTED for {sym}: Position qty {qty}, covered {covering_qty}"
-                    )
-                    self.halt_trading(f"Unprotected open position for {sym}")
-
-                    if self.is_dry_run:
-                        logger.critical(f"[DRY-RUN] Would submit emergency market close for {sym}")
-                        continue
-
-                    # Documented action: In paper trading, submit a market sell order to close it out immediately
-                    try:
-                        from alpaca.trading.requests import MarketOrderRequest
-                        from alpaca.trading.enums import OrderSide, TimeInForce
-
-                        req = MarketOrderRequest(
-                            symbol=sym,
-                            qty=float(qty - covering_qty),
-                            side=OrderSide.SELL,
-                            time_in_force=TimeInForce.DAY,
-                            client_order_id=f"emergency_close_{sym}_{int(time.time())}",
-                        )
-                        self.broker.submit_order(req)
-                        logger.critical(f"Submitted emergency market close for {sym}")
-                    except Exception as e:
-                        logger.critical(f"Failed to submit emergency close for {sym}: {e}")
+            for gap in unprotected:
+                self._emergency_close(gap)
         except Exception as e:
             logger.error(f"Failed during emergency check: {e}")
+
+    def _emergency_close(self, gap: "UnprotectedPosition") -> None:
+        """Market order for the part of a position that no stop covers: a sell for a long
+        position, a buy for a short one."""
+        if self.is_dry_run:
+            logger.critical(f"[DRY-RUN] Would submit emergency market close for {gap.symbol}")
+            return
+        try:
+            from alpaca.trading.requests import MarketOrderRequest
+
+            req = MarketOrderRequest(
+                symbol=gap.symbol,
+                qty=float(abs(gap.quantity) - gap.covered),
+                side=AlpacaOrderSide.SELL if gap.quantity > 0 else AlpacaOrderSide.BUY,
+                time_in_force=TimeInForce.DAY,
+                client_order_id=f"emergency_close_{gap.symbol}_{int(time.time())}",
+            )
+            self.broker.submit_order(req)
+            logger.critical(f"Submitted emergency market close for {gap.symbol}")
+        except Exception as e:
+            logger.critical(f"Failed to submit emergency close for {gap.symbol}: {e}")
+
+
+# Statuses of an order that is live at the exchange. `held` is deliberately absent: the legs of
+# a bracket wait in `held` and "won't be active until the first order is completely filled"
+# (Alpaca, Orders at Alpaca), so a held stop protects nothing yet.
+_ACTIVE_STATUSES = frozenset({"new", "accepted", "partially_filled", "pending_new"})
+
+
+@dataclass(frozen=True)
+class UnprotectedPosition:
+    symbol: str
+    quantity: Decimal  # signed: negative for a short position
+    covered: Decimal  # shares an active stop order protects
+
+
+def _text(value: Any) -> str:
+    """ "sell" for OrderSide.SELL as well as for "sell"."""
+    return str(getattr(value, "value", value)).lower()
+
+
+def _with_legs(orders: Iterable[Any]) -> Iterator[Any]:
+    """The orders and, below them, their child legs. Alpaca returns legs nested under the
+    parent when asked with nested=True, and as separate orders otherwise."""
+    for order in orders:
+        yield order
+        yield from _with_legs(getattr(order, "legs", None) or [])
+
+
+def find_unprotected_positions(
+    positions: Iterable[Any], open_orders: Iterable[Any]
+) -> list[UnprotectedPosition]:
+    """Positions whose size is not fully covered by active stop orders on the closing side:
+    sell stops for a long position, buy stops for a short one."""
+    seen: set[str] = set()
+    stops = []
+    for order in _with_legs(open_orders):
+        key = str(getattr(order, "id", id(order)))
+        if key in seen:
+            continue
+        seen.add(key)
+        if _text(order.order_type) == "stop" and _text(order.status) in _ACTIVE_STATUSES:
+            stops.append(order)
+
+    gaps = []
+    for pos in positions:
+        quantity = Decimal(str(pos.qty))
+        if quantity == 0:
+            continue
+        closing_side = "sell" if quantity > 0 else "buy"
+        covered = sum(
+            (
+                Decimal(str(o.qty))
+                for o in stops
+                if o.symbol == pos.symbol and _text(o.side) == closing_side
+            ),
+            Decimal(0),
+        )
+        if covered < abs(quantity):
+            gaps.append(UnprotectedPosition(str(pos.symbol), quantity, covered))
+    return gaps

@@ -60,6 +60,9 @@ class Settings(BaseSettings):
     live_price_max_age_seconds: int = Field(120, gt=0)
     live_price_max_deviation_pct: float = Field(0.05, ge=0.0, le=1.0)
     allow_fractional: bool = False
+    # A position without an active stop halts trading and raises an alarm. Closing it at market
+    # is a separate, explicit choice (see ExecutionEngine.emergency_check_unprotected_positions).
+    emergency_close_unprotected: bool = False
 
     watchlist: str = (
         "AAPL,MSFT,NVDA,AMD,GOOGL,TSLA,INTC,META,AMZN,SOFI,PLTR,"
