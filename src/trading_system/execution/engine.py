@@ -157,7 +157,11 @@ class ExecutionEngine:
                 symbol=intent.symbol,
                 qty=float(intent.quantity),
                 side=AlpacaOrderSide.BUY,
-                time_in_force=TimeInForce.DAY,
+                # GTC, not DAY: the stop and take-profit legs inherit the entry's time in force,
+                # so a DAY bracket loses its stop at the close and the position stays unprotected
+                # overnight (seen on a real paper order). A GTC entry that never fills is
+                # cancelled by check_bounded_entry_expiry.
+                time_in_force=TimeInForce.GTC,
                 limit_price=float(intent.limit_price),
                 order_class=OrderClass.BRACKET,
                 take_profit=TakeProfitRequest(limit_price=float(intent.take_profit_price)),

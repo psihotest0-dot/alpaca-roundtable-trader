@@ -7,6 +7,7 @@ import uuid
 
 from alpaca.trading.models import Order, Asset
 from alpaca.trading.enums import (
+    TimeInForce,
     OrderSide as AlpacaOrderSide,
     OrderStatus as AlpacaOrderStatus,
     OrderType as AlpacaOrderType,
@@ -212,6 +213,8 @@ def test_bracket_is_sent_with_the_prices_of_the_intent(
 
     (request,) = mock_broker.submit_order.call_args.args
     assert request.limit_price == 150.00
+    # The legs inherit the entry's time in force; DAY would let the stop expire at the close.
+    assert request.time_in_force == TimeInForce.GTC
     assert request.stop_loss.stop_price == 140.00
     assert request.take_profit.limit_price == 163.00
 
