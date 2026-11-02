@@ -90,8 +90,15 @@ class ExecutionEngine:
                 logger.error("Only limit entries are supported.")
                 return None
 
-            if intent.stop_price is None:
-                logger.error("Bracket orders require a stop price.")
+            if intent.stop_price is None or intent.take_profit_price is None:
+                logger.error("Bracket orders require a stop price and a take-profit price.")
+                return None
+
+            if not intent.stop_price < intent.limit_price < intent.take_profit_price:
+                logger.error(
+                    f"Bracket prices out of order: stop {intent.stop_price}, "
+                    f"limit {intent.limit_price}, take-profit {intent.take_profit_price}"
+                )
                 return None
 
             # Fetch asset info
@@ -109,18 +116,9 @@ class ExecutionEngine:
                 logger.error(f"Invalid stop price increment for {intent.stop_price}")
                 return None
 
-            # Calculate take profit price
-            take_profit_price = intent.limit_price * (
-                Decimal("1") + Decimal(str(self.settings.take_profit_pct))
-            )
-
-            if not self._validate_price_increment(take_profit_price, asset):
-                # Round to nearest valid increment
-                inc = asset.price_increment
-                if inc is None:
-                    inc = 0.01 if take_profit_price >= Decimal("1.00") else 0.0001
-                inc_dec = Decimal(str(inc))
-                take_profit_price = (take_profit_price // inc_dec) * inc_dec
+            if not self._validate_price_increment(intent.take_profit_price, asset):
+                logger.error(f"Invalid take-profit price increment for {intent.take_profit_price}")
+                return None
 
             if self.is_dry_run:
                 logger.info(f"[DRY-RUN] Would submit order {client_order_id} for {intent.symbol}")
@@ -162,7 +160,7 @@ class ExecutionEngine:
                 time_in_force=TimeInForce.DAY,
                 limit_price=float(intent.limit_price),
                 order_class=OrderClass.BRACKET,
-                take_profit=TakeProfitRequest(limit_price=float(take_profit_price)),
+                take_profit=TakeProfitRequest(limit_price=float(intent.take_profit_price)),
                 stop_loss=StopLossRequest(stop_price=float(intent.stop_price)),
                 client_order_id=client_order_id,
                 extended_hours=False,

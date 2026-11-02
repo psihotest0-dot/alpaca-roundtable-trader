@@ -32,6 +32,9 @@ def settings():
         max_total_planned_open_risk_pct=0.01,
         max_daily_loss_pct=0.02,
         stop_loss_pct=0.04,
+        # No buffer: the sizing tests below are worked out by hand from the price itself.
+        # The buffer has its own tests at the end.
+        entry_limit_buffer_pct=0.0,
     )
 
 
@@ -85,6 +88,26 @@ def test_valid_long_signal(risk_engine, base_signal, base_account, base_state):
     assert decision.approved is True
     assert intent is not None
     assert intent.quantity == Decimal("26")  # 100000 * 0.04 / 150 = 26.66 -> 26
+
+
+def test_approved_intent_is_a_limit_entry_with_a_complete_bracket(
+    risk_engine, base_signal, base_account, base_state
+):
+    """C3: execution accepts only limit entries with a stop and a target."""
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[],
+        current_price=Decimal("150"),
+        state=base_state,
+    )
+
+    assert intent.type == OrderType.LIMIT
+    assert intent.limit_price == Decimal("150.00")
+    assert intent.stop_price == Decimal("144.00")  # 4 % below
+    assert intent.take_profit_price == Decimal("157.50")  # 5 % above
+    assert decision.suggested_limit_price == Decimal("150.00")
 
 
 def test_short_signal_rejected(risk_engine, base_signal, base_account, base_state):
@@ -399,6 +422,87 @@ def test_unknown_orders_conservatism(risk_engine, base_signal, base_account, bas
     assert decision.approved is True
     # allowed qty = 500 / 150 = 3
     assert intent.quantity == Decimal("3")
+
+
+def test_planned_risk_is_measured_to_the_rounded_stop(
+    risk_engine, base_signal, base_account, base_state
+):
+    """The stop that is sent is rounded to the tick, so the risk limit must be checked
+    against that stop. 100.03 * 0.96 = 96.0288 is sent as 96.02: 4.01 per share, not 4.0012.
+    Risk per trade is capped at 160.20: 39 shares risk 156.39, 40 would risk 160.40."""
+    risk_engine.settings.position_size_pct = 0.05  # 49 shares by value, so the risk cap binds
+    risk_engine.settings.max_planned_risk_per_trade_pct = 0.001602
+
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[],
+        current_price=Decimal("100.03"),
+        state=base_state,
+    )
+
+    assert decision.approved is True
+    assert intent.stop_price == Decimal("96.02")
+    assert intent.quantity == Decimal("39")
+    assert intent.quantity * (intent.limit_price - intent.stop_price) <= Decimal("160.20")
+
+
+def test_entry_limit_buffer_raises_the_limit_and_sizing_uses_it(
+    risk_engine, base_signal, base_account, base_state
+):
+    """At 100.00 plus 0.1 % the entry can cost 100.10 a share: 4000 buys 39, not 40."""
+    risk_engine.settings.entry_limit_buffer_pct = 0.001
+
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[],
+        current_price=Decimal("100"),
+        state=base_state,
+    )
+
+    assert decision.approved is True
+    assert intent.limit_price == Decimal("100.10")
+    assert intent.quantity == Decimal("39")
+    assert intent.quantity * intent.limit_price <= Decimal("4000")
+
+
+def test_a_price_that_cannot_hold_a_bracket_is_rejected(
+    risk_engine, base_signal, base_account, base_state
+):
+    """At $0.20 a 4 % stop is 0.8 cents from the entry, less than a bracket allows."""
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[],
+        current_price=Decimal("0.20"),
+        state=base_state,
+    )
+
+    assert decision.approved is False
+    assert intent is None
+    assert "Entry plan rejected" in decision.reasoning
+
+
+def test_no_stop_means_no_trade(risk_engine, base_signal, base_account, base_state):
+    """STOP_LOSS_PCT=0 is accepted by Settings; it must not produce an entry without a stop."""
+    risk_engine.settings.stop_loss_pct = 0.0
+
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[],
+        current_price=Decimal("150"),
+        state=base_state,
+    )
+
+    assert decision.approved is False
+    assert intent is None
+    assert "Entry plan rejected" in decision.reasoning
 
 
 def test_stale_signal_rejected(risk_engine, base_signal, base_account, base_state):

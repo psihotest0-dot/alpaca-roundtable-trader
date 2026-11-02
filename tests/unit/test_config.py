@@ -46,6 +46,16 @@ def test_invalid_percentages():
     with pytest.raises(ValidationError):
         Settings(alpaca_api_key="k", alpaca_secret_key="s", take_profit_pct=float("nan"))
 
+    # The entry limit buffer is a small premium over the last price, never a discount
+    with pytest.raises(ValidationError):
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", entry_limit_buffer_pct=-0.001)
+
+    with pytest.raises(ValidationError):
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", entry_limit_buffer_pct=0.5)
+
+    with pytest.raises(ValidationError):
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", entry_limit_buffer_pct=float("nan"))
+
 
 def test_secrets_leakage():
     s = Settings(alpaca_api_key="secret123", alpaca_secret_key="secret456")

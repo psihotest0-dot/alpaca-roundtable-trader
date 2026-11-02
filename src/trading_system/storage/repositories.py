@@ -66,6 +66,7 @@ class OrderRepository:
             quantity=intent.quantity,
             limit_price=intent.limit_price,
             stop_price=intent.stop_price,
+            take_profit_price=intent.take_profit_price,
             intent_timestamp=intent.intent_timestamp,
         )
         with self._session_factory.begin() as session:

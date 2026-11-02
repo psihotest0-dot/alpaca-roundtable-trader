@@ -17,7 +17,7 @@ from trading_system.domain.enums import OrderSide, OrderStatus, OrderType, Signa
 from trading_system.domain.models import BrokerOrder, OrderIntent, StrategySignal, TradingState
 from trading_system.execution.engine import ExecutionEngine
 from trading_system.runtime.orchestrator import Orchestrator
-from trading_system.storage.models import BrokerOrderModel, StrategySignalModel
+from trading_system.storage.models import BrokerOrderModel, OrderIntentModel, StrategySignalModel
 from trading_system.storage.repositories import OrderRepository, SignalRepository, StateRepository
 
 
@@ -191,6 +191,7 @@ def test_successful_live_submission_does_not_halt_trading(
         quantity=Decimal("10"),
         limit_price=Decimal("150.00"),
         stop_price=Decimal("144.00"),
+        take_profit_price=Decimal("157.50"),
     )
 
     order = engine.submit_order(intent)
@@ -204,3 +205,10 @@ def test_successful_live_submission_does_not_halt_trading(
         assert row.client_order_id == order.client_order_id
         assert row.broker_id == broker.submitted[0].id
         assert row.status == OrderStatus.SUBMITTED
+        # The intent that was sent is on record with all three prices of the bracket.
+        (stored,) = fresh.query(OrderIntentModel).all()
+        assert (stored.limit_price, stored.stop_price, stored.take_profit_price) == (
+            Decimal("150"),
+            Decimal("144"),
+            Decimal("157.5"),
+        )

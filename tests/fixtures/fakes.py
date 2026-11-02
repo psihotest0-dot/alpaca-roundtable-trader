@@ -49,6 +49,7 @@ class FakeBroker:
         self.positions: list[Any] = []
         self.open_orders: list[Any] = []
         self.submitted: list[SimpleNamespace] = []
+        self.sent_requests: list[Any] = []  # the order requests, as the engine built them
         self.cancelled: list[str] = []
 
     def get_clock(self) -> SimpleNamespace:
@@ -93,6 +94,7 @@ class FakeBroker:
             legs=[],
         )
         self.submitted.append(order)
+        self.sent_requests.append(request)
         return order
 
     def get_order_by_client_id(self, client_order_id: str) -> SimpleNamespace:

@@ -57,6 +57,7 @@ class OrderIntentModel(Base):
     quantity = Column(Numeric(precision=18, scale=8), nullable=False)
     limit_price = Column(Numeric(precision=18, scale=8), nullable=True)
     stop_price = Column(Numeric(precision=18, scale=8), nullable=True)
+    take_profit_price = Column(Numeric(precision=18, scale=8), nullable=True)
     intent_timestamp = Column(DateTime(timezone=True), nullable=False)
 
 

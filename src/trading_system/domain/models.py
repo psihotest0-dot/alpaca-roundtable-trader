@@ -68,6 +68,7 @@ class OrderIntent(BaseModel):
     quantity: Decimal
     limit_price: Optional[Decimal] = None
     stop_price: Optional[Decimal] = None
+    take_profit_price: Optional[Decimal] = None
     intent_timestamp: datetime = Field(default_factory=_now_utc)
 
 

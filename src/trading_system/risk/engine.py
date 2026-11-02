@@ -5,6 +5,7 @@ from typing import Optional, Tuple
 from trading_system.config import Settings
 from trading_system.domain.enums import SignalDirection, OrderSide, OrderType
 from trading_system.risk.daily_equity import has_start_equity_for, trading_day
+from trading_system.risk.entry_plan import InvalidEntryPlan, build_entry_plan
 from trading_system.domain.models import (
     StrategySignal,
     AccountSnapshot,
@@ -131,7 +132,23 @@ class RiskEngine:
                 reasoning="Max open positions limit reached.",
             ), None
 
-        # 4. Sizing and Initial Limits
+        # 4. Entry plan, sizing and initial limits
+        # The prices are fixed first, and everything below is computed from these exact
+        # (tick-rounded) numbers: the planned risk is the risk that execution will place.
+        try:
+            plan = build_entry_plan(
+                current_price,
+                limit_buffer_pct=Decimal(str(self.settings.entry_limit_buffer_pct)),
+                stop_loss_pct=Decimal(str(self.settings.stop_loss_pct)),
+                take_profit_pct=Decimal(str(self.settings.take_profit_pct)),
+            )
+        except InvalidEntryPlan as e:
+            return RiskDecision(
+                signal_id=signal.signal_id or "",
+                approved=False,
+                reasoning=f"Entry plan rejected: {e}",
+            ), None
+
         target_notional = account.equity * Decimal(str(self.settings.position_size_pct))
 
         # Determine gross exposure from existing + pending
@@ -153,7 +170,8 @@ class RiskEngine:
 
         target_notional = min(target_notional, available_gross, account.buying_power)
 
-        raw_quantity = target_notional / current_price
+        # The limit is the most the entry can cost per share, so size with it.
+        raw_quantity = target_notional / plan.limit_price
         # Whole shares only, round down
         quantity = Decimal(math.floor(raw_quantity))
 
@@ -165,16 +183,8 @@ class RiskEngine:
             ), None
 
         # 5. Risk calculations
-        # Planned risk from entry to stop
-        stop_price = current_price * (Decimal("1.0") - Decimal(str(self.settings.stop_loss_pct)))
-        risk_per_share = current_price - stop_price
-
-        if risk_per_share < 0:
-            return RiskDecision(
-                signal_id=signal.signal_id or "",
-                approved=False,
-                reasoning="Stop loss price is higher than current price.",
-            ), None
+        # Planned risk from entry to stop; positive, the plan guarantees stop < limit
+        risk_per_share = plan.limit_price - plan.stop_price
 
         planned_risk = quantity * risk_per_share
         max_risk_per_trade = account.equity * Decimal(
@@ -183,11 +193,7 @@ class RiskEngine:
 
         if planned_risk > max_risk_per_trade:
             # Downsize
-            quantity = (
-                Decimal(math.floor(max_risk_per_trade / risk_per_share))
-                if risk_per_share > 0
-                else Decimal(0)
-            )
+            quantity = Decimal(math.floor(max_risk_per_trade / risk_per_share))
             if quantity < 1:
                 return RiskDecision(
                     signal_id=signal.signal_id or "",
@@ -229,11 +235,7 @@ class RiskEngine:
                     reasoning="Max total planned open risk limit reached.",
                 ), None
 
-            quantity = (
-                Decimal(math.floor(available_risk / risk_per_share))
-                if risk_per_share > 0
-                else Decimal(0)
-            )
+            quantity = Decimal(math.floor(available_risk / risk_per_share))
             if quantity < 1:
                 return RiskDecision(
                     signal_id=signal.signal_id or "",
@@ -250,10 +252,11 @@ class RiskEngine:
             signal_id=signal.signal_id or "",
             symbol=signal.symbol,
             side=OrderSide.BUY,
-            type=OrderType.MARKET,  # using MARKET for entry in MVP
+            type=OrderType.LIMIT,
             quantity=quantity,
-            limit_price=None,
-            stop_price=None,  # MVP uses risk engine to dictate size, actual stop orders are placed separately or not in intent
+            limit_price=plan.limit_price,
+            stop_price=plan.stop_price,
+            take_profit_price=plan.take_profit_price,
         )
 
         decision = RiskDecision(
@@ -261,7 +264,7 @@ class RiskEngine:
             approved=True,
             reasoning="Approved.",
             suggested_quantity=quantity,
-            suggested_limit_price=None,
+            suggested_limit_price=plan.limit_price,
         )
 
         return decision, intent

@@ -11,8 +11,7 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
-import pytest
-
+from trading_system.domain.enums import OrderStatus, OrderType
 from trading_system.domain.models import TradingState
 from trading_system.risk.daily_equity import trading_day
 from trading_system.storage.models import BrokerOrderModel
@@ -106,16 +105,18 @@ def test_the_baseline_is_recorded_even_when_trading_is_halted(
     assert state.daily_start_equity == Decimal("100000")
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C3: the end-to-end result. A dry-run cycle on a healthy signal should leave a "
-    "simulated order that another process can read. Risk approves the signal now (C2 is "
-    "fixed), but execution rejects its MARKET intent: 'Only limit entries are supported'.",
-)
 def test_dry_run_cycle_persists_a_simulated_order(
     run_cycle: RunCycle, session_factory: Any
 ) -> None:
-    run_cycle()
+    """C3, the end-to-end result: signal -> risk decision -> a simulated order that another
+    process can read, with the bracket prices risk planned. Nothing reaches the broker."""
+    cycle = run_cycle()
 
+    (decision,) = cycle.decisions
     with session_factory() as fresh:
-        assert fresh.query(BrokerOrderModel).count() == 1
+        (order,) = fresh.query(BrokerOrderModel).all()
+        assert order.type == OrderType.LIMIT
+        assert order.status == OrderStatus.SUBMITTED
+        assert order.limit_price == decision.suggested_limit_price
+        assert order.stop_price is not None and order.stop_price < order.limit_price
+    assert cycle.broker.submitted == []

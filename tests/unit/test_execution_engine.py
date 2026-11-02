@@ -58,6 +58,7 @@ def base_intent():
         quantity=Decimal("10"),
         limit_price=Decimal("150.00"),
         stop_price=Decimal("140.00"),
+        take_profit_price=Decimal("157.50"),
         intent_timestamp=datetime.datetime.now(datetime.timezone.utc),
     )
 
@@ -190,6 +191,53 @@ def test_rejected_invalid_price_increments(
     result = engine.submit_order(base_intent)
 
     assert result is None
+    mock_broker.submit_order.assert_not_called()
+
+
+def test_bracket_is_sent_with_the_prices_of_the_intent(
+    engine, mock_broker, base_intent, mock_asset
+):
+    """C3: execution no longer derives the target from TAKE_PROFIT_PCT; the intent decides."""
+    mock_broker.get_asset.return_value = mock_asset
+    mock_broker.submit_order.return_value = MagicMock(spec=Order, id="oid", symbol="AAPL")
+    base_intent.take_profit_price = Decimal("163.00")  # not 5 % above the limit
+
+    engine.submit_order(base_intent)
+
+    (request,) = mock_broker.submit_order.call_args.args
+    assert request.limit_price == 150.00
+    assert request.stop_loss.stop_price == 140.00
+    assert request.take_profit.limit_price == 163.00
+
+
+@pytest.mark.parametrize(
+    "stop, limit, take_profit",
+    [
+        (None, "150.00", "157.50"),
+        ("140.00", "150.00", None),
+        ("150.00", "150.00", "157.50"),  # no room for the stop
+        ("140.00", "150.00", "150.00"),  # no room for the target
+        ("151.00", "150.00", "157.50"),  # stop above the entry
+        ("140.00", "150.00", "149.00"),  # target below the entry
+    ],
+)
+def test_incomplete_or_disordered_bracket_is_rejected(
+    engine, mock_broker, base_intent, mock_asset, stop, limit, take_profit
+):
+    mock_broker.get_asset.return_value = mock_asset
+    base_intent.stop_price = None if stop is None else Decimal(stop)
+    base_intent.limit_price = Decimal(limit)
+    base_intent.take_profit_price = None if take_profit is None else Decimal(take_profit)
+
+    assert engine.submit_order(base_intent) is None
+    mock_broker.submit_order.assert_not_called()
+
+
+def test_take_profit_off_the_tick_is_rejected(engine, mock_broker, base_intent, mock_asset):
+    mock_broker.get_asset.return_value = mock_asset
+    base_intent.take_profit_price = Decimal("157.505")
+
+    assert engine.submit_order(base_intent) is None
     mock_broker.submit_order.assert_not_called()
 
 

@@ -51,6 +51,8 @@ class Settings(BaseSettings):
 
     stop_loss_pct: float = Field(0.04, ge=0.0, le=1.0)
     take_profit_pct: float = Field(0.05, ge=0.0, le=1.0)
+    # How far above the last price the entry limit sits (see risk/entry_plan.py).
+    entry_limit_buffer_pct: float = Field(0.001, ge=0.0, le=0.05)
     allow_fractional: bool = False
 
     watchlist: str = (
@@ -75,6 +77,7 @@ class Settings(BaseSettings):
         "max_daily_loss_pct",
         "stop_loss_pct",
         "take_profit_pct",
+        "entry_limit_buffer_pct",
     )
     @classmethod
     def check_finite_pct(cls, v: float) -> float:

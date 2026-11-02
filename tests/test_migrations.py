@@ -140,6 +140,48 @@ def test_downgrade_restores_the_old_shape_and_fills_in_missing_broker_ids(
         assert info["broker_id"] == 1
 
 
+def _insert_intent(conn: Any, signal_id: str) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO strategy_signals (signal_id, version, symbol, timeframe, "
+            "closed_bar_timestamp, direction, confidence, created_at) VALUES "
+            "(:s, '1', 'AAPL', '15m', '2026-11-01 10:00:00', 'LONG', 1.0, '2026-11-01 10:00:00')"
+        ),
+        {"s": signal_id},
+    )
+    conn.execute(
+        text(
+            "INSERT INTO order_intents (signal_id, symbol, side, type, quantity, limit_price, "
+            "stop_price, intent_timestamp) VALUES "
+            "(:s, 'AAPL', 'BUY', 'LIMIT', 10, 150, 144, '2026-11-01 10:00:00')"
+        ),
+        {"s": signal_id},
+    )
+
+
+def test_take_profit_column_is_added_to_existing_intents_as_null_and_dropped_again(
+    db: tuple[Any, Config],
+) -> None:
+    """Intents saved before the C3 contract have no target; they must survive both ways."""
+    engine, cfg = db
+    command.upgrade(cfg, ORDER_IDENTITY)
+    with engine.begin() as conn:
+        _insert_intent(conn, "sig-before")
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT symbol, limit_price, stop_price, take_profit_price FROM order_intents")
+        ).one()
+        assert tuple(row) == ("AAPL", 150, 144, None)
+
+    command.downgrade(cfg, ORDER_IDENTITY)
+    with engine.connect() as conn:
+        columns = [r[1] for r in conn.execute(text("PRAGMA table_info(order_intents)"))]
+        assert "take_profit_price" not in columns
+        assert conn.execute(text("SELECT limit_price FROM order_intents")).scalar() == 150
+
+
 def test_migration_chain_goes_all_the_way_down(db: tuple[Any, Config]) -> None:
     """What CI's migration smoke test does: upgrade head, then downgrade base."""
     _, cfg = db

@@ -5,8 +5,6 @@ from decimal import Decimal
 from types import SimpleNamespace
 from typing import Any
 
-import pytest
-
 from tests.fixtures.fakes import FakeBroker
 from trading_system.domain.enums import OrderType
 from trading_system.domain.models import TradingState
@@ -30,20 +28,22 @@ def _approved(settings: Any, signal: Any, account: Any) -> Any:
     )
 
 
-def test_risk_engine_approves_a_healthy_signal(settings: Any, signal: Any, account: Any) -> None:
-    """Precondition for the test below, and a record of what risk emits today."""
+def test_risk_engine_approves_a_healthy_signal_with_a_complete_bracket(
+    settings: Any, signal: Any, account: Any
+) -> None:
+    """Precondition for the test below: what risk emits is a limit entry with all three
+    prices (150.00 plus the 0.1 % buffer, 4 % stop, 5 % target, rounded to the tick)."""
     decision, intent = _approved(settings, signal, account)
 
     assert decision.approved, decision.reasoning
     assert intent is not None
-    assert intent.type == OrderType.MARKET
+    assert intent.type == OrderType.LIMIT
+    assert intent.limit_price == Decimal("150.15")
+    assert intent.stop_price == Decimal("144.14")
+    assert intent.take_profit_price == Decimal("157.65")
+    assert decision.suggested_limit_price == intent.limit_price
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="C3: risk emits a MARKET intent without limit/stop prices, execution only accepts "
-    "LIMIT intents with both ('Only limit entries are supported'), so nothing is ever sent.",
-)
 def test_execution_engine_accepts_what_the_risk_engine_approves(
     settings: Any, signal: Any, account: Any
 ) -> None:
@@ -61,3 +61,24 @@ def test_execution_engine_accepts_what_the_risk_engine_approves(
     )
 
     assert engine.submit_order(intent) is not None
+
+
+def test_a_live_submission_sends_exactly_what_the_risk_engine_planned(
+    settings: Any, signal: Any, account: Any
+) -> None:
+    """Not dry-run: the request that reaches the broker carries risk's prices unchanged and
+    the quantity it sized, so the planned risk is the risk that is placed."""
+    _, intent = _approved(settings, signal, account)
+    assert intent is not None
+    state_repo = SimpleNamespace(get_state=lambda: TradingState(), save_state=lambda _state: None)
+    order_repo = SimpleNamespace(save_intent=lambda _i: None, save_broker_order=lambda _o: None)
+    broker = FakeBroker()
+
+    assert ExecutionEngine(broker, order_repo, state_repo, settings).submit_order(intent)
+
+    assert len(broker.submitted) == 1
+    sent = broker.sent_requests[0]
+    assert Decimal(str(sent.limit_price)) == intent.limit_price
+    assert Decimal(str(sent.stop_loss.stop_price)) == intent.stop_price
+    assert Decimal(str(sent.take_profit.limit_price)) == intent.take_profit_price
+    assert Decimal(str(sent.qty)) == intent.quantity
