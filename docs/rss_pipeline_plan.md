@@ -1,6 +1,6 @@
 # RSS Pipeline Plan
 
-*Status: the pipeline itself (collector, chunker, embeddings, Chroma adapter, search service, background worker) is built; the CLI commands in the list below and the Oracle integration are not. Giving the Oracle a short summary of a matching item is Phase 5.*
+*Status: the pipeline itself (collector, chunker, embeddings, Chroma adapter, search service, background worker) is built; the CLI commands in the list below and the Oracle integration are not. Giving the Oracle a short summary of a matching item is Phase 5. Decided on 2026-11-02: the Chroma parts of this plan (chunker, embeddings, Chroma adapter, vector search) are dropped and the articles go to a SQL table instead.*
 
 ## Existing Components
 - Configuration: `pydantic-settings` via `src/trading_system/config.py`

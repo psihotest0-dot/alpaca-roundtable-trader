@@ -3,7 +3,7 @@
 - **Dependency Manager**: We chose `poetry` to ensure reproducible builds across local, CI, and Docker environments via `poetry.lock`.
 - **Database**: SQLite is used for the MVP to minimize setup friction and keep local persistence simple. This project keeps its state only in its own file (`var/trading.db`); the SQL database in the Go backend's Docker containers belongs to that backend and is not used here (owner, 2026-11-02).
 - **Scope**: The MVP strictly implements paper trading. Live trading features have been explicitly excluded.
-- **Chroma**: the news store is a local Chroma `PersistentClient` directory (`CHROMA_DB_PATH`, default `./var/chroma_db`), opened in-process; there is no Chroma server. *This replaces the earlier decision to run Chroma as a host process behind AnythingLLM, which went away with AnythingLLM. Revisit in Phase 5.*
+- **Chroma**: *being removed (owner, 2026-11-02); see the decisions of 2026-11-02 below.* Until then the news store is a local Chroma `PersistentClient` directory (`CHROMA_DB_PATH`, default `./var/chroma_db`), opened in-process; there is no Chroma server.
 
 ## Decisions of 2026-11-01
 
@@ -32,4 +32,5 @@ Owner decisions and the engineering decisions that follow from the analysis (`an
 - **Stopping the system does not pause entries.** A restart carries on by itself. `PAUSE_ON_SHUTDOWN=true` or `run --pause-on-exit` make the next start wait for `resume-entries`.
 - **An unprotected position halts and raises an alarm; it is not closed automatically.** Closing at market needs `EMERGENCY_CLOSE_UNPROTECTED=true` (default `false`). Bracket orders are `GTC`, because the legs inherit the entry's time in force and a `DAY` bracket loses its stop at the close.
 - **The model connection (Phase 2.2) is postponed to the end.** The owner will show the Go backend and the Flet app first. Until then the Oracle is `NullOracle`.
+- **Market data and news go to SQL tables; Chroma is removed.** One table holds the market data from Alpaca (candles first), one holds the news (articles from RSS and, later, from the Alpaca News API, told apart by a `source` column). Chroma, the chunker and the embeddings go with it: what the Oracle needs is "the news for this symbol in the last hours", a lookup by symbol and time, not a similarity search. **Not built yet.** The Chroma code stays until the news table replaces it, so that the RSS collector never writes into nothing. The candle table belongs to Phase 3 (backtest data) and the news table with the removal of Chroma to Phase 5. Open design points are in `action-plan.md` section 10, item 8.
 - **Owner's idea for the Oracle input:** the data from Alpaca plus, when an RSS item matches the symbol, a short summary of it; the model then answers `APPROVE` / `VETO` / `HOLD`. News text is the first outside text in a request, so Phase 5 needs prompt-injection handling for it (a length-limited summary, no URLs or commands, framed as data, not instructions).

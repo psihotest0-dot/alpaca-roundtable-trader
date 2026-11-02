@@ -56,7 +56,7 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 
 ## Docker & Connectivity
 
-- **News store (Chroma)**: a local directory (`CHROMA_DB_PATH`, default `./var/chroma_db`) opened in-process with `PersistentClient`. There is no Chroma server to run or to reach over the network. With `compose.yaml` the repository is mounted at `/app`, so the store ends up in the repository's `var/` (git-ignored) on the host.
+- **News store (Chroma, to be replaced by a SQL table; see `decisions.md`)**: a local directory (`CHROMA_DB_PATH`, default `./var/chroma_db`) opened in-process with `PersistentClient`. There is no Chroma server to run or to reach over the network. With `compose.yaml` the repository is mounted at `/app`, so the store ends up in the repository's `var/` (git-ignored) on the host.
 - **Database**: the trading state is the project's own SQLite file. The Go backend's containers and their SQL database are separate and are not used by this project.
 - **Host services from a container**: when a real Oracle provider is added (Phase 2.2), a container reaches a service on the host through the OS-specific gateway (`host.docker.internal` on Mac/Win, `172.17.0.1` on Linux), never through `127.0.0.1`.
 

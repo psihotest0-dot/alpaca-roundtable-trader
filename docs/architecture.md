@@ -36,4 +36,5 @@ The strategy produces a signal, the Oracle says yes, no or not now, and Risk sti
 
 - **Trading state** lives in this project's own SQLite file, `var/trading.db`, migrated with Alembic. Only this project reads or writes it.
 - **The Go backend** runs in its own Docker containers (four of them) with its own SQL database. That database belongs to the backend: it is not shared with this project and is not a store for it. How the two talk to each other (Phase 2.2) is decided when the owner shows the backend.
-- **News** (Phase 5): the RSS pipeline writes to a local Chroma `PersistentClient` directory (`CHROMA_DB_PATH`, default `./var/chroma_db`). There is no Chroma server, and nothing reads the news into the Oracle yet.
+- **News** (Phase 5): today the RSS pipeline writes to a local Chroma `PersistentClient` directory (`CHROMA_DB_PATH`, default `./var/chroma_db`), and nothing reads the news into the Oracle yet. Decided on 2026-11-02, not built: Chroma goes away and the news are stored in a SQL table.
+- **Market data** (Phase 3): decided on 2026-11-02, not built: the candles from Alpaca are kept in a SQL table, which the backtest and the live loop read. Today every cycle downloads 30 days of 15-minute and 90 days of hourly bars again.
