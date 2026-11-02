@@ -1,6 +1,6 @@
 import logging
 import threading
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 from typing import Any, Optional
 from decimal import Decimal
@@ -391,7 +391,7 @@ class ExecutionEngine:
             positions = self.broker.get_positions()
             open_orders = self.broker.get_open_orders()
 
-            unprotected = find_unprotected_positions(positions, open_orders)
+            unprotected = find_unprotected_positions(positions, open_orders, self._recent_orders_of)
             if not unprotected:
                 return
 
@@ -415,6 +415,15 @@ class ExecutionEngine:
         except Exception as e:
             logger.error(f"Failed during emergency check: {e}")
 
+    def _recent_orders_of(self, symbol: str) -> list[Any]:
+        """Where the stop of a filled bracket is found. A failed lookup leaves the position
+        flagged: the check fails towards the alarm, not towards silence."""
+        try:
+            return list(self.broker.get_recent_orders_for_symbol(symbol))
+        except Exception as e:
+            logger.error(f"Could not look up the recent orders of {symbol}: {e}")
+            return []
+
     def _emergency_close(self, gap: "UnprotectedPosition") -> None:
         """Market order for the part of a position that no stop covers: a sell for a long
         position, a buy for a short one."""
@@ -437,10 +446,15 @@ class ExecutionEngine:
             logger.critical(f"Failed to submit emergency close for {gap.symbol}: {e}")
 
 
-# Statuses of an order that is live at the exchange. `held` is deliberately absent: the legs of
-# a bracket wait in `held` and "won't be active until the first order is completely filled"
-# (Alpaca, Orders at Alpaca), so a held stop protects nothing yet.
+# Statuses of an order that is live at the exchange.
 _ACTIVE_STATUSES = frozenset({"new", "accepted", "partially_filled", "pending_new"})
+
+# The stop leg of a bracket whose entry has FILLED is reported as `held` for as long as the
+# take-profit leg is the working half of the OCO pair, and then no list of open orders
+# contains it. It still protects the position. Seen on a real paper order (2026-11-02): entry
+# filled, take-profit `new`, stop `held`, only the take-profit among the open orders. Before
+# the entry has filled completely, held legs protect nothing: Alpaca activates them only then.
+_LIVE_BRACKET_STOP_STATUSES = _ACTIVE_STATUSES | {"held"}
 
 
 @dataclass(frozen=True)
@@ -463,20 +477,42 @@ def _with_legs(orders: Iterable[Any]) -> Iterator[Any]:
         yield from _with_legs(getattr(order, "legs", None) or [])
 
 
+def _is_stop(order: Any, closing_side: str) -> bool:
+    return _text(order.order_type) == "stop" and _text(order.side) == closing_side
+
+
+def _bracket_stop_quantity(orders: Iterable[Any], symbol: str, closing_side: str) -> Decimal:
+    """Shares protected by the stop legs of brackets whose entry has filled completely."""
+    total = Decimal(0)
+    for parent in orders:
+        if parent.symbol != symbol or _text(parent.status) != "filled":
+            continue
+        for leg in _with_legs(getattr(parent, "legs", None) or []):
+            if _is_stop(leg, closing_side) and _text(leg.status) in _LIVE_BRACKET_STOP_STATUSES:
+                total += Decimal(str(leg.qty))
+    return total
+
+
 def find_unprotected_positions(
-    positions: Iterable[Any], open_orders: Iterable[Any]
+    positions: Iterable[Any],
+    open_orders: Iterable[Any],
+    recent_orders_of: Optional[Callable[[str], Iterable[Any]]] = None,
 ) -> list[UnprotectedPosition]:
-    """Positions whose size is not fully covered by active stop orders on the closing side:
-    sell stops for a long position, buy stops for a short one."""
+    """Positions whose size is not fully covered by stop orders on the closing side: sell
+    stops for a long position, buy stops for a short one.
+
+    Active stops among `open_orders` count. For a position they leave uncovered,
+    `recent_orders_of(symbol)` is asked for the symbol's recent orders, nested, to find the
+    held stop of a filled bracket (see _LIVE_BRACKET_STOP_STATUSES)."""
     seen: set[str] = set()
-    stops = []
+    active_stops = []
     for order in _with_legs(open_orders):
         key = str(getattr(order, "id", id(order)))
         if key in seen:
             continue
         seen.add(key)
         if _text(order.order_type) == "stop" and _text(order.status) in _ACTIVE_STATUSES:
-            stops.append(order)
+            active_stops.append(order)
 
     gaps = []
     for pos in positions:
@@ -487,11 +523,15 @@ def find_unprotected_positions(
         covered = sum(
             (
                 Decimal(str(o.qty))
-                for o in stops
+                for o in active_stops
                 if o.symbol == pos.symbol and _text(o.side) == closing_side
             ),
             Decimal(0),
         )
+        if covered < abs(quantity) and recent_orders_of is not None:
+            covered += _bracket_stop_quantity(
+                recent_orders_of(str(pos.symbol)), str(pos.symbol), closing_side
+            )
         if covered < abs(quantity):
             gaps.append(UnprotectedPosition(str(pos.symbol), quantity, covered))
     return gaps

@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock
 from decimal import Decimal
 import datetime
+import uuid
 
 from alpaca.trading.models import Order, Asset
 from alpaca.trading.enums import (
@@ -497,3 +498,107 @@ def test_protected_positions_do_not_halt_anything(engine, mock_broker, mock_stat
     engine.emergency_check_unprotected_positions()
 
     mock_state_repo.save_state.assert_not_called()
+
+
+# --- C7: the shape Alpaca really reports for a filled bracket ---------------------------
+
+
+def _real_order(order_type, side, status, *, qty="1", legs=None, **prices):
+    """alpaca-py's own Order model, filled in like the paper order of 2026-11-02."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    return Order(
+        id=uuid.uuid4(),
+        client_order_id="exec_real",
+        created_at=now,
+        updated_at=now,
+        submitted_at=now,
+        asset_id=uuid.uuid4(),
+        symbol="INTC",
+        asset_class="us_equity",
+        order_class="bracket",
+        time_in_force="day",
+        extended_hours=False,
+        order_type=order_type,
+        type=order_type,
+        side=side,
+        status=status,
+        qty=qty,
+        filled_qty=qty if status == "filled" else "0",
+        legs=legs,
+        **prices,
+    )
+
+
+def _bracket(entry_status, stop_status, take_profit_status="new"):
+    return _real_order(
+        "limit",
+        "buy",
+        entry_status,
+        limit_price="64.75",
+        legs=[
+            _real_order("limit", "sell", take_profit_status, limit_price="67.98"),
+            _real_order("stop", "sell", stop_status, stop_price="62.16"),
+        ],
+    )
+
+
+def test_a_filled_bracket_is_protected_by_its_held_stop_leg():
+    """Seen on a real paper order: once the entry filled, the open orders held only the
+    take-profit (`new`); the stop leg stayed `held` and was in no list of open orders."""
+    open_orders = [_real_order("limit", "sell", "new", limit_price="67.98")]
+    recent = [_bracket("filled", "held")]
+
+    assert find_unprotected_positions([_position("INTC", 1)], open_orders) != []  # blind alone
+    assert find_unprotected_positions([_position("INTC", 1)], open_orders, lambda _s: recent) == []
+
+
+@pytest.mark.parametrize(
+    "entry_status, stop_status",
+    [
+        ("new", "held"),  # the entry has not filled: legs are not active yet
+        ("partially_filled", "held"),  # "active only once the first order is completely filled"
+        ("filled", "canceled"),  # the stop is gone
+        ("filled", "expired"),  # a DAY leg after the close
+    ],
+)
+def test_other_bracket_states_do_not_protect(entry_status, stop_status):
+    recent = [_bracket(entry_status, stop_status)]
+
+    (gap,) = find_unprotected_positions([_position("INTC", 1)], [], lambda _s: recent)
+
+    assert gap.covered == Decimal(0)
+
+
+def test_the_history_is_asked_only_for_positions_the_open_orders_leave_uncovered():
+    asked = []
+
+    def history(symbol):
+        asked.append(symbol)
+        return []
+
+    find_unprotected_positions(
+        [_position("AAPL", 10), _position("INTC", 1)], [_stop("AAPL", 10)], history
+    )
+
+    assert asked == ["INTC"]
+
+
+def test_a_failed_history_lookup_still_raises_the_alarm(engine, mock_broker, mock_state_repo):
+    mock_broker.get_positions.return_value = [_position("INTC", 1)]
+    mock_broker.get_open_orders.return_value = []
+    mock_broker.get_recent_orders_for_symbol.side_effect = ConnectionError("down")
+
+    engine.emergency_check_unprotected_positions()
+
+    assert mock_state_repo.save_state.call_args[0][0].is_trading_halted is True
+
+
+def test_the_engine_does_not_halt_for_a_filled_bracket(engine, mock_broker, mock_state_repo):
+    mock_broker.get_positions.return_value = [_position("INTC", 1)]
+    mock_broker.get_open_orders.return_value = [_real_order("limit", "sell", "new")]
+    mock_broker.get_recent_orders_for_symbol.return_value = [_bracket("filled", "held")]
+
+    engine.emergency_check_unprotected_positions()
+
+    mock_state_repo.save_state.assert_not_called()
+    mock_broker.get_recent_orders_for_symbol.assert_called_once_with("INTC")

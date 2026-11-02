@@ -54,6 +54,20 @@ class AlpacaBroker:
         return self.client.get_orders(filter=req)
 
     @retry_read_request()
+    def get_recent_orders_for_symbol(self, symbol: str, limit: int = 50) -> Any:
+        """The latest orders of any status for one symbol, legs nested under their parent.
+
+        Unlike get_open_orders this also returns a filled bracket parent, whose stop leg stays
+        `held` and is therefore missing from every list of open orders."""
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+
+        req = GetOrdersRequest(
+            status=QueryOrderStatus.ALL, symbols=[symbol], nested=True, limit=limit
+        )
+        return self.client.get_orders(filter=req)
+
+    @retry_read_request()
     def get_order_by_id(self, order_id: str) -> Any:
         return self.client.get_order_by_id(order_id=order_id)
 
