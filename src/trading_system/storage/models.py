@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 from sqlalchemy import Column, Integer, String, Float, Boolean, DateTime, Numeric, Enum, ForeignKey
 from sqlalchemy.orm import DeclarativeBase
 
-from ..domain.enums import SignalDirection, OrderSide, OrderType, OrderStatus
+from ..domain.enums import SignalDirection, OrderSide, OrderType, OrderStatus, OracleVerdict
 
 
 class Base(DeclarativeBase):
@@ -28,9 +28,14 @@ class OracleDecisionModel(Base):
     __tablename__ = "oracle_decisions"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    signal_id = Column(String, ForeignKey("strategy_signals.signal_id"), nullable=False)
-    approved = Column(Boolean, nullable=False)
+    # Every answer is a row (a signal on HOLD is asked many times), so there is no unique key;
+    # the index serves "the final decision for this signal".
+    signal_id = Column(String, ForeignKey("strategy_signals.signal_id"), nullable=False, index=True)
+    verdict: Column[OracleVerdict] = Column(Enum(OracleVerdict), nullable=False)
     reasoning = Column(String, nullable=False)
+    confidence = Column(Float, nullable=True)
+    provider = Column(String, nullable=False, default="")
+    failed = Column(Boolean, nullable=False, default=False)  # no answer: only ever a HOLD
     decision_timestamp = Column(DateTime(timezone=True), nullable=False)
 
 

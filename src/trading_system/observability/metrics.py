@@ -39,6 +39,14 @@ ORACLE_LATENCY_SECONDS = Gauge("oracle_latency_seconds", "Latency of Oracle call
 
 ORACLE_ERRORS = Counter("oracle_errors_total", "Total number of Oracle errors")
 
+# "Unreachable" and "says no" are different things; kind tells them apart:
+# answer (the Oracle answered), cached (a final answer from the record), failed (no answer).
+ORACLE_ANSWERS = Counter(
+    "oracle_answers_total",
+    "Oracle answers by verdict and kind",
+    ["verdict", "kind"],
+)
+
 ORDER_FAILURES = Counter("order_failures_total", "Total number of failed broker orders")
 
 UNRESOLVED_INTENTS = Gauge(

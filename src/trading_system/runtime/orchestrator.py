@@ -41,7 +41,11 @@ class Orchestrator:
         from trading_system.execution.engine import ExecutionEngine
         from trading_system.oracle import create_oracle
         from trading_system.risk.engine import RiskEngine
-        from trading_system.storage.repositories import OrderRepository, SignalRepository
+        from trading_system.storage.repositories import (
+            OracleDecisionRepository,
+            OrderRepository,
+            SignalRepository,
+        )
 
         broker = AlpacaBroker(self.settings)
         order_repo = OrderRepository(self.session_factory)
@@ -61,7 +65,7 @@ class Orchestrator:
             order_repo=order_repo,
             state_repo=self.state_repo,
             strategy_config=RUNTIME_STRATEGY,
-            oracle=create_oracle(self.settings),
+            oracle=create_oracle(self.settings, OracleDecisionRepository(self.session_factory)),
         )
 
     def run(

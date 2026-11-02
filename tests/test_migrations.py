@@ -20,6 +20,7 @@ from trading_system.storage.repositories import OrderRepository
 
 INITIAL = "7cbd8a703bf7"
 ORDER_IDENTITY = "c3f1a9e47d52"
+TAKE_PROFIT = "e8b2d5a61f07"
 
 _ORDER_COLUMNS = (
     "(broker_id, client_order_id, symbol, side, type, status, quantity, filled_quantity, "
@@ -214,3 +215,52 @@ def test_repositories_work_on_a_migrated_database(db: tuple[Any, Config]) -> Non
     assert repo.save_fill("no-such-order", "exec-2", 150.0, 10.0, now) is False  # FK enforced
     with engine.connect() as conn:
         assert conn.execute(text("SELECT count(*) FROM broker_orders")).scalar() == 1
+
+
+def _insert_old_oracle_rows(conn: Any) -> None:
+    conn.execute(
+        text(
+            "INSERT INTO strategy_signals (signal_id, version, symbol, timeframe, "
+            "closed_bar_timestamp, direction, confidence, created_at) VALUES "
+            "('sig', '1', 'AAPL', '15m', '2026-11-01 10:00:00', 'LONG', 1.0, '2026-11-01 10:00:00')"
+        )
+    )
+    for approved, reason in ((1, "fine"), (0, "no")):
+        conn.execute(
+            text(
+                "INSERT INTO oracle_decisions (signal_id, approved, reasoning, decision_timestamp) "
+                "VALUES ('sig', :a, :r, '2026-11-01 10:01:00')"
+            ),
+            {"a": approved, "r": reason},
+        )
+
+
+def test_oracle_decisions_become_verdicts_and_back(db: tuple[Any, Config]) -> None:
+    """approved becomes APPROVE, not approved becomes VETO; the downgrade goes the other way."""
+    engine, cfg = db
+    command.upgrade(cfg, TAKE_PROFIT)
+    with engine.begin() as conn:
+        _insert_old_oracle_rows(conn)
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT verdict, reasoning, provider, failed, confidence FROM oracle_decisions ORDER BY id"
+            )
+        ).all()
+        assert [tuple(r) for r in rows] == [
+            ("APPROVE", "fine", "", 0, None),
+            ("VETO", "no", "", 0, None),
+        ]
+        indexes = [r[1] for r in conn.execute(text("PRAGMA index_list(oracle_decisions)"))]
+        assert "ix_oracle_decisions_signal_id" in indexes
+
+    command.downgrade(cfg, TAKE_PROFIT)
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT approved, reasoning FROM oracle_decisions ORDER BY id")
+        ).all()
+        assert [tuple(r) for r in rows] == [(1, "fine"), (0, "no")]
+        columns = [r[1] for r in conn.execute(text("PRAGMA table_info(oracle_decisions)"))]
+        assert "verdict" not in columns and "failed" not in columns

@@ -7,18 +7,25 @@ order record is durable the moment the method returns, and one failed write can
 never leave a half-broken session behind for the next caller.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Optional, cast
+from typing import Any, Optional, cast
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from ..domain.enums import OrderSide, OrderStatus, OrderType
-from ..domain.models import BrokerOrder, OrderIntent, StrategySignal, TradingState
+from ..domain.enums import OracleVerdict, OrderSide, OrderStatus, OrderType
+from ..domain.models import (
+    BrokerOrder,
+    OracleDecision,
+    OrderIntent,
+    StrategySignal,
+    TradingState,
+)
 from .models import (
     BrokerOrderModel,
     FillModel,
+    OracleDecisionModel,
     OrderIntentModel,
     RuntimeStateModel,
     StrategySignalModel,
@@ -154,6 +161,82 @@ class OrderRepository:
         except IntegrityError:
             return False
         return True
+
+
+class OracleDecisionRepository:
+    """What the Oracle said, answer by answer."""
+
+    def __init__(self, session_factory: SessionFactory):
+        self._session_factory = session_factory
+
+    def save(self, decision: OracleDecision) -> None:
+        model = OracleDecisionModel(
+            signal_id=decision.signal_id,
+            verdict=decision.verdict,
+            reasoning=decision.reason,
+            confidence=decision.confidence,
+            provider=decision.provider,
+            failed=decision.failed,
+            decision_timestamp=decision.decision_timestamp,
+        )
+        with self._session_factory.begin() as session:
+            session.add(model)
+
+    def final_decision_for(self, signal_id: str) -> Optional[OracleDecision]:
+        """The latest APPROVE or VETO for the signal. A HOLD, and an answer that never came,
+        are not decisions and are never returned."""
+        with self._session_factory() as session:
+            row = (
+                session.query(OracleDecisionModel)
+                .filter(
+                    OracleDecisionModel.signal_id == signal_id,
+                    OracleDecisionModel.failed.is_(False),
+                    OracleDecisionModel.verdict.in_((OracleVerdict.APPROVE, OracleVerdict.VETO)),
+                )
+                .order_by(OracleDecisionModel.id.desc())
+                .first()
+            )
+            return None if row is None else self._decision(row)
+
+    def replay_export(self) -> dict[str, dict[str, Any]]:
+        """One entry per signal the Oracle was asked about, for the backtest's `--replay-oracle`:
+        its final decision, or, if it never made one (HOLD until the signal lapsed, or no answer),
+        the latest answer with `approved` false, because that is what happened: no trade."""
+        with self._session_factory() as session:
+            rows = session.query(OracleDecisionModel).order_by(OracleDecisionModel.id).all()
+            latest: dict[str, OracleDecision] = {}
+            for row in rows:
+                decision = self._decision(row)
+                held_before = latest.get(decision.signal_id)
+                is_final = decision.verdict is not OracleVerdict.HOLD
+                if is_final or held_before is None or held_before.verdict is OracleVerdict.HOLD:
+                    latest[decision.signal_id] = decision
+        return {
+            signal_id: {
+                "approved": d.approved,
+                "verdict": d.verdict.value,
+                "final": d.verdict is not OracleVerdict.HOLD,
+                "reason": d.reason,
+                "provider": d.provider,
+                "decided_at": d.decision_timestamp.isoformat(),
+            }
+            for signal_id, d in latest.items()
+        }
+
+    @staticmethod
+    def _decision(row: OracleDecisionModel) -> OracleDecision:
+        moment = cast(datetime, row.decision_timestamp)
+        if moment.tzinfo is None:  # SQLite hands back naive datetimes; they were stored as UTC
+            moment = moment.replace(tzinfo=timezone.utc)
+        return OracleDecision(
+            signal_id=cast(str, row.signal_id),
+            verdict=cast(OracleVerdict, row.verdict),
+            reason=cast(str, row.reasoning),
+            confidence=cast(Optional[float], row.confidence),
+            provider=cast(str, row.provider),
+            failed=cast(bool, row.failed),
+            decision_timestamp=moment,
+        )
 
 
 class StateRepository:

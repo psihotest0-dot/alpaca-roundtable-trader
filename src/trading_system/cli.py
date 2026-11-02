@@ -71,6 +71,13 @@ def create_parser() -> argparse.ArgumentParser:
         "resume-entries", help="Resumes the trading system, allowing new entries."
     )
 
+    # export-oracle-decisions command
+    export_parser = subparsers.add_parser(
+        "export-oracle-decisions",
+        help="Writes the recorded Oracle decisions as a file the backtest can replay.",
+    )
+    export_parser.add_argument("--out", required=True, help="Path of the JSON file to write.")
+
     # status command
     subparsers.add_parser("status", help="Prints the current status of the trading system.")
 
@@ -260,6 +267,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"Resume error: {e}")
+            return 1
+
+    elif args.command == "export-oracle-decisions":
+        try:
+            import json
+
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import OracleDecisionRepository
+
+            settings = Settings()
+            repository = OracleDecisionRepository(
+                get_session_factory(get_engine(settings.database_url))
+            )
+            decisions = repository.replay_export()
+            with open(args.out, "w", encoding="utf-8") as f:
+                json.dump(decisions, f, indent=2, sort_keys=True)
+            decided = sum(1 for d in decisions.values() if d["final"])
+            print(
+                f"Wrote {len(decisions)} signals to {args.out} "
+                f"({decided} decided, {len(decisions) - decided} undecided: no trade)."
+            )
+            return 0
+        except Exception as e:
+            print(f"Export error: {e}")
             return 1
 
     elif args.command == "status":
