@@ -264,3 +264,25 @@ def test_oracle_decisions_become_verdicts_and_back(db: tuple[Any, Config]) -> No
         assert [tuple(r) for r in rows] == [(1, "fine"), (0, "no")]
         columns = [r[1] for r in conn.execute(text("PRAGMA table_info(oracle_decisions)"))]
         assert "verdict" not in columns and "failed" not in columns
+
+
+def test_market_bars_are_added_with_their_key_and_dropped_again(db: tuple[Any, Config]) -> None:
+    from sqlalchemy import inspect
+
+    engine, cfg = db
+    command.upgrade(cfg, "f1a7c3d95b20")
+    assert "market_bars" not in inspect(engine).get_table_names()
+
+    command.upgrade(cfg, "b6d1f4a82c35")
+
+    inspector = inspect(engine)
+    assert inspector.get_pk_constraint("market_bars")["constrained_columns"] == [
+        "symbol",
+        "timeframe",
+        "bar_start",
+    ]
+    assert "oracle_decisions" in inspector.get_table_names()  # the rest is untouched
+
+    command.downgrade(cfg, "f1a7c3d95b20")
+    names = inspect(engine).get_table_names()
+    assert "market_bars" not in names and "oracle_decisions" in names

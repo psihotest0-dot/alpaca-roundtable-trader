@@ -19,7 +19,6 @@ class BacktestConfig(BaseModel):
         description="Slippage percentage applied to execution price (e.g. 0.0005 for 5 bps).",
     )
     allow_fractional: bool = False
-    data_dir: Optional[str] = None
     replay_oracle_path: Optional[str] = None
 
 
@@ -65,7 +64,10 @@ class BacktestResult(BaseModel):
             "No look-ahead bias: signals generated strictly on closed bars.",
             "Gap-aware stop model applied: filled at open if stop/target gap.",
             "Conservative intrabar collision: assumed stop-loss hit first if both SL and TP triggered in same bar.",
-            "Data assumption: Historical OHLCV is assumed to be fully adjusted for splits and dividends.",
+            "Data assumption: candles are the ones stored by `fetch-history`, adjusted for splits and dividends on the same basis as the live loop.",
+            "Strategy parameters are the live loop's (RUNTIME_STRATEGY) and entries are looked for only in the regular session. Pre- and after-market bars are still in the indicators.",
+            "Entry timing differs from the live system: the backtest places a limit at the signal bar's close and checks it from the bar after next; the live system sends a marketable limit (live price + ENTRY_LIMIT_BUFFER_PCT) that fills at once. Results are not comparable with live fills yet (Phase 3.1).",
+            "Not the live system yet: position sizing, exposure limits and the entry plan are a simplified copy of the RiskEngine (Phase 3.1).",
             "Survivorship bias: Uses a fixed watchlist, ignoring delistings or index changes over the historical period.",
             "Results do not guarantee or promise future profitability.",
         ]

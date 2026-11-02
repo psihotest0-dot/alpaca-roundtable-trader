@@ -157,3 +157,65 @@ class FakeBroker:
 
     def cancel_order_by_id(self, order_id: str) -> None:
         self.cancelled.append(order_id)
+
+
+def asked(moment: datetime) -> pd.Timestamp:
+    """alpaca-py turns the start and end of a request into naive UTC times; this is the
+    aware time they stand for."""
+    stamp = pd.Timestamp(moment)
+    return stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp
+
+
+class FakeHistoryClient:
+    """Alpaca's historical bars with a memory. Unlike FakeStockClient it honours the time
+    range of a request (so a test can see how much was asked for) and, like Alpaca, it can
+    re-adjust the past: after a dividend or a split every older price changes."""
+
+    def __init__(self, frames: dict[int, dict[str, pd.DataFrame]]):
+        self._frames = {minutes: dict(by_symbol) for minutes, by_symbol in frames.items()}
+        self.requests: list[Any] = []
+
+    def get_stock_bars(self, request: Any) -> SimpleNamespace:
+        self.requests.append(request)
+        timeframe = request.timeframe
+        minutes = timeframe.amount_value * (60 if timeframe.unit_value.name == "Hour" else 1)
+        symbols = request.symbol_or_symbols
+        symbols = [symbols] if isinstance(symbols, str) else list(symbols)
+        shaped = []
+        for symbol in symbols:
+            frame = self._frames[minutes].get(symbol)
+            if frame is None:
+                continue
+            inside = frame[
+                (frame.index >= asked(request.start)) & (frame.index <= asked(request.end))
+            ]
+            if not inside.empty:
+                shaped.append(alpaca_shaped(symbol, inside))
+        return SimpleNamespace(df=pd.concat(shaped) if shaped else pd.DataFrame())
+
+    def readjust(self, symbol: str, factor: float, *, before: datetime) -> None:
+        """What a dividend does: every price before `before` is multiplied by `factor`."""
+        for by_symbol in self._frames.values():
+            frame = by_symbol.get(symbol)
+            if frame is None:
+                continue
+            older = frame.index < before
+            for column in ("open", "high", "low", "close", "vwap"):
+                if column in frame:
+                    frame.loc[older, column] = frame.loc[older, column] * factor
+
+    def correct(self, symbol: str, minutes: int, at: datetime, close: float) -> None:
+        """A late correction of one bar."""
+        self._frames[minutes][symbol].loc[at, "close"] = close
+
+    def requests_for(self, symbol: str) -> list[Any]:
+        return [
+            r
+            for r in self.requests
+            if symbol
+            in (
+                [r.symbol_or_symbols]
+                if isinstance(r.symbol_or_symbols, str)
+                else r.symbol_or_symbols
+            )
+        ]

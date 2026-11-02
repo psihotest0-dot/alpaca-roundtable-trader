@@ -36,15 +36,29 @@ def create_parser() -> argparse.ArgumentParser:
 
     # backtest command
     backtest_parser = subparsers.add_parser(
-        "backtest", help="Runs an offline fixture-based backtest/replay."
+        "backtest", help="Replays the stored candles (see fetch-history) through the strategy."
     )
     backtest_parser.add_argument(
-        "--data-dir", type=str, help="Directory containing historical OHLCV data for backtesting."
+        "--days",
+        type=int,
+        default=60,
+        help="How many days of stored candles to replay. The first days are only warm-up.",
     )
     backtest_parser.add_argument(
         "--replay-oracle",
         type=str,
         help="Path to JSON file containing historical Oracle decisions.",
+    )
+
+    # fetch-history command
+    history_parser = subparsers.add_parser(
+        "fetch-history", help="Downloads candles from Alpaca into the database."
+    )
+    history_parser.add_argument(
+        "--days", type=int, default=180, help="How far back the stored history should reach."
+    )
+    history_parser.add_argument(
+        "--symbols", type=str, help="Comma-separated symbols. Default: the WATCHLIST."
     )
 
     # run command
@@ -143,51 +157,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             settings = Settings()
             from trading_system.backtest.models import BacktestConfig
             from trading_system.backtest.engine import BacktestEngine
-            import pandas as pd
-            import numpy as np
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import MarketBarRepository
             from datetime import datetime, timezone, timedelta
 
-            # Use provided dir or mock data for testing
-            df_15m = {}
-            df_1h = {}
+            symbols = [s.strip() for s in settings.watchlist.split(",") if s.strip()]
+            since = datetime.now(timezone.utc) - timedelta(days=args.days)
+            repo = MarketBarRepository(get_session_factory(get_engine(settings.database_url)))
+            df_15m = repo.load(symbols, "15m", start=since)
+            df_1h = repo.load(symbols, "1h", start=since)
+            symbols = [s for s in symbols if s in df_15m and s in df_1h]
+            if not symbols:
+                print(
+                    f"No stored candles for the watchlist in the last {args.days} days. "
+                    "Run `fetch-history` first."
+                )
+                return 1
+            df_15m = {s: df_15m[s] for s in symbols}
+            df_1h = {s: df_1h[s] for s in symbols}
+            first = min(df["timestamp"].iloc[0] for df in df_15m.values())
+            last = max(df["timestamp"].iloc[-1] for df in df_15m.values())
+            print(f"Replaying {len(symbols)} symbols, {first:%Y-%m-%d} to {last:%Y-%m-%d}.")
 
-            # Simple mock data generator for demonstration and tests
-            print(
-                "Generating sample dataset (AAPL) since no external data dir was provided..."
-                if not args.data_dir
-                else f"Loading data from {args.data_dir}..."
-            )
-
-            # Dummy data for the CLI demo
-            now = datetime.now(timezone.utc)
-            start_time = now - timedelta(days=5)
-
-            # 15m index
-            idx_15m = pd.date_range(start=start_time, end=now, freq="15min", tz="UTC")
-            df = pd.DataFrame(index=idx_15m)
-            df["timestamp"] = df.index
-            df["open"] = np.linspace(150, 160, len(idx_15m))
-            df["close"] = df["open"] + np.random.normal(0, 0.5, len(idx_15m))
-            df["high"] = df[["open", "close"]].max(axis=1) + 0.5
-            df["low"] = df[["open", "close"]].min(axis=1) - 0.5
-            df["volume"] = 1000
-
-            # Reset index so 'timestamp' is a column as expected by engine
-            df_15m["AAPL"] = df.reset_index(drop=True)
-
-            # 1h index
-            idx_1h = pd.date_range(start=start_time, end=now, freq="1h", tz="UTC")
-            df_h = pd.DataFrame(index=idx_1h)
-            df_h["timestamp"] = df_h.index
-            df_h["open"] = np.linspace(150, 160, len(idx_1h))
-            df_h["close"] = df_h["open"] + np.random.normal(0, 1.0, len(idx_1h))
-            df_h["high"] = df_h[["open", "close"]].max(axis=1) + 1.0
-            df_h["low"] = df_h[["open", "close"]].min(axis=1) - 1.0
-            df_h["volume"] = 4000
-
-            df_1h["AAPL"] = df_h.reset_index(drop=True)
-
-            config = BacktestConfig(data_dir=args.data_dir, replay_oracle_path=args.replay_oracle)
+            config = BacktestConfig(replay_oracle_path=args.replay_oracle)
             engine = BacktestEngine(settings, config, df_15m, df_1h)
 
             result = engine.run()
@@ -214,6 +206,48 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
         except Exception as e:
             print(f"Backtest error: {e}")
+            return 1
+
+    elif args.command == "fetch-history":
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from trading_system.data.alpaca_data import AlpacaData
+            from trading_system.data.history import TIMEFRAMES, update_history
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import MarketBarRepository
+
+            settings = Settings()
+            wanted = args.symbols if args.symbols else settings.watchlist
+            symbols = [s.strip().upper() for s in wanted.split(",") if s.strip()]
+            now = datetime.now(timezone.utc)
+            repo = MarketBarRepository(get_session_factory(get_engine(settings.database_url)))
+            print(f"Updating {len(symbols)} symbols, {args.days} days back...")
+            report = update_history(
+                AlpacaData(settings),
+                repo,
+                symbols,
+                list(TIMEFRAMES),
+                start=now - timedelta(days=args.days),
+                now=now,
+            )
+            for name in TIMEFRAMES:
+                written = sum(n for (_, tf), n in report.rows.items() if tf == name)
+                again = [s for s, tf in report.downloaded_again if tf == name]
+                line = f"{name}: {written:,} rows written"
+                if again:
+                    line += f"; prices out of date, downloaded again: {', '.join(again)}"
+                print(line)
+            if report.no_data:
+                print(
+                    "No data from Alpaca for: " + ", ".join(sorted({s for s, _ in report.no_data}))
+                )
+            return 0
+        except ValidationError as e:
+            print(f"Configuration validation failed:\n{e}")
+            return 1
+        except Exception as e:
+            print(f"fetch-history error: {e}")
             return 1
 
     elif args.command == "run":

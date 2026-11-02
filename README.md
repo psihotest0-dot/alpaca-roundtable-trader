@@ -50,7 +50,8 @@ docker compose run --rm app python -m trading_system --help
 - `pause-entries`: Manual kill switch to halt new trades.
 - `resume-entries`: Removes the trading halt (requires manual reconciliation check).
 - `status`: Displays current system status (halt state, equity).
-- `backtest`: Runs an offline fixture-based historical simulation.
+- `fetch-history`: Downloads candles from Alpaca into the database (`--days`, default 180). The first run takes about a minute; later runs only fetch what is missing.
+- `backtest`: Replays the stored candles through the strategy (`--days`, default 60). Run `fetch-history` first. It is not yet the live system's sizing and entry plan; the report lists the differences.
 
 For detailed command behaviors, refer to `docs/operations.md`.
 

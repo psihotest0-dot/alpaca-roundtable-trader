@@ -17,6 +17,8 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 
 - **Config Validation**: `poetry run python -m trading_system validate-config` (Verifies Pydantic settings).
 - **Diagnostics**: `poetry run python -m trading_system doctor [--network]` (Checks Alpaca connection).
+- **Candles**: `poetry run python -m trading_system fetch-history [--days 180] [--symbols AAPL,MSFT]` downloads or updates the stored candles (needs the Alpaca keys; run `alembic upgrade head` first). It is safe to run while the system is running, and as often as you like: it only fetches what is missing and checks that the stored prices are still current.
+- **Backtest**: `poetry run python -m trading_system backtest [--days 60]` replays the stored candles. The first days of the window are warm-up for the indicators. It takes about 40 s for 30 days and 2.5 minutes for 90; it grows a little faster than the window (Phase 3.3 fixes that).
 - **Dry Run**: `poetry run python -m trading_system run --dry-run` (Executes the loop without sending API orders).
 - **Paper Run**: `poetry run python -m trading_system run --paper` (Live paper trading against Alpaca).
 

@@ -4,11 +4,14 @@ The bars change every 15 minutes, so the old loop that fetched them every minute
 the same data 14 times out of 15. These are the boundaries it is now tied to.
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 
 from trading_system.data.alpaca_data import FIFTEEN_MINUTES
+from trading_system.risk.daily_equity import MARKET_TZ
 
 BAR = timedelta(minutes=FIFTEEN_MINUTES.amount_value)
+SESSION_OPEN = time(9, 30)
+SESSION_CLOSE = time(16, 0)
 
 
 def _utc(moment: datetime) -> datetime:
@@ -27,3 +30,12 @@ def bar_boundary(now: datetime) -> datetime:
 def expected_bar_start(now: datetime) -> datetime:
     """The start time (Alpaca stamps bars with it) of the newest closed bar at `now`."""
     return bar_boundary(now) - BAR
+
+
+def is_regular_session(moment: datetime) -> bool:
+    """Whether `moment` falls in the regular session: a weekday from 09:30 up to (not
+    including) 16:00 New York time. The live loop looks for entries only then, and the
+    backtest follows it. Holidays and early closes are not known here: there are simply no
+    bars on those days (or after the early close)."""
+    local = _utc(moment).astimezone(MARKET_TZ)
+    return local.weekday() < 5 and SESSION_OPEN <= local.time() < SESSION_CLOSE

@@ -39,6 +39,26 @@ class OracleDecisionModel(Base):
     decision_timestamp = Column(DateTime(timezone=True), nullable=False)
 
 
+class MarketBarModel(Base):
+    """A closed candle from Alpaca (Phase 3.2). A cache, not a record: `fetch-history` can
+    rebuild all of it. Prices are floats, as they are in the data frames the strategy reads."""
+
+    __tablename__ = "market_bars"
+
+    symbol = Column(String, primary_key=True)
+    timeframe = Column(String, primary_key=True)  # "15m" or "1h"
+    bar_start = Column(DateTime(timezone=True), primary_key=True)  # UTC, Alpaca's convention
+    open = Column(Float, nullable=False)
+    high = Column(Float, nullable=False)
+    low = Column(Float, nullable=False)
+    close = Column(Float, nullable=False)
+    volume = Column(Float, nullable=False)
+    vwap = Column(Float, nullable=True)
+    trade_count = Column(Integer, nullable=True)
+    adjustment = Column(String, nullable=False)  # the price basis the bar was downloaded with
+    fetched_at = Column(DateTime(timezone=True), nullable=False)
+
+
 class RiskDecisionModel(Base):
     __tablename__ = "risk_decisions"
 

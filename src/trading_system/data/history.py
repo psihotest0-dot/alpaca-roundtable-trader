@@ -1,0 +1,151 @@
+"""Keeps the candle store up to date from Alpaca (Phase 3.2).
+
+**Price policy.** Bars are downloaded adjusted for splits and dividends (`Adjustment.ALL`), the
+same basis the live loop reads, so a backtest sees the same series the system trades on. The
+catch is that Alpaca re-adjusts the whole past whenever a split or a dividend goes ex, so a
+stored copy turns stale: old rows on the old basis and new rows on the new one would look like
+a price gap that never happened. Every update therefore downloads the last OVERLAP days again
+and compares the oldest bars the two copies share. If their prices disagree, the symbol's
+history is downloaded again from the start. The overlap also takes in the late corrections
+Alpaca makes to recent bars. Only closed bars are stored.
+"""
+
+import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import Optional, Sequence
+
+import pandas as pd
+from alpaca.data.timeframe import TimeFrame
+
+from trading_system.data.alpaca_data import FIFTEEN_MINUTES, ONE_HOUR, AlpacaData
+from trading_system.storage.repositories import MarketBarRepository
+
+logger = logging.getLogger(__name__)
+
+# The price basis of every stored bar. Must match AlpacaData.fetch_bars_bulk.
+ADJUSTMENT = "all"
+
+# How far back an update looks again, to catch corrections and re-adjustments.
+OVERLAP = timedelta(days=7)
+# The oldest bars both copies share that are compared, and how far apart two prices of the
+# same bar may be (a dividend is far more than a basis point; a re-download never differs).
+ANCHOR_BARS = 20
+MAX_PRICE_DRIFT = 1e-4
+# Stored history that starts later than the requested start by more than this (a long weekend
+# leaves a few days without bars) is taken to be too short and is downloaded from the start.
+BACKFILL_SLACK = timedelta(days=5)
+
+TIMEFRAMES: dict[str, tuple[TimeFrame, timedelta]] = {
+    "15m": (FIFTEEN_MINUTES, timedelta(minutes=15)),
+    "1h": (ONE_HOUR, timedelta(hours=1)),
+}
+
+
+@dataclass
+class HistoryReport:
+    rows: dict[tuple[str, str], int] = field(default_factory=dict)  # (symbol, timeframe) -> rows
+    downloaded_again: list[tuple[str, str]] = field(default_factory=list)
+    no_data: list[tuple[str, str]] = field(default_factory=list)
+
+    @property
+    def rows_written(self) -> int:
+        return sum(self.rows.values())
+
+
+def prices_drifted(stored: Optional[pd.DataFrame], fresh: pd.DataFrame) -> bool:
+    """True if the oldest bars the two copies share disagree about price, or if nothing can
+    be compared (then the stored copy cannot be trusted either)."""
+    if stored is None or stored.empty:
+        return True
+    shared = stored.index.intersection(fresh.index).sort_values()
+    if shared.empty:
+        return True
+    anchors = shared[:ANCHOR_BARS]
+    ratio = fresh.loc[anchors, "close"] / stored.loc[anchors, "close"]
+    return bool(((ratio - 1).abs() > MAX_PRICE_DRIFT).any())
+
+
+def update_history(
+    data: AlpacaData,
+    repo: MarketBarRepository,
+    symbols: Sequence[str],
+    timeframes: Sequence[str],
+    *,
+    start: datetime,
+    now: datetime,
+) -> HistoryReport:
+    """Brings the store to hold the closed bars of `symbols` from `start` to `now`, in the
+    given timeframes ("15m", "1h"). Downloads only what is missing, as one request for all
+    symbols that need the same thing."""
+    report = HistoryReport()
+    for name in timeframes:
+        _update_timeframe(data, repo, list(symbols), name, start, now, report)
+    return report
+
+
+def _update_timeframe(
+    data: AlpacaData,
+    repo: MarketBarRepository,
+    symbols: list[str],
+    name: str,
+    start: datetime,
+    now: datetime,
+    report: HistoryReport,
+) -> None:
+    timeframe, length = TIMEFRAMES[name]
+    from_start: list[str] = []  # download the whole history and replace what is stored
+    extend: dict[str, datetime] = {}  # download from here on and add to what is stored
+    had_history: set[str] = set()
+
+    for symbol in symbols:
+        span = repo.span(symbol, name)
+        if span is None:
+            from_start.append(symbol)
+            continue
+        had_history.add(symbol)
+        if span[0] - start > BACKFILL_SLACK or repo.has_other_adjustment(symbol, name, ADJUSTMENT):
+            from_start.append(symbol)
+        else:
+            extend[symbol] = span[1] - OVERLAP
+
+    if extend:
+        fresh = _download(data, list(extend), timeframe, length, min(extend.values()), now)
+        for symbol in extend:
+            new = fresh.get(symbol)
+            if new is None or new.empty:
+                continue  # nothing new to add; what is stored stays
+            stored = repo.load([symbol], name, start=new.index[0]).get(symbol)
+            if prices_drifted(stored, new):
+                logger.info("%s %s: stored prices are out of date, downloading again", symbol, name)
+                from_start.append(symbol)
+            else:
+                report.rows[(symbol, name)] = repo.replace(
+                    symbol, name, new, adjustment=ADJUSTMENT, fetched_at=now
+                )
+
+    if from_start:
+        full = _download(data, from_start, timeframe, length, start, now)
+        for symbol in from_start:
+            bars = full.get(symbol)
+            if bars is None or bars.empty:
+                report.no_data.append((symbol, name))
+                continue
+            report.rows[(symbol, name)] = repo.replace(
+                symbol, name, bars, adjustment=ADJUSTMENT, fetched_at=now, everything=True
+            )
+            if symbol in had_history:
+                report.downloaded_again.append((symbol, name))
+
+
+def _download(
+    data: AlpacaData,
+    symbols: list[str],
+    timeframe: TimeFrame,
+    length: timedelta,
+    start: datetime,
+    now: datetime,
+) -> dict[str, pd.DataFrame]:
+    """The closed bars only: the bar still forming at `now` is not a candle yet."""
+    frames = data.fetch_bars_bulk(symbols, timeframe, start, now)
+    return {symbol: bars[bars.index + length <= now] for symbol, bars in frames.items()}

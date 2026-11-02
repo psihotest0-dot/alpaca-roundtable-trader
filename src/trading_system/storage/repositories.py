@@ -9,11 +9,14 @@ never leave a half-broken session behind for the next caller.
 
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Optional, cast
+from typing import Any, Optional, Sequence, cast
 
+import pandas as pd
+from sqlalchemy import delete, func, insert, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..data.bars import normalize_bars
 from ..domain.enums import OracleVerdict, OrderSide, OrderStatus, OrderType
 from ..domain.models import (
     BrokerOrder,
@@ -25,6 +28,7 @@ from ..domain.models import (
 from .models import (
     BrokerOrderModel,
     FillModel,
+    MarketBarModel,
     OracleDecisionModel,
     OrderIntentModel,
     RuntimeStateModel,
@@ -237,6 +241,157 @@ class OracleDecisionRepository:
             failed=cast(bool, row.failed),
             decision_timestamp=moment,
         )
+
+
+class MarketBarRepository:
+    """Closed candles by symbol and timeframe (Phase 3.2). Frames go in and come out in the
+    canonical shape of data.bars, so the strategy and the backtest read them like any other
+    bars. Times are stored as UTC."""
+
+    def __init__(self, session_factory: SessionFactory):
+        self._session_factory = session_factory
+
+    def replace(
+        self,
+        symbol: str,
+        timeframe: str,
+        bars: pd.DataFrame,
+        *,
+        adjustment: str,
+        fetched_at: datetime,
+        everything: bool = False,
+    ) -> int:
+        """Stores the bars, replacing what is stored for the same instants (a bar that was
+        corrected later wins). With `everything` all stored rows of the symbol and timeframe
+        go first, in the same transaction: the history is replaced, not extended. Returns the
+        number of rows written."""
+        frame = normalize_bars(bars)
+        rows = [
+            {
+                "symbol": symbol,
+                "timeframe": timeframe,
+                "bar_start": moment.to_pydatetime(),
+                "open": float(o),
+                "high": float(h),
+                "low": float(low),
+                "close": float(c),
+                "volume": float(v),
+                "vwap": _optional(vwap),
+                "trade_count": _optional_int(tc),
+                "adjustment": adjustment,
+                "fetched_at": _utc(fetched_at),
+            }
+            for moment, o, h, low, c, v, vwap, tc in zip(
+                frame.index,
+                *(frame[name] for name in ("open", "high", "low", "close", "volume")),
+                frame["vwap"] if "vwap" in frame else [None] * len(frame),
+                frame["trade_count"] if "trade_count" in frame else [None] * len(frame),
+            )
+        ]
+        with self._session_factory.begin() as session:
+            same_series = (
+                MarketBarModel.symbol == symbol,
+                MarketBarModel.timeframe == timeframe,
+            )
+            if everything:
+                session.execute(delete(MarketBarModel).where(*same_series))
+            elif rows:
+                session.execute(
+                    delete(MarketBarModel).where(
+                        *same_series,
+                        MarketBarModel.bar_start >= rows[0]["bar_start"],
+                        MarketBarModel.bar_start <= rows[-1]["bar_start"],
+                    )
+                )
+            if rows:
+                session.execute(insert(MarketBarModel), rows)
+        return len(rows)
+
+    def load(
+        self,
+        symbols: Sequence[str],
+        timeframe: str,
+        start: Optional[datetime] = None,
+        end: Optional[datetime] = None,
+    ) -> dict[str, pd.DataFrame]:
+        """The stored bars of each symbol that has any, from `start` (inclusive) to `end`
+        (exclusive); either may be left open."""
+        query: Any = select(
+            MarketBarModel.symbol,
+            MarketBarModel.bar_start,
+            MarketBarModel.open,
+            MarketBarModel.high,
+            MarketBarModel.low,
+            MarketBarModel.close,
+            MarketBarModel.volume,
+            MarketBarModel.vwap,
+            MarketBarModel.trade_count,
+        ).where(MarketBarModel.symbol.in_(list(symbols)), MarketBarModel.timeframe == timeframe)
+        if start is not None:
+            query = query.where(MarketBarModel.bar_start >= _utc(start))
+        if end is not None:
+            query = query.where(MarketBarModel.bar_start < _utc(end))
+        with self._session_factory() as session:
+            rows = session.execute(query.order_by(MarketBarModel.bar_start)).all()
+        if not rows:
+            return {}
+
+        frame = pd.DataFrame(rows, columns=list(rows[0]._fields))
+        frame["bar_start"] = pd.to_datetime(frame["bar_start"], utc=True)  # SQLite: naive UTC
+        return {
+            str(symbol): normalize_bars(part.drop(columns="symbol").set_index("bar_start"))
+            for symbol, part in frame.groupby("symbol")
+        }
+
+    def span(self, symbol: str, timeframe: str) -> Optional[tuple[datetime, datetime]]:
+        """The first and the last stored bar start, or None if nothing is stored."""
+        first: Optional[datetime]
+        last: Optional[datetime]
+        with self._session_factory() as session:
+            first, last = session.execute(
+                select(
+                    func.min(MarketBarModel.bar_start), func.max(MarketBarModel.bar_start)
+                ).where(MarketBarModel.symbol == symbol, MarketBarModel.timeframe == timeframe)
+            ).one()
+        if first is None or last is None:
+            return None
+        return _as_utc(first), _as_utc(last)
+
+    def has_other_adjustment(self, symbol: str, timeframe: str, adjustment: str) -> bool:
+        """True if any stored bar of the series was downloaded on another price basis."""
+        with self._session_factory() as session:
+            return (
+                session.execute(
+                    select(MarketBarModel.bar_start)
+                    .where(
+                        MarketBarModel.symbol == symbol,
+                        MarketBarModel.timeframe == timeframe,
+                        MarketBarModel.adjustment != adjustment,
+                    )
+                    .limit(1)
+                ).first()
+                is not None
+            )
+
+
+def _utc(moment: datetime) -> datetime:
+    """Times go into SQLite as the fields they have, so they must be UTC first."""
+    return _as_utc(moment).astimezone(timezone.utc)
+
+
+def _as_utc(moment: datetime) -> datetime:
+    """SQLite hands back naive datetimes; they were stored as UTC."""
+    return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment
+
+
+def _optional(value: Any) -> Optional[float]:
+    """A missing value in a data frame is NaN (or None); the database wants NULL."""
+    return None if value is None or pd.isna(value) else float(value)
+
+
+def _optional_int(value: Any) -> Optional[int]:
+    number = _optional(value)
+    return None if number is None else int(number)
 
 
 class StateRepository:

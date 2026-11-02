@@ -8,7 +8,8 @@ import json
 from trading_system.config import Settings
 from trading_system.domain.enums import OrderSide
 from trading_system.domain.models import StrategySignal
-from trading_system.strategy.config import StrategyConfig
+from trading_system.runtime.schedule import is_regular_session
+from trading_system.strategy.config import RUNTIME_STRATEGY
 from trading_system.strategy.trend import generate_signals, filter_signals
 from trading_system.backtest.models import (
     BacktestConfig,
@@ -34,18 +35,9 @@ class BacktestEngine:
         self.df_15m = df_15m
         self.df_1h = df_1h
 
-        self.strategy_config = StrategyConfig(
-            strategy_version="1.0",
-            fast_ema_period=20,
-            slow_ema_period=50,
-            rsi_period=14,
-            rsi_lower_bound=50.0,
-            rsi_upper_bound=70.0,
-            atr_period=14,
-            htf_fast_ema_period=20,
-            htf_slow_ema_period=50,
-            min_warmup_bars=settings.htf_lookback_days * 6,
-        )
+        # The parameters the live loop runs with, not a set of its own: a backtest of other
+        # parameters says nothing about the system that trades.
+        self.strategy_config = RUNTIME_STRATEGY
 
         self.cash = bt_config.initial_capital
         self.positions: Dict[str, BacktestPosition] = {}
@@ -113,7 +105,12 @@ class BacktestEngine:
                 self.peak_exposure = exposure_pct
 
             # 3. Generate new signals based on data closed *before* eval_time
-            # We provide the full dataframes but `generate_signals` filters internally using eval_time
+            # We provide the full dataframes but `generate_signals` filters internally using eval_time.
+            # The live loop looks for entries only while the market is open, so the backtest does too
+            # (stops and fills above are still checked on every bar).
+            if not is_regular_session(current_time):
+                self._expire_orders(current_time)
+                continue
             signals = generate_signals(self.df_15m, self.df_1h, self.strategy_config, eval_time)
 
             # Active symbols: positions + pending orders
