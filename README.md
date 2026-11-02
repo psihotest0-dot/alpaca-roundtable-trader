@@ -77,3 +77,7 @@ pre-commit install
 
 See `SECURITY.md` and `docs/action-plan.md` for the workflow and what to do if a
 key is ever committed.
+
+## License
+
+[MIT](LICENSE). The software is provided as is, without warranty of any kind. It places orders on a brokerage account and is paper-only today; nothing here is financial advice, and anyone who runs it with real money does so at their own risk.
