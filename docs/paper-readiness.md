@@ -1,4 +1,4 @@
-> **Not current evidence.** This checklist was written before the code was run end to end, and several "PASS" rows describe intent, not behaviour. Known to be wrong when it was written: the execution engine could not accept what the risk engine produced (C3, still open), the unprotected-position check probably misreads bracket legs (C7, still open), and nothing was persisted. See `docs/analysis-and-update-plan.md` and `docs/action-plan.md`. It is rewritten with evidence (a test or a log line per row) in Phase 7; do not treat it as a readiness sign-off.
+> **Not current evidence.** This checklist was written before the code was run end to end, and several "PASS" rows describe intent, not behaviour. Known to be wrong when it was written: the execution engine could not accept what the risk engine produced (C3, fixed in `8eba991`), the unprotected-position check probably misreads bracket legs (C7, still open), and nothing was persisted. See `docs/analysis-and-update-plan.md` and `docs/action-plan.md`. It is rewritten with evidence (a test or a log line per row) in Phase 7; do not treat it as a readiness sign-off.
 
 # Paper Readiness Safety Audit
 
