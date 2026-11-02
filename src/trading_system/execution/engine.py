@@ -11,6 +11,7 @@ from alpaca.trading.requests import LimitOrderRequest, TakeProfitRequest, StopLo
 from alpaca.trading.enums import OrderClass, OrderSide as AlpacaOrderSide, TimeInForce
 
 from trading_system.broker.alpaca_broker import AlpacaBroker
+from trading_system.broker.order_mapping import legs_of, to_broker_order
 from trading_system.storage.repositories import OrderRepository, StateRepository
 from trading_system.domain.models import OrderIntent, BrokerOrder
 from trading_system.domain.enums import OrderSide, OrderType, OrderStatus
@@ -212,24 +213,9 @@ class ExecutionEngine:
 
                 self.order_repo.save_broker_order(broker_order)
 
-                # Track child orders (legs) if they exist
-                if hasattr(alpaca_order, "legs") and alpaca_order.legs:
-                    for leg in alpaca_order.legs:
-                        leg_order = BrokerOrder(
-                            broker_id=str(leg.id),
-                            client_order_id=leg.client_order_id,
-                            symbol=leg.symbol,
-                            side=OrderSide.BUY if leg.side == "buy" else OrderSide.SELL,
-                            type=OrderType.LIMIT if leg.order_type == "limit" else OrderType.STOP,
-                            status=OrderStatus.CREATED,  # Usually they start created/held
-                            quantity=Decimal(str(leg.qty)),
-                            filled_quantity=Decimal(str(leg.filled_qty)),
-                            limit_price=Decimal(str(leg.limit_price)) if leg.limit_price else None,
-                            stop_price=Decimal(str(leg.stop_price)) if leg.stop_price else None,
-                            created_at=leg.created_at,
-                            updated_at=leg.updated_at,
-                        )
-                        self.order_repo.save_broker_order(leg_order)
+                # Track child orders (legs) if they exist; they start `held`
+                for leg in legs_of(alpaca_order):
+                    self.order_repo.save_broker_order(to_broker_order(leg))
 
                 return broker_order
 
@@ -258,84 +244,21 @@ class ExecutionEngine:
         # Never blind resubmit
         try:
             alpaca_order = self.broker.get_order_by_client_id(client_order_id)
-
-            # Found it, save it
-
-            # Map status
-            status_str = str(alpaca_order.status)
-            if hasattr(alpaca_order.status, "value"):
-                status_str = alpaca_order.status.value
-            status_str = status_str.upper()
-
-            mapped_status = OrderStatus.UNKNOWN_REQUIRES_RECONCILIATION
-            try:
-                mapped_status = OrderStatus(status_str)
-            except ValueError:
-                if status_str == "NEW" or status_str == "ACCEPTED":
-                    mapped_status = OrderStatus.SUBMITTED
-                elif status_str == "PENDING_NEW":
-                    mapped_status = OrderStatus.SUBMITTING
-                pass
-
-            broker_order = BrokerOrder(
-                broker_id=str(alpaca_order.id),
-                client_order_id=client_order_id,
-                symbol=alpaca_order.symbol,
-                side=OrderSide.BUY if alpaca_order.side == "buy" else OrderSide.SELL,
-                type=OrderType.LIMIT if alpaca_order.order_type == "limit" else OrderType.MARKET,
-                status=mapped_status,
-                quantity=Decimal(str(alpaca_order.qty)),
-                filled_quantity=Decimal(str(alpaca_order.filled_qty)),
-                limit_price=Decimal(str(alpaca_order.limit_price))
-                if alpaca_order.limit_price
-                else None,
-                stop_price=Decimal(str(alpaca_order.stop_price))
-                if alpaca_order.stop_price
-                else None,
-                created_at=alpaca_order.created_at,
-                updated_at=alpaca_order.updated_at,
-            )
-            self.order_repo.save_broker_order(broker_order)
-
-            # Track child orders (legs) if they exist
-            if hasattr(alpaca_order, "legs") and alpaca_order.legs:
-                for leg in alpaca_order.legs:
-                    leg_status_str = str(leg.status)
-                    if hasattr(leg.status, "value"):
-                        leg_status_str = leg.status.value
-                    leg_status_str = leg_status_str.upper()
-
-                    leg_mapped_status = OrderStatus.UNKNOWN_REQUIRES_RECONCILIATION
-                    try:
-                        leg_mapped_status = OrderStatus(leg_status_str)
-                    except ValueError:
-                        if leg_status_str == "NEW" or leg_status_str == "ACCEPTED":
-                            leg_mapped_status = OrderStatus.SUBMITTED
-                        elif leg_status_str == "PENDING_NEW":
-                            leg_mapped_status = OrderStatus.SUBMITTING
-                        elif leg_status_str == "HELD":
-                            leg_mapped_status = OrderStatus.CREATED
-
-                    leg_order = BrokerOrder(
-                        broker_id=str(leg.id),
-                        client_order_id=leg.client_order_id,
-                        symbol=leg.symbol,
-                        side=OrderSide.BUY if leg.side == "buy" else OrderSide.SELL,
-                        type=OrderType.LIMIT if leg.order_type == "limit" else OrderType.STOP,
-                        status=leg_mapped_status,
-                        quantity=Decimal(str(leg.qty)),
-                        filled_quantity=Decimal(str(leg.filled_qty)),
-                        limit_price=Decimal(str(leg.limit_price)) if leg.limit_price else None,
-                        stop_price=Decimal(str(leg.stop_price)) if leg.stop_price else None,
-                        created_at=leg.created_at,
-                        updated_at=leg.updated_at,
-                    )
-                    self.order_repo.save_broker_order(leg_order)
-
-            return broker_order
+            return self.store_broker_order(alpaca_order, client_order_id)
         except Exception as e:
             logger.warning(f"Reconciliation lookup failed for {client_order_id}: {e}")
             return None
+
+    def store_broker_order(
+        self, alpaca_order: Any, client_order_id: Optional[str] = None
+    ) -> BrokerOrder:
+        """Saves an order as the broker reports it, together with its legs, and returns it.
+        Saving the same order again updates the row (its client_order_id is the key)."""
+        broker_order = to_broker_order(alpaca_order, client_order_id)
+        self.order_repo.save_broker_order(broker_order)
+        for leg in legs_of(alpaca_order):
+            self.order_repo.save_broker_order(to_broker_order(leg))
+        return broker_order
 
     def cancel_bracket_order(self, client_order_id: str) -> None:
         """
