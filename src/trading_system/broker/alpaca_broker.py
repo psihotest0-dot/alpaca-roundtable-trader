@@ -10,6 +10,8 @@ from trading_system.config import Settings
 
 logger = logging.getLogger(__name__)
 
+_FILLS_PAGE_SIZE = 100
+
 
 class AlpacaBroker:
     def __init__(self, settings: Settings) -> None:
@@ -66,6 +68,25 @@ class AlpacaBroker:
             status=QueryOrderStatus.ALL, symbols=[symbol], nested=True, limit=limit
         )
         return self.client.get_orders(filter=req)
+
+    @retry_read_request()
+    def get_fills(self, after: datetime.datetime) -> list[dict[str, Any]]:
+        """The executions (fills) since `after`, oldest first, as Alpaca reports them:
+        dicts with id, order_id, price, qty, side, symbol, type and transaction_time.
+
+        alpaca-py has no method for GET /account/activities/FILL, hence the raw call."""
+        fills: list[dict[str, Any]] = []
+        params: dict[str, Any] = {
+            "after": after.astimezone(datetime.timezone.utc).isoformat(),
+            "direction": "asc",
+            "page_size": _FILLS_PAGE_SIZE,
+        }
+        while True:
+            page = self.client.get("/account/activities/FILL", params)
+            fills.extend(page)
+            if len(page) < _FILLS_PAGE_SIZE:
+                return fills
+            params["page_token"] = page[-1]["id"]
 
     @retry_read_request()
     def get_order_by_id(self, order_id: str) -> Any:

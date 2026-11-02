@@ -14,6 +14,7 @@ from typing import Optional, cast
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from ..domain.enums import OrderSide, OrderStatus, OrderType
 from ..domain.models import BrokerOrder, OrderIntent, StrategySignal, TradingState
 from .models import (
     BrokerOrderModel,
@@ -27,6 +28,14 @@ SessionFactory = sessionmaker[Session]
 
 # runtime_state is a singleton table: the one row has this id.
 _STATE_ROW_ID = 1
+
+# An order in one of these statuses will not change any more.
+_FINAL_STATUSES = (
+    OrderStatus.FILLED,
+    OrderStatus.CANCELED,
+    OrderStatus.REJECTED,
+    OrderStatus.EXPIRED,
+)
 
 
 class SignalRepository:
@@ -95,6 +104,33 @@ class OrderRepository:
         )
         with self._session_factory.begin() as session:
             session.merge(model)
+
+    def list_unsettled_orders(self) -> list[BrokerOrder]:
+        """Orders that may still change at the broker: every status but the final ones."""
+        with self._session_factory() as session:
+            rows = (
+                session.query(BrokerOrderModel)
+                .filter(BrokerOrderModel.status.notin_(_FINAL_STATUSES))
+                .order_by(BrokerOrderModel.created_at)
+                .all()
+            )
+            return [
+                BrokerOrder(
+                    client_order_id=cast(str, row.client_order_id),
+                    broker_id=cast(Optional[str], row.broker_id),
+                    symbol=cast(str, row.symbol),
+                    side=cast(OrderSide, row.side),
+                    type=cast(OrderType, row.type),
+                    status=cast(OrderStatus, row.status),
+                    quantity=cast(Decimal, row.quantity),
+                    filled_quantity=cast(Decimal, row.filled_quantity),
+                    limit_price=cast(Optional[Decimal], row.limit_price),
+                    stop_price=cast(Optional[Decimal], row.stop_price),
+                    created_at=cast(datetime, row.created_at),
+                    updated_at=cast(datetime, row.updated_at),
+                )
+                for row in rows
+            ]
 
     def save_fill(
         self,
