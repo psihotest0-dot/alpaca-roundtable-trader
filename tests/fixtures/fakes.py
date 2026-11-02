@@ -90,6 +90,7 @@ class FakeBroker:
         self.last_equity = last_equity
         self.market_open = market_open
         self.positions: list[Any] = []
+        self.positions_error: Exception | None = None
         self.open_orders: list[Any] = []
         self.submitted: list[SimpleNamespace] = []
         self.sent_requests: list[Any] = []  # the order requests, as the engine built them
@@ -111,10 +112,18 @@ class FakeBroker:
         )
 
     def get_positions(self) -> list[Any]:
+        if self.positions_error is not None:
+            raise self.positions_error
         return self.positions
 
     def get_open_orders(self) -> list[Any]:
         return self.open_orders
+
+    def get_fills(self, after: datetime) -> list[Any]:
+        return []
+
+    def get_recent_orders_for_symbol(self, symbol: str, limit: int = 50) -> list[Any]:
+        return []
 
     def get_asset(self, symbol: str) -> SimpleNamespace:
         return SimpleNamespace(symbol=symbol, tradable=True, price_increment=0.01)

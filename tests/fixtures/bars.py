@@ -10,22 +10,8 @@ from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from trading_system.strategy.config import StrategyConfig
+from trading_system.strategy.config import RUNTIME_STRATEGY
 from trading_system.strategy.trend import calculate_indicators
-
-# The strategy parameters runtime/orchestrator.py hard-codes today.
-RUNTIME_STRATEGY = StrategyConfig(
-    strategy_version="1.0.0",
-    fast_ema_period=12,
-    slow_ema_period=26,
-    rsi_period=14,
-    rsi_lower_bound=30,
-    rsi_upper_bound=70,
-    atr_period=14,
-    htf_fast_ema_period=12,
-    htf_slow_ema_period=26,
-    min_warmup_bars=51,
-)
 
 
 def _ohlcv(closes: np.ndarray, index: pd.DatetimeIndex) -> pd.DataFrame:
@@ -68,11 +54,11 @@ def cross_up_closes(seed: int = 1, min_bars: int = 120) -> np.ndarray:
 
 
 def make_bars(now: datetime | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(15m, 1h) frames indexed by UTC timestamp. The last 15m bar is the
-    cross-up bar and it closed 30 minutes before `now`, so it is the last
-    closed bar however close `now` is to a bar boundary. The 1h trend is up."""
+    """(15m, 1h) frames indexed by UTC timestamp. The last 15m bar is the cross-up bar and
+    it is the bar that closed at the latest 15-minute boundary, i.e. exactly the bar a run
+    at `now` is expected to see (runtime.schedule.expected_bar_start). The 1h trend is up."""
     now = now or datetime.now(timezone.utc)
-    last_15m_start = pd.Timestamp(now).floor("15min") - pd.Timedelta(minutes=30)
+    last_15m_start = pd.Timestamp(now).floor("15min") - pd.Timedelta(minutes=15)
 
     closes_15m = cross_up_closes()
     idx_15m = pd.date_range(end=last_15m_start, periods=len(closes_15m), freq="15min", tz="UTC")

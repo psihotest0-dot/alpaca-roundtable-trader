@@ -74,3 +74,20 @@ def test_generate_signals_accepts_bars_with_the_timestamp_only_as_index() -> Non
     signals = generate_signals({"AAPL": bars_15m}, {"AAPL": bars_1h}, RUNTIME_STRATEGY, now)
 
     assert [s.symbol for s in signals] == ["AAPL"]
+
+
+def test_a_signal_is_valid_for_the_bar_after_the_one_that_produced_it() -> None:
+    """Measured from the evaluation time the expiry slid forward with every run, so a signal
+    found late (a restart, slow data) looked fresh. Measured from its bar it is not."""
+    now = datetime.now(timezone.utc)
+    bars_15m, bars_1h = make_bars(now)
+    data = {"AAPL": bars_15m}, {"AAPL": bars_1h}
+
+    on_time = generate_signals(*data, RUNTIME_STRATEGY, now)[0]
+    late = generate_signals(*data, RUNTIME_STRATEGY, now + timedelta(minutes=20))[0]
+
+    bar_close = on_time.closed_bar_timestamp + timedelta(minutes=15)
+    assert on_time.expires_at == bar_close + timedelta(minutes=15)
+    assert on_time.expires_at > now
+    assert late.expires_at == on_time.expires_at  # the same bar, the same expiry ...
+    assert late.expires_at < now + timedelta(minutes=20)  # ... which has passed by then

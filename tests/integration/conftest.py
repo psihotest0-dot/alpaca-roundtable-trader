@@ -23,6 +23,7 @@ from trading_system.domain.enums import SignalDirection
 from trading_system.domain.models import AccountSnapshot, StrategySignal
 from trading_system.risk.engine import RiskEngine
 from trading_system.runtime.orchestrator import Orchestrator
+from trading_system.runtime.schedule import expected_bar_start
 from trading_system.storage.database import get_engine, get_session_factory
 from trading_system.storage.models import Base
 
@@ -86,16 +87,12 @@ def account() -> AccountSnapshot:
     )
 
 
-class StopLoop(Exception):
-    """Raised from time.sleep to end Orchestrator.run after one iteration."""
-
-
 @pytest.fixture
 def run_cycle(
     monkeypatch: pytest.MonkeyPatch, settings: Settings
 ) -> Callable[..., SimpleNamespace]:
-    """Run exactly one Orchestrator.run iteration against a fake Alpaca and a real SQLite
-    database, then return what happened.
+    """Run one TradingCycle (housekeeping, then the entry look-up for the newest bar) against
+    a fake Alpaca and a real SQLite database, then return what happened.
 
     The data layer is the real AlpacaData; only its network client is replaced, by one
     that answers in alpaca-py's real shape. Broker and data requests are both visible to
@@ -114,11 +111,16 @@ def run_cycle(
         live_age_seconds: float = 0.0,
         live_error: Exception | None = None,
         live_price_missing: bool = False,
+        positions: list[Any] | None = None,
+        positions_error: Exception | None = None,
     ) -> SimpleNamespace:
         """`live_price_factor`: the last trade as a multiple of the last bar close (1.0 =
         unchanged). The other live_* arguments make that trade old, missing or fail."""
-        bars_15m, bars_1h = make_bars()
+        now = datetime.now(timezone.utc)
+        bars_15m, bars_1h = make_bars(now)
         broker = FakeBroker(equity=equity, last_equity=last_equity)
+        broker.positions = positions or []
+        broker.positions_error = positions_error
         bar_close = float(bars_15m["close"].iloc[-1])
         live_price = round(bar_close * live_price_factor, 4)
         client = FakeStockClient(
@@ -139,20 +141,19 @@ def run_cycle(
             risk_prices.append(kwargs["current_price"])
             return result
 
-        def stop(_seconds: float) -> None:
-            raise StopLoop
-
+        # Retries back off for up to half a minute on a transient error; no test waits for that.
+        monkeypatch.setattr("time.sleep", lambda _seconds: None)
         monkeypatch.setattr(RiskEngine, "evaluate_signal", spy)
         monkeypatch.setattr("trading_system.broker.alpaca_broker.AlpacaBroker", lambda _s: broker)
         monkeypatch.setattr("trading_system.data.alpaca_data.AlpacaData", lambda _s: data)
-        monkeypatch.setattr("time.sleep", stop)
         orchestrator = Orchestrator(settings)
-        try:
-            orchestrator.run(is_paper)
-        except StopLoop:
-            pass
+        cycle = orchestrator.build_cycle(is_paper)
+        cycle.run_housekeeping(now)
+        report = cycle.run_entries(now, expected_bar_start(now))
         return SimpleNamespace(
             orchestrator=orchestrator,
+            cycle=cycle,
+            report=report,
             broker=broker,
             client=client,
             decisions=decisions,

@@ -7,7 +7,7 @@ stopped at its first sleep.
 
 from collections.abc import Callable
 from types import SimpleNamespace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -17,6 +17,7 @@ from trading_system.domain.enums import OrderStatus, OrderType
 from trading_system.domain.models import TradingState
 from trading_system.risk.daily_equity import trading_day
 from trading_system.risk.entry_plan import build_entry_plan
+from trading_system.runtime.schedule import expected_bar_start
 from trading_system.storage.models import BrokerOrderModel
 from trading_system.storage.repositories import StateRepository
 
@@ -176,3 +177,61 @@ def test_dry_run_cycle_persists_a_simulated_order(
         assert order.limit_price == decision.suggested_limit_price
         assert order.stop_price is not None and order.stop_price < order.limit_price
     assert cycle.broker.submitted == []
+
+
+def test_a_healthy_cycle_reports_its_signal_and_its_order(run_cycle: RunCycle) -> None:
+    report = run_cycle().report
+
+    assert (report.skipped, report.retry_later, report.signals, report.submitted) == (
+        None,
+        False,
+        1,
+        1,
+    )
+
+
+def test_a_halt_stops_entries_but_not_the_protection_checks(
+    run_cycle: RunCycle, session_factory: Any
+) -> None:
+    """1.7. The old loop `continue`d on a halt before it reached the checks, so once halted
+    nobody watched the positions that existed or cancelled a stale entry."""
+    state_repo = StateRepository(session_factory)
+    state_repo.save_state(TradingState(is_trading_halted=True, halt_reason="manual"))
+    position_without_a_stop = SimpleNamespace(symbol="MSFT", qty="10")
+
+    cycle = run_cycle(positions=[position_without_a_stop])
+
+    assert cycle.report.skipped == "halted" and cycle.decisions == []  # no entries ...
+    assert "MSFT" in (state_repo.get_state().halt_reason or "")  # ... but the check ran
+
+
+def test_bars_that_are_a_bar_behind_are_not_traded(run_cycle: RunCycle) -> None:
+    """Alpaca publishes a bar a little after it closes. Until then the newest bar is the one
+    before, and trading on it would act on a signal that was already handled."""
+    cycle = run_cycle()
+    first_decisions = len(cycle.decisions)
+    now = datetime.now(timezone.utc)
+
+    report = cycle.cycle.run_entries(now, expected_bar_start(now) + timedelta(minutes=15))
+
+    assert report.retry_later is True and report.skipped == "bar not available yet"
+    assert len(cycle.decisions) == first_decisions  # nothing new was evaluated
+
+
+def test_unreadable_positions_mean_no_entries_and_a_retry(run_cycle: RunCycle) -> None:
+    """The old code carried on with an empty set of held symbols (and, on the first call, an
+    undefined `positions`)."""
+    cycle = run_cycle(positions_error=ConnectionError("down"))
+
+    assert cycle.report.skipped == "positions unavailable" and cycle.report.retry_later is True
+    assert cycle.decisions == [] and cycle.broker.submitted == []
+
+
+def test_a_symbol_that_is_already_held_gets_no_second_entry(run_cycle: RunCycle) -> None:
+    held = SimpleNamespace(
+        symbol="AAPL", qty="10", market_value="1500", avg_entry_price="150", unrealized_pl="0"
+    )
+
+    cycle = run_cycle(positions=[held])
+
+    assert cycle.decisions == [] and cycle.report.signals == 0

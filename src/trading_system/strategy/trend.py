@@ -164,7 +164,10 @@ def generate_signals(
             timeframe="15m",
             closed_bar_timestamp=last_time,  # Storing open time of closed bar as convention or close time
             direction=SignalDirection.LONG,
-            expires_at=eval_timestamp + pd.Timedelta(minutes=15),
+            # Valid for the bar after the one that produced it. Measured from the evaluation
+            # time it could never expire, and a signal found late (restart, slow data) would
+            # have been treated as fresh.
+            expires_at=last_bar_close_time + pd.Timedelta(minutes=15),
             confidence=1.0,
         )
         signals.append(signal)
