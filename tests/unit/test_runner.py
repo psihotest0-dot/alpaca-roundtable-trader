@@ -32,6 +32,8 @@ class FakeWorld:
         self.waits: list[float] = []
         self.entries: list[tuple[datetime, datetime]] = []
         self.housekeeping: list[datetime] = []
+        self.revisits: list[datetime] = []
+        self.revisit_error: Exception | None = None
         self.entry_reports: list[EntriesReport | Exception] = []
 
     # broker
@@ -54,6 +56,12 @@ class FakeWorld:
         if isinstance(result, Exception):
             raise result
         return result
+
+    def revisit_held(self, now: datetime) -> int:
+        self.revisits.append(now)
+        if self.revisit_error:
+            raise self.revisit_error
+        return 0
 
     # runner hooks
     def wait(self, seconds: float) -> None:
@@ -227,3 +235,35 @@ def test_the_default_wait_waits_when_nobody_stops_it() -> None:
     runner._sleep_until_stopped(0.25)
 
     assert 0.2 <= time.monotonic() - started < 2
+
+
+def test_held_signals_are_asked_again_on_the_ticks_that_do_not_look_for_entries() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    runner = world.runner()
+
+    runner.tick()  # the entry look-up for this bar: it does the asking itself
+    assert world.revisits == []
+    runner.tick()
+    runner.tick()
+
+    assert len(world.revisits) == 2
+
+
+def test_a_failing_revisit_does_not_stop_the_runner() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    world.revisit_error = RuntimeError("oracle exploded")
+    runner = world.runner()
+
+    runner.tick()
+    runner.tick()
+    runner.tick()  # still ticking
+
+    assert len(world.revisits) == 2
+
+
+def test_nothing_is_revisited_while_the_market_is_closed() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY, market_open=False)
+
+    world.runner().tick()
+
+    assert world.revisits == []

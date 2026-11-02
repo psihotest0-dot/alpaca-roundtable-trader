@@ -1,7 +1,7 @@
 import math
-from typing import Optional
+from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,9 +12,7 @@ class Settings(BaseSettings):
     is_paper: bool = True
 
     oracle_enabled: bool = False
-    anythingllm_api_key: Optional[SecretStr] = None
-    anythingllm_base_url: str = "http://127.0.0.1:3001"
-    anythingllm_workspace_slug: Optional[str] = None
+    oracle_provider: Literal["null"] = "null"
     oracle_timeout_seconds: int = Field(10, gt=0)
 
     log_level: str = "INFO"
@@ -114,20 +112,3 @@ class Settings(BaseSettings):
                 seen.add(sym)
                 valid_symbols.append(sym)
         return ",".join(valid_symbols)
-
-    @model_validator(mode="after")
-    def check_oracle_settings(self) -> "Settings":
-        if self.oracle_enabled:
-            if not self.anythingllm_api_key or not self.anythingllm_api_key.get_secret_value():
-                raise ValueError("ANYTHINGLLM_API_KEY is required when Oracle is enabled.")
-            if not self.anythingllm_workspace_slug:
-                raise ValueError("ANYTHINGLLM_WORKSPACE_SLUG is required when Oracle is enabled.")
-
-        url = self.anythingllm_base_url.lower()
-        if self.oracle_enabled and not (
-            url.startswith("http://127.0.0.1") or url.startswith("http://localhost")
-        ):
-            if not url.startswith("https://"):
-                raise ValueError("Remote Oracle requires HTTPS (ANYTHINGLLM_BASE_URL).")
-
-        return self

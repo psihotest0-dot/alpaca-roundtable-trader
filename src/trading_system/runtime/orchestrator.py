@@ -39,7 +39,7 @@ class Orchestrator:
         from trading_system.broker.alpaca_broker import AlpacaBroker
         from trading_system.data.alpaca_data import AlpacaData
         from trading_system.execution.engine import ExecutionEngine
-        from trading_system.oracle.anythingllm import AnythingLLMAdapter
+        from trading_system.oracle import create_oracle
         from trading_system.risk.engine import RiskEngine
         from trading_system.storage.repositories import OrderRepository, SignalRepository
 
@@ -61,7 +61,7 @@ class Orchestrator:
             order_repo=order_repo,
             state_repo=self.state_repo,
             strategy_config=RUNTIME_STRATEGY,
-            oracle=AnythingLLMAdapter(self.settings) if self.settings.oracle_enabled else None,
+            oracle=create_oracle(self.settings),
         )
 
     def run(

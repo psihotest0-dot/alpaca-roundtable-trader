@@ -99,13 +99,21 @@ class Runner:
             self._wait(min(until_open, CLOSED_HEARTBEAT.total_seconds()))
             return
 
-        self._look_for_entries(now)
+        if not self._look_for_entries(now):
+            self._revisit_held(now)
         self._wait(self._seconds_until_next_event(self._now()))
 
-    def _look_for_entries(self, now: datetime) -> None:
+    def _revisit_held(self, now: datetime) -> None:
+        try:
+            self.cycle.revisit_held(now)
+        except Exception:
+            logger.exception("Re-examining held signals failed.")
+
+    def _look_for_entries(self, now: datetime) -> bool:
+        """True if the entry look-up ran on this tick (whatever its outcome)."""
         boundary = bar_boundary(now)
         if self._last_bar == boundary or now < boundary + ENTRY_DELAY:
-            return
+            return False
         try:
             report = self.cycle.run_entries(now, expected_bar_start(now))
             bar_ready = not report.retry_later
@@ -119,6 +127,7 @@ class Runner:
                 f"Giving up on the bar that closed at {boundary:%H:%M}: it never became available."
             )
             self._last_bar = boundary
+        return True
 
     def _seconds_until_next_event(self, now: datetime) -> float:
         boundary = bar_boundary(now)

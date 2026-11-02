@@ -35,9 +35,9 @@ REJECTED_SIGNALS = Counter(
     "rejected_signals_total", "Total number of rejected trading signals", ["reason"]
 )
 
-ORACLE_LATENCY_SECONDS = Gauge("oracle_latency_seconds", "Latency of AnythingLLM Oracle calls")
+ORACLE_LATENCY_SECONDS = Gauge("oracle_latency_seconds", "Latency of Oracle calls")
 
-ORACLE_ERRORS = Counter("oracle_errors_total", "Total number of AnythingLLM Oracle errors")
+ORACLE_ERRORS = Counter("oracle_errors_total", "Total number of Oracle errors")
 
 ORDER_FAILURES = Counter("order_failures_total", "Total number of failed broker orders")
 

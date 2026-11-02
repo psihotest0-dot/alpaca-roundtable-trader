@@ -8,6 +8,7 @@ test can run a step against fakes without a loop, a thread or a sleep.
 
 import logging
 from dataclasses import dataclass
+from enum import Enum
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any, Optional
@@ -16,13 +17,16 @@ import pandas as pd
 
 from trading_system.broker.order_mapping import to_broker_order
 from trading_system.data.live_price import UnusableLivePrice, check_live_price
+from trading_system.domain.enums import OracleVerdict
 from trading_system.domain.models import (
     AccountSnapshot,
     BrokerOrder,
+    OracleDecision,
     PositionSnapshot,
     StrategySignal,
     TradingState,
 )
+from trading_system.oracle.contract import OracleRequest
 from trading_system.risk.daily_equity import with_daily_start_equity
 from trading_system.runtime.reconciliation import reconcile_orders, record_fills
 from trading_system.strategy.config import StrategyConfig
@@ -42,6 +46,22 @@ class EntriesReport:
     retry_later: bool = False  # True: nothing was decided because of a gap that may close
     signals: int = 0
     submitted: int = 0
+    held: int = 0  # signals the Oracle asked to wait on; they are asked again each tick
+
+
+class Outcome(Enum):
+    """What became of one signal on one pass."""
+
+    ORDERED = "ordered"  # an order went to the broker
+    DROPPED = "dropped"  # final: vetoed, no usable price, rejected by risk, ...
+    HELD = "held"  # the Oracle said "not now": try again while the signal is valid
+
+
+@dataclass
+class HeldSignal:
+    signal: StrategySignal
+    bars: dict[str, pd.DataFrame]  # what the signal was generated from, for asking again
+    asked: int = 1
 
 
 def ensure_daily_start_equity(
@@ -102,6 +122,7 @@ class TradingCycle:
         self.strategy_config = strategy_config
         self.oracle = oracle
         self._fills_after: Optional[datetime] = None
+        self._held: dict[str, HeldSignal] = {}
 
     @property
     def watchlist(self) -> list[str]:
@@ -159,11 +180,46 @@ class TradingCycle:
         report = EntriesReport(signals=len(signals))
         for signal in signals:
             try:
-                if self._enter(signal, state, bars_15m, now):
-                    report.submitted += 1
+                outcome = self._enter(signal, state, bars_15m, now)
             except Exception as e:
                 logger.error(f"Error in risk evaluation / execution for {signal.symbol}: {e}")
+                continue
+            if outcome is Outcome.ORDERED:
+                report.submitted += 1
+            elif outcome is Outcome.HELD:
+                report.held += 1
+                self._held[signal.signal_id or ""] = HeldSignal(signal, bars_15m)
         return report
+
+    def revisit_held(self, now: datetime) -> int:
+        """Asks the Oracle again about every signal it told us to hold, while the signal is
+        still valid. Returns how many signals were ordered. Called on every tick of the runner
+        that did not look for new entries."""
+        if not self._held:
+            return 0
+        state = ensure_daily_start_equity(
+            self.broker, self.state_repo, self.state_repo.get_state(), now
+        )
+        if state.is_trading_halted:
+            return 0  # they stay held; a resumed system carries on with them if still valid
+        ordered = 0
+        for signal_id, held in list(self._held.items()):
+            signal = held.signal
+            if signal.expires_at is not None and signal.expires_at <= now:
+                logger.info(f"Held signal {signal.symbol} expired without an answer; dropped.")
+                del self._held[signal_id]
+                continue
+            held.asked += 1
+            try:
+                outcome = self._enter(signal, state, held.bars, now)
+            except Exception as e:
+                logger.error(f"Error re-examining held signal {signal.symbol}: {e}")
+                continue
+            if outcome is not Outcome.HELD:
+                del self._held[signal_id]
+            if outcome is Outcome.ORDERED:
+                ordered += 1
+        return ordered
 
     def _enter(
         self,
@@ -171,16 +227,20 @@ class TradingCycle:
         state: TradingState,
         bars_15m: dict[str, pd.DataFrame],
         now: datetime,
-    ) -> bool:
-        """One signal through Oracle, live price, risk and execution. True if an order went."""
+    ) -> Outcome:
+        """One signal through Oracle, live price, risk and execution."""
         logger.info(f"Processing signal: {signal.symbol} {signal.direction.value}")
         try:
             self.signal_repo.save_signal(signal)
         except Exception as e:
             logger.error(f"Failed to save signal: {e}")
 
-        if self.oracle and not self._oracle_approves(signal, bars_15m):
-            return False
+        if self.oracle:
+            verdict = self._ask_oracle(signal, bars_15m).verdict
+            if verdict is OracleVerdict.VETO:
+                return Outcome.DROPPED
+            if verdict is OracleVerdict.HOLD:
+                return Outcome.HELD
 
         # The entry is planned around the last trade. The bar close is up to 15 minutes old
         # and only serves as the yardstick for a bad print.
@@ -200,7 +260,7 @@ class TradingCycle:
             )
         except UnusableLivePrice as e:
             logger.warning(f"No entry for {signal.symbol}: {e}")
-            return False
+            return Outcome.DROPPED
         logger.info(f"Live price for {signal.symbol}: {price} (last bar close {bar_close})")
 
         logger.info("Evaluating risk...")
@@ -215,12 +275,19 @@ class TradingCycle:
         )
         logger.info(f"Risk decision: {decision.approved} ({decision.reasoning})")
         if not (decision.approved and intent):
-            return False
+            return Outcome.DROPPED
 
         logger.info(f"Executing order intent for {intent.symbol}...")
-        return self.execution.submit_order(intent) is not None
+        return (
+            Outcome.ORDERED if self.execution.submit_order(intent) is not None else Outcome.DROPPED
+        )
 
-    def _oracle_approves(self, signal: StrategySignal, bars_15m: dict[str, pd.DataFrame]) -> bool:
+    def _ask_oracle(
+        self, signal: StrategySignal, bars_15m: dict[str, pd.DataFrame]
+    ) -> OracleDecision:
+        """The Oracle's verdict on a signal. A provider is meant never to raise; if one does,
+        that is a HOLD marked as a failure, not a veto: an Oracle that could not answer has
+        said nothing about the signal."""
         logger.info("Querying Oracle...")
         technicals: dict[str, Any] = {}
         if signal.symbol in bars_15m:
@@ -230,11 +297,25 @@ class TradingCycle:
                 technicals[str(column)] = (
                     float(value) if isinstance(value, (int, float)) else str(value)
                 )
-        decision = self.oracle.evaluate_signal(
-            signal, technicals=technicals, rationale="Trend strategy signal generated."
+        request = OracleRequest(
+            signal=signal, technicals=technicals, rationale="Trend strategy signal generated."
         )
-        logger.info(f"Oracle decision: {decision.approved} ({decision.reasoning})")
-        return bool(decision.approved)
+        try:
+            decision: OracleDecision = self.oracle.evaluate(request)
+        except Exception as e:
+            decision = OracleDecision(
+                signal_id=signal.signal_id or "",
+                verdict=OracleVerdict.HOLD,
+                reason=f"The Oracle raised: {e}",
+                provider=getattr(self.oracle, "name", ""),
+                failed=True,
+            )
+        log = logger.warning if decision.failed else logger.info
+        log(
+            f"Oracle {decision.provider or '?'} on {signal.symbol}: {decision.verdict.value}"
+            f"{' (no answer)' if decision.failed else ''} - {decision.reason}"
+        )
+        return decision
 
     def _snapshot(
         self, now: datetime

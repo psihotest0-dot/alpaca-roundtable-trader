@@ -82,51 +82,13 @@ def test_secrets_leakage():
     assert "**********" in repr_str
 
 
-def test_oracle_constraints():
-    # Valid missing oracle
-    Settings(alpaca_api_key="k", alpaca_secret_key="s", oracle_enabled=False)
+def test_the_oracle_is_off_by_default_and_only_known_providers_are_accepted():
+    default = Settings(alpaca_api_key="k", alpaca_secret_key="s", _env_file=None)
+    assert default.oracle_enabled is False
+    assert default.oracle_provider == "null"
 
-    # Missing workspace slug when enabled
-    with pytest.raises(ValidationError, match="ANYTHINGLLM_WORKSPACE_SLUG is required"):
-        Settings(
-            alpaca_api_key="k",
-            alpaca_secret_key="s",
-            oracle_enabled=True,
-            anythingllm_api_key="llm_key",
-            anythingllm_workspace_slug=None,
-        )
-
-    # Missing api key when enabled
-    with pytest.raises(ValidationError, match="ANYTHINGLLM_API_KEY is required"):
-        Settings(
-            alpaca_api_key="k",
-            alpaca_secret_key="s",
-            oracle_enabled=True,
-            anythingllm_workspace_slug="slug",
-            anythingllm_api_key=None,
-        )
-
-    # Remote URL must be https
-    with pytest.raises(ValidationError, match="Remote Oracle requires HTTPS"):
-        Settings(
-            alpaca_api_key="k",
-            alpaca_secret_key="s",
-            oracle_enabled=True,
-            anythingllm_api_key="llm_key",
-            anythingllm_workspace_slug="slug",
-            anythingllm_base_url="http://remote-server:3001",
-        )
-
-    # Local URL can be http
-    s = Settings(
-        alpaca_api_key="k",
-        alpaca_secret_key="s",
-        oracle_enabled=True,
-        anythingllm_api_key="llm_key",
-        anythingllm_workspace_slug="slug",
-        anythingllm_base_url="http://127.0.0.1:3001",
-    )
-    assert s.anythingllm_base_url == "http://127.0.0.1:3001"
+    with pytest.raises(ValidationError):
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", oracle_provider="anythingllm")
 
 
 def test_watchlist_normalization_and_dedup():

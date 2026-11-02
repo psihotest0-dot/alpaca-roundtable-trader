@@ -113,6 +113,7 @@ def run_cycle(
         live_price_missing: bool = False,
         positions: list[Any] | None = None,
         positions_error: Exception | None = None,
+        oracle: Any = None,
     ) -> SimpleNamespace:
         """`live_price_factor`: the last trade as a multiple of the last bar close (1.0 =
         unchanged). The other live_* arguments make that trade old, missing or fail."""
@@ -148,6 +149,7 @@ def run_cycle(
         monkeypatch.setattr("trading_system.data.alpaca_data.AlpacaData", lambda _s: data)
         orchestrator = Orchestrator(settings)
         cycle = orchestrator.build_cycle(is_paper)
+        cycle.oracle = oracle
         cycle.run_housekeeping(now)
         report = cycle.run_entries(now, expected_bar_start(now))
         return SimpleNamespace(

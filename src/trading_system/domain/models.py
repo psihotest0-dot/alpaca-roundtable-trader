@@ -2,9 +2,9 @@ from decimal import Decimal
 from datetime import datetime, timezone
 from typing import Optional
 import hashlib
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
-from .enums import SignalDirection, OrderSide, OrderType, OrderStatus
+from .enums import SignalDirection, OrderSide, OrderType, OrderStatus, OracleVerdict
 
 
 def _now_utc() -> datetime:
@@ -45,10 +45,34 @@ class StrategySignal(BaseModel):
 
 
 class OracleDecision(BaseModel):
+    """What the Oracle said about one signal. It never proposes an order, a size or a price.
+
+    `confidence` and `reason` are for the record and for later analysis; nothing is decided
+    from them. `failed` marks "the Oracle did not answer" (timeout, unreadable output): that is
+    not an opinion, so it can only be a HOLD and it is never cached as a VETO (H1)."""
+
     signal_id: str
-    approved: bool
-    reasoning: str
+    verdict: OracleVerdict
+    reason: str = ""
+    confidence: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    provider: str = ""
+    failed: bool = False
     decision_timestamp: datetime = Field(default_factory=_now_utc)
+
+    @field_validator("reason")
+    @classmethod
+    def _short_reason(cls, value: str) -> str:
+        return value[:500]
+
+    @model_validator(mode="after")
+    def _failure_is_not_an_opinion(self) -> "OracleDecision":
+        if self.failed and self.verdict is not OracleVerdict.HOLD:
+            raise ValueError("A failed Oracle call can only be a HOLD.")
+        return self
+
+    @property
+    def approved(self) -> bool:
+        return self.verdict is OracleVerdict.APPROVE
 
 
 class RiskDecision(BaseModel):
