@@ -1,10 +1,54 @@
+name: alpaca-roundtable-trader
+
+# Two services, one image (alpaca-roundtable-trader:latest, built from ./Dockerfile) and one
+# named volume. Docker Desktop shows the `alpaca-trader-data` container under Containers and
+# the `alpaca_trader_var` volume under Volumes.
+#
+#   docker compose up -d data                                     start the data container
+#   docker compose exec data python -m trading_system status      look inside it
+#   docker compose run --rm app python -m trading_system --help   one-off command
+#
+# The keys are read from .env (git-ignored) by Compose itself; only the variables named below
+# reach the container, nothing else from .env does.
+
+x-alpaca-env: &alpaca-env
+  ALPACA_API_KEY: ${ALPACA_API_KEY:?Put ALPACA_API_KEY in .env}
+  ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:?Put ALPACA_SECRET_KEY in .env}
+  IS_PAPER: "true"
+  DATABASE_URL: sqlite:///./var/trading.db
+
 services:
-  app:
+  # The data container. On start it brings the database to the latest migration, then keeps the
+  # candle store (table market_bars: 15-minute and 1-hour bars of the watchlist, 180 days)
+  # up to date once an hour. An update takes a few seconds; the first run downloads everything
+  # (about a minute). Read-only calls to Alpaca: it never places an order.
+  data:
     build: .
-    # One name for the image whether it is built with `docker build -t` or `docker compose build`.
     image: alpaca-roundtable-trader:latest
+    container_name: alpaca-trader-data
+    restart: unless-stopped
+    environment: *alpaca-env
     volumes:
-      - .:/app
-    environment:
-      - DATABASE_URL=sqlite:///local.db
-    # No Chroma service: the news store is a local directory (CHROMA_DB_PATH), opened in-process.
+      - trading_var:/app/var
+    command:
+      - sh
+      - -c
+      - |
+        python -m alembic upgrade head || exit 1
+        while true; do
+          python -m trading_system fetch-history --days 180
+          sleep 3600
+        done
+
+  # For one-off commands against the same database (backtest, status, ...). Not started by
+  # `docker compose up`.
+  app:
+    image: alpaca-roundtable-trader:latest
+    profiles: ["tools"]
+    environment: *alpaca-env
+    volumes:
+      - trading_var:/app/var
+
+volumes:
+  trading_var:
+    name: alpaca_trader_var

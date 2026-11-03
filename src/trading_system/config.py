@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     max_open_positions: int = Field(5, gt=0)
     max_gross_exposure_pct: float = Field(0.20, ge=0.0, le=1.0)
     max_planned_risk_per_trade_pct: float = Field(0.002, ge=0.0, le=1.0)
-    max_total_planned_open_risk_pct: float = Field(0.01, ge=0.0, le=1.0)
+    max_total_planned_open_risk_pct: float = Field(0.05, ge=0.0, le=1.0)
     max_daily_loss_pct: float = Field(0.02, ge=0.0, le=1.0)
 
     stop_loss_pct: float = Field(0.04, ge=0.0, le=1.0)

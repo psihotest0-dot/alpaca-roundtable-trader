@@ -42,6 +42,14 @@ Or using Docker:
 docker compose run --rm app python -m trading_system --help
 ```
 
+The data container (`alpaca-trader-data`) keeps the candle store up to date inside a Docker volume (`alpaca_trader_var`), so the data can be seen in Docker Desktop. It needs `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` in `.env`:
+
+```bash
+docker build -t alpaca-roundtable-trader:latest .   # after code changes
+docker compose up -d data                            # start it (it brings the database to the latest migration first)
+docker compose exec data python -m trading_system backtest --days 30
+```
+
 ### Main CLI Commands
 
 - `validate-config`: Validates the `.env` settings offline.
