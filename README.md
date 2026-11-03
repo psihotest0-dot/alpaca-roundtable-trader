@@ -57,7 +57,8 @@ docker compose exec trader python -m trading_system backtest --days 30
 - `doctor`: Runs diagnostic checks (use `--network` for API validation).
 - `run`: Starts the trading loop in `--dry-run` mode (default). Use `--paper` to enable active broker orders.
 - `pause-entries`: Manual kill switch to halt new trades.
-- `resume-entries`: Removes the trading halt (requires manual reconciliation check).
+- `resume-entries`: Lifts the trading halt after looking at the account again (every position protected, every order accounted for); `--force` goes on over the problems.
+- `reconcile`: Compares the account with our records on demand and exits 1 if they disagree.
 - `status`: Displays current system status (halt state, equity).
 - `report`: What the system did on one New York trading day (`--date YYYY-MM-DD`, default today): passes, signals, risk decisions, orders, fills, equity, alerts.
 - `health`: Exit 0 if the trading loop is doing its job, 1 with the reasons if not (Docker's healthcheck runs it).

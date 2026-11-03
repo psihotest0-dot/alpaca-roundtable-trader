@@ -315,10 +315,7 @@ class ExecutionEngine:
         position alone, because it may not be ours (the paper account is shared with other
         tools) and a forced close is not something to do on a guess."""
         try:
-            positions = self.broker.get_positions()
-            open_orders = self.broker.get_open_orders()
-
-            unprotected = find_unprotected_positions(positions, open_orders, self._recent_orders_of)
+            unprotected = self.unprotected_positions()
             if not unprotected:
                 return
 
@@ -341,6 +338,18 @@ class ExecutionEngine:
                 self._emergency_close(gap)
         except Exception as e:
             logger.error(f"Failed during emergency check: {e}")
+
+    def unprotected_positions(
+        self, positions: Optional[list[Any]] = None, open_orders: Optional[list[Any]] = None
+    ) -> list["UnprotectedPosition"]:
+        """Positions without an active stop, as of now. Read-only: it halts nothing and closes
+        nothing (that is `emergency_check_unprotected_positions`). Raises if the broker cannot
+        be read. The lists can be passed in when the caller has them already."""
+        if positions is None:
+            positions = self.broker.get_positions()
+        if open_orders is None:
+            open_orders = self.broker.get_open_orders()
+        return find_unprotected_positions(positions, open_orders, self._recent_orders_of)
 
     def _recent_orders_of(self, symbol: str) -> list[Any]:
         """Where the stop of a filled bracket is found. A failed lookup leaves the position

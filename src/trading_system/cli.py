@@ -108,8 +108,22 @@ def create_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("pause-entries", help="Halts the trading system, preventing new entries.")
 
     # resume-entries command
+    resume_parser = subparsers.add_parser(
+        "resume-entries",
+        help="Lifts a halt after looking at the account again (positions protected, orders "
+        "accounted for).",
+    )
+    resume_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Resume even if the check finds problems (you have seen them and go on).",
+    )
+
+    # reconcile command
     subparsers.add_parser(
-        "resume-entries", help="Resumes the trading system, allowing new entries."
+        "reconcile",
+        help="Compares the account with our records (orders, positions, stops). Exit 0 if "
+        "they agree, 1 if not.",
     )
 
     # export-oracle-decisions command
@@ -386,15 +400,44 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Pause error: {e}")
             return 1
 
+    elif args.command == "reconcile":
+        print("Comparing the account with our records...")
+        try:
+            from trading_system.runtime.account_check import format_account_check
+            from trading_system.runtime.orchestrator import Orchestrator
+
+            settings = Settings()
+            check = Orchestrator(settings).reconcile_now()
+            print(format_account_check(check))
+            return 0 if check.ok else 1
+        except Exception as e:
+            print(f"Reconcile error: {e}")
+            return 1
+
     elif args.command == "resume-entries":
         print("Resuming entries...")
         try:
+            from trading_system.runtime.account_check import format_account_check
             from trading_system.runtime.orchestrator import Orchestrator
 
             settings = Settings()
             orchestrator = Orchestrator(settings)
-            orchestrator.resume_entries()
-            return 0
+            resumed, looked = orchestrator.resume_entries_checked(force=args.force)
+            if looked is None:
+                print("Entries are not halted; nothing to resume.")
+                return 0
+            print(format_account_check(looked))
+            if resumed:
+                print(
+                    "Entries resumed."
+                    + ("" if looked.ok else " (Forced: the problems above stand.)")
+                )
+                return 0
+            print(
+                "Entries stay halted. Put the problems right and run this again, or use "
+                "--force if you have seen them and want to go on."
+            )
+            return 1
         except Exception as e:
             print(f"Resume error: {e}")
             return 1

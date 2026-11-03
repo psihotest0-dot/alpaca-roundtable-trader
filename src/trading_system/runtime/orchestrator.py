@@ -10,6 +10,7 @@ from trading_system.config import Settings
 from trading_system.data.rss_pipeline import RSSIngestionPipeline
 from trading_system.domain.models import TradingState
 from trading_system.runtime.cycle import TradingCycle
+from trading_system.runtime.account_check import AccountCheck
 from trading_system.runtime.heartbeat import Heartbeat
 from trading_system.runtime.runner import Runner
 from trading_system.storage.database import get_engine, get_session_factory
@@ -178,6 +179,32 @@ class Orchestrator:
         logger.info(
             "System entries resumed successfully. NOTE: Ensure manual reconciliation was performed."
         )
+
+    def reconcile_now(self, is_paper: bool = False) -> "AccountCheck":
+        """Compares the account with our records once (see runtime/account_check.py)."""
+        from trading_system.runtime.account_check import check_account
+
+        cycle = self.build_cycle(is_paper)
+        return check_account(cycle.broker, cycle.execution, cycle.order_repo)
+
+    def resume_entries_checked(
+        self, *, force: bool = False
+    ) -> tuple[bool, Optional["AccountCheck"]]:
+        """Lifts a halt only after the account has been looked at again. Returns (resumed, the
+        check). Not halted: nothing to do, no check. Problems found: the halt stays, unless
+        `force` says the owner has seen them and goes on anyway."""
+        state = self.state_repo.get_state()
+        if state is None or not state.is_trading_halted:
+            logger.info("Entries are not halted; nothing to resume.")
+            return True, None
+        check = self.reconcile_now()
+        if check.ok or force:
+            if not check.ok:
+                logger.warning(f"Resuming despite: {'; '.join(check.problems)}")
+            self.resume_entries()
+            return True, check
+        logger.error(f"Not resuming: {'; '.join(check.problems)}")
+        return False, check
 
     def status(self) -> None:
         state = self.state_repo.get_state()

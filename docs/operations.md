@@ -29,8 +29,9 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 ### Pause / Resume (Kill Switch)
 - **Pause**: `poetry run python -m trading_system pause-entries`
   This acts as a manual kill switch. It stops any *new* entries from being submitted. Open positions are not automatically liquidated.
-- **Resume**: `poetry run python -m trading_system resume-entries`
-  *WARNING*: Before resuming, you MUST perform a manual reconciliation to ensure local state matches the broker.
+- **Resume**: `poetry run python -m trading_system resume-entries [--force]`
+  Looks at the account again before it lifts the halt: it refreshes the orders from the broker and checks that every position has an active stop and that no order we sent is unknown to the broker. If it finds a problem it lists it and the halt stays (exit 1). `--force` lifts the halt over the problems, for when you have seen them and decided to go on. If entries are not halted it does nothing.
+- **Reconcile**: `poetry run python -m trading_system reconcile` is that same look, on demand and on its own: it refreshes the orders, reports the positions and open orders and the problems, and exits 0 if the account agrees with our records, 1 if not. It trades nothing, halts nothing and closes nothing.
 - **Status**: `poetry run python -m trading_system status`
   Shows whether entries are halted and the daily loss baseline (start-of-day equity and the trading day it belongs to).
 
@@ -78,7 +79,7 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
      sqlite3 ./var/trading.db "PRAGMA integrity_check;"
      poetry run alembic upgrade head
      ```
-  5. Manually reconcile the broker state before allowing new entries.
+  5. Run `reconcile` and, if the entries are halted, `resume-entries`: both look at the broker again.
 
 ## Docker & Connectivity
 
