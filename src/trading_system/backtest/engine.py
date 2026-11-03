@@ -21,8 +21,10 @@ from trading_system.risk.daily_equity import day_marker, trading_day
 from trading_system.risk.engine import RiskEngine
 from trading_system.runtime.runner import ENTRY_DELAY
 from trading_system.runtime.schedule import BAR, is_regular_session
+from trading_system.strategy.base import BaseStrategy
 from trading_system.strategy.config import RUNTIME_STRATEGY
-from trading_system.strategy.trend import calculate_indicators, generate_signals, filter_signals
+from trading_system.strategy.trend import filter_signals
+from trading_system.strategy.trend_cross import TrendCrossStrategy
 from trading_system.backtest.models import (
     BacktestConfig,
     BacktestTrade,
@@ -34,10 +36,6 @@ logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
-# The prefilter below must never drop a signal the strategy would give, so it accepts a bar
-# whose indicators are this close (relative) to the line, and the strategy has the last word.
-_MARGIN = 1e-6
-
 
 class BacktestEngine:
     def __init__(
@@ -47,21 +45,24 @@ class BacktestEngine:
         df_15m: Dict[str, pd.DataFrame],
         df_1h: Dict[str, pd.DataFrame],
         prefilter: bool = True,
+        strategy: Optional[BaseStrategy] = None,
     ):
-        """`prefilter`: ask the strategy only about symbols whose last closed bar could be a
-        signal (an EMA cross-up with the RSI in its band, both read off indicators computed once
-        for the whole history). It gives the same signals as asking about every symbol at every
-        bar, because the strategy judges each symbol on its own, and it is many times faster.
-        Turn it off to get the slow, exhaustive behaviour (the tests compare the two)."""
+        """`strategy`: what produces the signals; by default the one the live loop runs.
+
+        `prefilter`: ask the strategy only about symbols whose last closed bar could be a
+        signal, according to the strategy's own hint (`candidate_bars`, read off indicators
+        computed once for the whole history). It gives the same signals as asking about every
+        symbol at every bar, because a strategy judges each symbol on its own, and it is many
+        times faster. Turn it off to get the slow, exhaustive behaviour (the tests compare)."""
         self.settings = settings
         self.bt_config = bt_config
 
         self.df_15m = df_15m
         self.df_1h = df_1h
 
-        # The parameters the live loop runs with, not a set of its own: a backtest of other
-        # parameters says nothing about the system that trades.
-        self.strategy_config = RUNTIME_STRATEGY
+        # By default the strategy and parameters the live loop runs with: a backtest of other
+        # ones says nothing about the system that trades (it is useful for comparing them).
+        self.strategy: BaseStrategy = strategy or TrendCrossStrategy(RUNTIME_STRATEGY)
 
         # The live system's risk engine, not a copy of it. It is told the time of the bar
         # being replayed (see _clock), so a signal from last month is judged by the same rules.
@@ -166,9 +167,9 @@ class BacktestEngine:
 
     def _look_for_entries(self, current_time: datetime) -> None:
         self._decision_time = current_time + ENTRY_DELAY
-        # `generate_signals` filters internally using the evaluation time: closed bars only.
+        # The strategy works on closed bars only, judged by the evaluation time.
         data_15m, data_1h = self._strategy_inputs(current_time)
-        signals = generate_signals(data_15m, data_1h, self.strategy_config, current_time)
+        signals = self.strategy.generate_signals(data_15m, data_1h, current_time)
         fresh = filter_signals(signals, set(self.positions.keys()))
         self.signals_seen += len(fresh)
         for sig in fresh:
@@ -185,29 +186,18 @@ class BacktestEngine:
         self._could_signal = {}
         if not self.prefilter:
             return
-        config = self.strategy_config
         for symbol, frame in self._bars_15m.items():
             if frame.empty:
                 continue
-            ind = calculate_indicators(frame, config, is_htf=False)
-            fast = ind["ema_fast"].to_numpy(dtype=float)
-            slow = ind["ema_slow"].to_numpy(dtype=float)
-            rsi = ind["rsi"].to_numpy(dtype=float)
-            margin = _MARGIN * np.abs(slow)
-            crossed = np.zeros(len(frame), dtype=bool)
-            crossed[1:] = (fast[:-1] <= slow[:-1] + margin[:-1]) & (
-                fast[1:] > slow[1:] - margin[1:]
-            )
-            in_band = (rsi >= config.rsi_lower_bound - _MARGIN) & (
-                rsi <= config.rsi_upper_bound + _MARGIN
-            )
-            self._could_signal[symbol] = crossed & in_band
+            flags = self.strategy.candidate_bars(frame, self._bars_1h.get(symbol))
+            if flags is not None:
+                self._could_signal[symbol] = flags
 
     def _may_signal(self, symbol: str, current_time: datetime) -> bool:
         """Whether the last bar closed by `current_time` could be a signal bar for `symbol`."""
         flags = self._could_signal.get(symbol)
         if flags is None:
-            return False
+            return True  # the strategy gave no hint for this symbol: ask
         position = self._bars_15m[symbol].index.searchsorted(current_time - BAR, side="right") - 1
         return position >= 1 and bool(flags[position])
 

@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, Engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy import event
 from typing import Any
@@ -19,7 +20,10 @@ SQLITE_BUSY_TIMEOUT_SECONDS = 30
 
 def get_engine(database_url: str) -> Engine:
     if "sqlite" in database_url:
-        engine = create_engine(database_url, connect_args={"timeout": SQLITE_BUSY_TIMEOUT_SECONDS})
+        connect_args: dict[str, Any] = {}
+        if "timeout" not in make_url(database_url).query:  # a wait set in the URL is the caller's
+            connect_args["timeout"] = SQLITE_BUSY_TIMEOUT_SECONDS
+        engine = create_engine(database_url, connect_args=connect_args)
         event.listen(engine, "connect", set_sqlite_pragma)
         return engine
     return create_engine(database_url)

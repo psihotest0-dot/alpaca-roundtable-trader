@@ -14,6 +14,7 @@ from trading_system.backtest.models import BacktestConfig, BacktestResult
 from trading_system.config import Settings
 from trading_system.risk.entry_plan import build_entry_plan
 from trading_system.strategy.config import RUNTIME_STRATEGY
+from trading_system.strategy.trend_cross import TrendCrossStrategy
 
 UTC = timezone.utc
 
@@ -46,10 +47,13 @@ def _run(
     return engine.run(), follow_index, frame
 
 
-def test_the_backtest_runs_the_parameters_of_the_live_loop(settings: Settings) -> None:
+def test_the_backtest_runs_the_strategy_of_the_live_loop_unless_told_otherwise(
+    settings: Settings,
+) -> None:
     engine = BacktestEngine(settings, BacktestConfig(), {}, {})
 
-    assert engine.strategy_config == RUNTIME_STRATEGY
+    assert isinstance(engine.strategy, TrendCrossStrategy)
+    assert engine.strategy.config == RUNTIME_STRATEGY
 
 
 # --- hours ---------------------------------------------------------------------------------
@@ -98,11 +102,11 @@ def test_signals_are_looked_for_only_at_bars_inside_the_session(
 ) -> None:
     asked: list[pd.Timestamp] = []
 
-    def spy(*args: Any, **kwargs: Any) -> list[Any]:
-        asked.append(pd.Timestamp(args[3]))
+    def spy(self: Any, data_15m: Any, data_1h: Any, eval_time: Any) -> list[Any]:
+        asked.append(pd.Timestamp(eval_time))
         return []
 
-    monkeypatch.setattr("trading_system.backtest.engine.generate_signals", spy)
+    monkeypatch.setattr(TrendCrossStrategy, "generate_signals", spy)
     index = pd.date_range(
         "2026-11-02 13:00", "2026-11-02 22:00", freq="15min", tz="UTC"
     )  # 8:00-17:00 ET

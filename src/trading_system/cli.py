@@ -49,6 +49,22 @@ def create_parser() -> argparse.ArgumentParser:
         type=str,
         help="Path to JSON file containing historical Oracle decisions.",
     )
+    backtest_parser.add_argument(
+        "--strategy",
+        default="trend_cross",
+        help="Which strategy to replay (default trend_cross, the one the live loop runs). "
+        "See compare-strategies for the choices.",
+    )
+
+    # compare-strategies command
+    compare_parser = subparsers.add_parser(
+        "compare-strategies",
+        help="Replays several strategies on the same stored candles and costs, side by side.",
+    )
+    compare_parser.add_argument("--days", type=int, default=90, help="Days of candles to replay.")
+    compare_parser.add_argument(
+        "--strategies", type=str, help="Comma-separated names. Default: all of them."
+    )
 
     # fetch-history command
     history_parser = subparsers.add_parser(
@@ -169,30 +185,23 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             settings = Settings()
             from trading_system.backtest.models import BacktestConfig
             from trading_system.backtest.engine import BacktestEngine
-            from trading_system.storage.database import get_engine, get_session_factory
-            from trading_system.storage.repositories import MarketBarRepository
-            from datetime import datetime, timezone, timedelta
+            from trading_system.backtest.loader import NoStoredCandles, load_candles
+            from trading_system.strategy.registry import get_strategy
 
-            symbols = [s.strip() for s in settings.watchlist.split(",") if s.strip()]
-            since = datetime.now(timezone.utc) - timedelta(days=args.days)
-            repo = MarketBarRepository(get_session_factory(get_engine(settings.database_url)))
-            df_15m = repo.load(symbols, "15m", start=since)
-            df_1h = repo.load(symbols, "1h", start=since)
-            symbols = [s for s in symbols if s in df_15m and s in df_1h]
-            if not symbols:
-                print(
-                    f"No stored candles for the watchlist in the last {args.days} days. "
-                    "Run `fetch-history` first."
-                )
+            try:
+                strategy = get_strategy(args.strategy)
+                df_15m, df_1h = load_candles(settings, args.days)
+            except (ValueError, NoStoredCandles) as e:
+                print(e)
                 return 1
-            df_15m = {s: df_15m[s] for s in symbols}
-            df_1h = {s: df_1h[s] for s in symbols}
+            symbols = list(df_15m)
             first = min(df["timestamp"].iloc[0] for df in df_15m.values())
             last = max(df["timestamp"].iloc[-1] for df in df_15m.values())
             print(f"Replaying {len(symbols)} symbols, {first:%Y-%m-%d} to {last:%Y-%m-%d}.")
 
             config = BacktestConfig(replay_oracle_path=args.replay_oracle)
-            engine = BacktestEngine(settings, config, df_15m, df_1h)
+            engine = BacktestEngine(settings, config, df_15m, df_1h, strategy=strategy)
+            print(f"Strategy: {strategy.name} ({strategy.version})")
 
             result = engine.run()
 
@@ -365,6 +374,62 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"Status error: {e}")
+            return 1
+
+    elif args.command == "compare-strategies":
+        print("Comparing strategies on the stored candles...")
+        try:
+            import os
+
+            os.environ["ALPACA_API_KEY"] = os.environ.get("ALPACA_API_KEY", "dummy")
+            os.environ["ALPACA_SECRET_KEY"] = os.environ.get("ALPACA_SECRET_KEY", "dummy")
+            settings = Settings()
+            from trading_system.backtest.comparison import compare_strategies, format_comparison
+            from trading_system.backtest.loader import NoStoredCandles, load_candles
+            from trading_system.backtest.models import BacktestConfig
+            from trading_system.strategy.registry import strategy_names
+
+            names = (
+                [n.strip() for n in args.strategies.split(",") if n.strip()]
+                if args.strategies
+                else strategy_names()
+            )
+            unknown = [n for n in names if n not in strategy_names()]
+            if unknown:
+                print(
+                    f"unknown strategy {', '.join(unknown)}; "
+                    f"the choices are: {', '.join(strategy_names())}"
+                )
+                return 1
+            try:
+                df_15m, df_1h = load_candles(settings, args.days)
+                config = BacktestConfig()
+                rows = compare_strategies(settings, config, df_15m, df_1h, names)
+            except (ValueError, NoStoredCandles) as e:
+                print(e)
+                return 1
+            first = min(df["timestamp"].iloc[0] for df in df_15m.values())
+            last = max(df["timestamp"].iloc[-1] for df in df_15m.values())
+            print(f"{len(df_15m)} symbols, {first:%Y-%m-%d} to {last:%Y-%m-%d}.\n")
+            print(format_comparison(rows))
+            print(
+                "\nSame data, same risk engine and entry plan, same costs "
+                f"(fee {config.fee_pct_per_trade * 100:.2f}%, "
+                f"slippage {config.slippage_pct * 100:.2f}% a side)."
+                "\nReturn, win rate and costs are for the whole replay; PF is the profit factor; "
+                "t is the average trade over its standard error (below 2 in absolute value the "
+                "average cannot be told from luck)."
+                "\nWith more signals than room (the risk engine's position limit) the symbols "
+                "first in the watchlist get the places: a signal count is not a trade count."
+                "\nA few dozen trades in one market regime cannot tell a good strategy from a "
+                "lucky one: read the differences with that in mind."
+            )
+            return 0
+        except ValidationError as e:
+            print(f"Configuration validation failed:\n{e}")
+            return 1
+        except Exception as e:
+            print(f"compare-strategies error: {e}")
             return 1
 
     elif args.command == "backup-db":

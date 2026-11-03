@@ -1,7 +1,7 @@
 """The backtest asks the strategy only about symbols that could signal, and shows it the live
 loop's window of history (Phase 3.3). Neither may change what is found."""
 
-from typing import Any
+from typing import Any, Callable, Optional
 
 import pandas as pd
 import pytest
@@ -10,6 +10,9 @@ from tests.fixtures.bars import random_walk_session_bars
 from trading_system.backtest.engine import BacktestEngine
 from trading_system.backtest.models import BacktestConfig, BacktestResult
 from trading_system.config import Settings
+from trading_system.strategy.base import BaseStrategy
+from trading_system.strategy.ema_crossover import EmaCrossoverConfig, EmaCrossoverStrategy
+from trading_system.strategy.trend_cross import TrendCrossStrategy
 
 # Five symbols, three weeks of sessions: enough crossings and uptrends for the strategy to fire.
 SYMBOLS = {"AAA": (11, 0.0004), "BBB": (12, 0.0002), "CCC": (13, 0.0), "DDD": (14, 0.0003)}
@@ -28,18 +31,43 @@ def _frames(days: int = 18) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataF
     return {s: p[0] for s, p in pairs.items()}, {s: p[1] for s, p in pairs.items()}
 
 
-def _run(settings: Settings, prefilter: bool) -> BacktestResult:
+def _run(
+    settings: Settings, prefilter: bool, strategy: Optional[BaseStrategy] = None
+) -> BacktestResult:
     frames_15m, frames_1h = _frames()
     return BacktestEngine(
-        settings, BacktestConfig(), frames_15m, frames_1h, prefilter=prefilter
+        settings, BacktestConfig(), frames_15m, frames_1h, prefilter=prefilter, strategy=strategy
     ).run()
 
 
+def _crossover(volume_window: Optional[int]) -> BaseStrategy:
+    """The ported strategies with windows short enough for three weeks of test data (the
+    originals need 200 hourly bars for their EMA 200) and a wide pullback band, so they fire."""
+    return EmaCrossoverStrategy(
+        EmaCrossoverConfig(
+            strategy_version="test",
+            short_window=5,
+            long_window=12,
+            pullback_pct=0.02,
+            htf_ema_period=20,
+            volume_window=volume_window,
+        )
+    )
+
+
+STRATEGIES: dict[str, Callable[[], Optional[BaseStrategy]]] = {
+    "trend_cross": lambda: None,  # the default: what the live loop runs
+    "ema_crossover": lambda: _crossover(None),
+    "strict_ema_crossover": lambda: _crossover(10),
+}
+
+
+@pytest.mark.parametrize("which", STRATEGIES)
 def test_asking_only_about_possible_signals_finds_exactly_what_asking_about_all_finds(
-    settings: Settings,
+    settings: Settings, which: str
 ) -> None:
-    fast = _run(settings, prefilter=True)
-    exhaustive = _run(settings, prefilter=False)
+    fast = _run(settings, prefilter=True, strategy=STRATEGIES[which]())
+    exhaustive = _run(settings, prefilter=False, strategy=STRATEGIES[which]())
 
     assert exhaustive.signals >= 3, "the data has to give the strategy something to find"
     assert exhaustive.trade_count >= 2
@@ -60,11 +88,11 @@ def test_the_prefilter_asks_about_fewer_symbols(
 ) -> None:
     asked: list[int] = []
 
-    def count(data_15m: dict[str, Any], *args: Any, **kwargs: Any) -> list[Any]:
+    def count(self: Any, data_15m: dict[str, Any], *args: Any, **kwargs: Any) -> list[Any]:
         asked.append(len(data_15m))
         return []
 
-    monkeypatch.setattr("trading_system.backtest.engine.generate_signals", count)
+    monkeypatch.setattr(TrendCrossStrategy, "generate_signals", count)
     frames_15m, frames_1h = _frames()
 
     BacktestEngine(settings, BacktestConfig(), frames_15m, frames_1h, prefilter=True).run()
@@ -80,12 +108,12 @@ def test_the_strategy_sees_the_live_window_and_nothing_from_the_future(
 ) -> None:
     seen: list[tuple[pd.Timestamp, pd.DataFrame, pd.DataFrame]] = []
 
-    def spy(data_15m: dict[str, Any], data_1h: dict[str, Any], config: Any, when: Any) -> list[Any]:
+    def spy(self: Any, data_15m: dict[str, Any], data_1h: dict[str, Any], when: Any) -> list[Any]:
         for symbol in data_15m:
             seen.append((pd.Timestamp(when), data_15m[symbol], data_1h[symbol]))
         return []
 
-    monkeypatch.setattr("trading_system.backtest.engine.generate_signals", spy)
+    monkeypatch.setattr(TrendCrossStrategy, "generate_signals", spy)
     frames_15m, frames_1h = _frames(days=40)  # longer than the 30-day window of the 15m bars
 
     BacktestEngine(settings, BacktestConfig(), frames_15m, frames_1h, prefilter=False).run()

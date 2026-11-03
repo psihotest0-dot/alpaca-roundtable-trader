@@ -61,7 +61,8 @@ docker compose exec trader python -m trading_system backtest --days 30
 - `status`: Displays current system status (halt state, equity).
 - `backup-db`: Writes a checked, compressed copy of the database to a folder (`--out`, default `var/backups`) and keeps the newest `--keep` (default 28). The `backup` container runs it every 6 hours.
 - `fetch-history`: Downloads candles from Alpaca into the database (`--days`, default 180). The first run takes about a minute; later runs only fetch what is missing.
-- `backtest`: Replays the stored candles through the strategy (`--days`, default 60). Run `fetch-history` first. Entries go through the live system's `RiskEngine` and entry plan; the report lists the assumptions that remain and which signals did not become a trade, and why.
+- `compare-strategies`: Replays several strategies (`--strategies a,b`, default all) on the same stored candles, risk engine, entry plan and costs, and prints them side by side with the t-statistic of the average trade (`--days`, default 90). The choices: `trend_cross` (what the live loop runs), `ema_crossover` and `strict_ema_crossover` (the two strategies of the original Money_bot) and their `_5pct` variants (pullback distance widened to 5 %).
+- `backtest`: Replays the stored candles through one strategy (`--strategy NAME`, default `trend_cross`; `--days`, default 60). Run `fetch-history` first. Entries go through the live system's `RiskEngine` and entry plan; the report lists the assumptions that remain and which signals did not become a trade, and why.
 
 For detailed command behaviors, refer to `docs/operations.md`.
 

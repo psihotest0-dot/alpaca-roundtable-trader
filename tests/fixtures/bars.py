@@ -138,7 +138,7 @@ def random_walk_session_bars(
             "high": np.maximum(opens, closes) * 1.001,
             "low": np.minimum(opens, closes) * 0.999,
             "close": closes,
-            "volume": 1000.0,
+            "volume": rng.uniform(300.0, 1700.0, len(index)),
         },
         index=index,
     )
