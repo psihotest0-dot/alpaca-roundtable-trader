@@ -189,12 +189,18 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Final Capital:   ${result.final_capital:,.2f}")
             print(f"Total Return:    {result.total_return_pct * 100:.2f}%")
             print(f"Max Drawdown:    {result.max_drawdown_pct * 100:.2f}%")
+            print(f"Signals:         {result.signals}")
             print(f"Trade Count:     {result.trade_count}")
             print(f"Win Rate:        {result.win_rate * 100:.2f}%")
             print(f"Profit Factor:   {result.profit_factor:.2f}")
             print(f"Max Exposure:    {result.max_exposure_pct * 100:.2f}%")
             print(f"Fees Paid:       ${result.total_fees:,.2f}")
             print(f"Slippage Paid:   ${result.total_slippage:,.2f}")
+
+            if result.not_traded:
+                print("\n=== Signals that did not become a trade ===")
+                for reason, count in sorted(result.not_traded.items(), key=lambda kv: -kv[1]):
+                    print(f"- {reason}: {count}")
 
             print("\n=== Assumptions & Limitations ===")
             for a in result.assumptions_and_limitations:

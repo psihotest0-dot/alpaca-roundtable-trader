@@ -1,6 +1,7 @@
+from datetime import datetime
 from decimal import Decimal
 import math
-from typing import Optional, Tuple
+from typing import Callable, Optional, Tuple
 
 from trading_system.config import Settings
 from trading_system.domain.enums import SignalDirection, OrderSide, OrderType
@@ -19,8 +20,12 @@ from trading_system.domain.models import (
 
 
 class RiskEngine:
-    def __init__(self, settings: Settings):
+    def __init__(self, settings: Settings, clock: Callable[[], datetime] = _now_utc):
+        """`clock` says what time it is for the signal-expiry and trading-day checks. The live
+        system leaves the default (the real time); the backtest passes the time of the bar it
+        is replaying, so that the same rules judge a signal from last month."""
         self.settings = settings
+        self._clock = clock
 
     def evaluate_signal(
         self,
@@ -31,7 +36,7 @@ class RiskEngine:
         current_price: Decimal,
         state: TradingState,
     ) -> Tuple[RiskDecision, Optional[OrderIntent]]:
-        now = _now_utc()
+        now = self._clock()
 
         # 1. State and Snapshot validations
         if state.is_trading_halted:

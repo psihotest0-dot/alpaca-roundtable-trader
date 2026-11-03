@@ -1,6 +1,6 @@
 from decimal import Decimal
 from datetime import datetime
-from typing import Optional, List
+from typing import Dict, Optional, List
 from pydantic import BaseModel, Field
 
 from trading_system.domain.enums import OrderSide
@@ -18,7 +18,6 @@ class BacktestConfig(BaseModel):
         default=0.0005,
         description="Slippage percentage applied to execution price (e.g. 0.0005 for 5 bps).",
     )
-    allow_fractional: bool = False
     replay_oracle_path: Optional[str] = None
 
 
@@ -42,6 +41,7 @@ class BacktestPosition(BaseModel):
     quantity: Decimal
     average_entry_price: Decimal
     entry_time: datetime
+    entry_fee: Decimal = Decimal("0.0")
     stop_loss: Optional[Decimal] = None
     take_profit: Optional[Decimal] = None
 
@@ -58,6 +58,10 @@ class BacktestResult(BaseModel):
     total_slippage: Decimal
     max_exposure_pct: float
     trades: List[BacktestTrade] = Field(default_factory=list)
+    # Signals the strategy produced for symbols without a position, and what happened to the
+    # ones that did not become a trade (the risk engine's own reason, or why no price).
+    signals: int = 0
+    not_traded: Dict[str, int] = Field(default_factory=dict)
 
     assumptions_and_limitations: List[str] = Field(
         default_factory=lambda: [
@@ -66,8 +70,10 @@ class BacktestResult(BaseModel):
             "Conservative intrabar collision: assumed stop-loss hit first if both SL and TP triggered in same bar.",
             "Data assumption: candles are the ones stored by `fetch-history`, adjusted for splits and dividends on the same basis as the live loop.",
             "Strategy parameters are the live loop's (RUNTIME_STRATEGY) and entries are looked for only in the regular session. Pre- and after-market bars are still in the indicators.",
-            "Entry timing differs from the live system: the backtest places a limit at the signal bar's close and checks it from the bar after next; the live system sends a marketable limit (live price + ENTRY_LIMIT_BUFFER_PCT) that fills at once. Results are not comparable with live fills yet (Phase 3.1).",
-            "Not the live system yet: position sizing, exposure limits and the entry plan are a simplified copy of the RiskEngine (Phase 3.1).",
+            "Entries follow the live loop: the signal comes from the bar that just closed, the decision is taken ENTRY_DELAY (30 s) after the close, the price is the first print of the next bar (it has to pass the same freshness and 5 % distance check as the live price), and the entry plan, sizing and every limit come from the real RiskEngine (limit = price + ENTRY_LIMIT_BUFFER_PCT, stop and target measured from the limit). The order fills at once at price + slippage, never above the limit.",
+            "The stop and the target of a new position are checked from the bar it enters in, over the whole bar (including the first 30 s before the entry).",
+            "Account as the risk engine sees it: equity is cash plus positions marked at the last closed bar; buying power is the cash (no margin); the daily loss baseline is the equity at the end of the previous New York day. The pattern day trader rule is not modelled (Phase 4). An entry order that does not fill at once (the price runs away from the limit) is not modelled.",
+            "Fees are counted at entry and at exit; slippage is part of the fill price and is not yet reported on its own (Phase 3.3).",
             "Survivorship bias: Uses a fixed watchlist, ignoring delistings or index changes over the historical period.",
             "Results do not guarantee or promise future profitability.",
         ]

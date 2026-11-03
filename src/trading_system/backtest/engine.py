@@ -1,14 +1,24 @@
 import pandas as pd
-from typing import Dict, List
+from collections import Counter
+from typing import Dict, List, Optional
 from decimal import Decimal
 import logging
-from datetime import datetime
+from datetime import date, datetime, timezone
 import json
 
 from trading_system.config import Settings
+from trading_system.data.live_price import LivePrice, UnusableLivePrice, check_live_price
 from trading_system.domain.enums import OrderSide
-from trading_system.domain.models import StrategySignal
-from trading_system.runtime.schedule import is_regular_session
+from trading_system.domain.models import (
+    AccountSnapshot,
+    PositionSnapshot,
+    StrategySignal,
+    TradingState,
+)
+from trading_system.risk.daily_equity import day_marker, trading_day
+from trading_system.risk.engine import RiskEngine
+from trading_system.runtime.runner import ENTRY_DELAY
+from trading_system.runtime.schedule import BAR, is_regular_session
 from trading_system.strategy.config import RUNTIME_STRATEGY
 from trading_system.strategy.trend import generate_signals, filter_signals
 from trading_system.backtest.models import (
@@ -19,6 +29,8 @@ from trading_system.backtest.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 class BacktestEngine:
@@ -39,19 +51,34 @@ class BacktestEngine:
         # parameters says nothing about the system that trades.
         self.strategy_config = RUNTIME_STRATEGY
 
+        # The live system's risk engine, not a copy of it. It is told the time of the bar
+        # being replayed (see _clock), so a signal from last month is judged by the same rules.
+        self._decision_time: datetime = _EPOCH
+        self.risk_engine = RiskEngine(settings, clock=self._clock)
+
         self.cash = bt_config.initial_capital
         self.positions: Dict[str, BacktestPosition] = {}
         self.trades: List[BacktestTrade] = []
-        self.pending_orders: Dict[str, StrategySignal] = {}
 
         self.equity_curve: List[float] = []
         self.max_equity = float(self.cash)
         self.max_drawdown = 0.0
         self.peak_exposure = 0.0
 
+        # The daily loss guard measures from the equity at the end of the previous New York day.
+        self._last_equity: Decimal = bt_config.initial_capital
+        self._day: Optional[date] = None
+        self._day_start_equity: Decimal = bt_config.initial_capital
+
+        self.signals_seen = 0
+        self.not_traded: Counter[str] = Counter()
+
         self.oracle_decisions: Dict[str, bool] = {}
         if bt_config.replay_oracle_path:
             self._load_replay_oracle(bt_config.replay_oracle_path)
+
+    def _clock(self) -> datetime:
+        return self._decision_time
 
     def _load_replay_oracle(self, path: str) -> None:
         try:
@@ -77,20 +104,24 @@ class BacktestEngine:
         sorted_timestamps = sorted(list(all_timestamps))
 
         for current_time in sorted_timestamps:
-            # Reconstruct point-in-time view (No look-ahead)
-            # A 15m bar starting at T closes at T + 15m.
-            # We process at the START of the current_time bar. This means the PREVIOUS bar is now closed.
-            # To evaluate signals generated on the PREVIOUS closed bar, we pass the current_time as the eval_time.
-            eval_time = current_time
+            # A bar starting at T closes at T + 15m. At T the bar before it has just closed,
+            # and that is when the live loop looks at it (ENTRY_DELAY after the close).
+            self._start_day_if_new(current_time)
 
-            # 1. Update existing positions (check stops/targets on the incoming bar)
+            # 1. Decide on the signals of the bar that just closed. This comes before the
+            #    stops of the new bar are looked at: the decision is taken at the start of
+            #    the bar, with the positions and cash as they were then.
+            #    The live loop looks for entries only while the market is open, so the
+            #    backtest does too (stops below are still checked on every bar).
+            if is_regular_session(current_time):
+                self._look_for_entries(current_time)
+
+            # 2. Stops and targets on the new bar, new positions included.
             self._process_bar_executions(current_time)
 
-            # 2. Check pending limit orders against the incoming bar
-            self._process_pending_orders(current_time)
-
-            # Record Equity Curve
+            # 3. Record the equity at the end of the bar.
             total_equity = self._calculate_equity(current_time)
+            self._last_equity = total_equity
             self.equity_curve.append(float(total_equity))
             if total_equity > self.max_equity:
                 self.max_equity = float(total_equity)
@@ -104,27 +135,25 @@ class BacktestEngine:
             if exposure_pct > self.peak_exposure:
                 self.peak_exposure = exposure_pct
 
-            # 3. Generate new signals based on data closed *before* eval_time
-            # We provide the full dataframes but `generate_signals` filters internally using eval_time.
-            # The live loop looks for entries only while the market is open, so the backtest does too
-            # (stops and fills above are still checked on every bar).
-            if not is_regular_session(current_time):
-                self._expire_orders(current_time)
-                continue
-            signals = generate_signals(self.df_15m, self.df_1h, self.strategy_config, eval_time)
-
-            # Active symbols: positions + pending orders
-            active_symbols = set(self.positions.keys()).union(set(self.pending_orders.keys()))
-            filtered_signals = filter_signals(signals, active_symbols)
-
-            for sig in filtered_signals:
-                if self._apply_oracle(sig):
-                    self._apply_risk_and_queue(sig, total_equity, current_time)
-
-            # Expire bounded entry orders
-            self._expire_orders(current_time)
-
         return self._generate_report()
+
+    def _start_day_if_new(self, current_time: datetime) -> None:
+        day = trading_day(current_time)
+        if day != self._day:
+            self._day = day
+            self._day_start_equity = self._last_equity
+
+    def _look_for_entries(self, current_time: datetime) -> None:
+        self._decision_time = current_time + ENTRY_DELAY
+        # `generate_signals` filters internally using the evaluation time: closed bars only.
+        signals = generate_signals(self.df_15m, self.df_1h, self.strategy_config, current_time)
+        fresh = filter_signals(signals, set(self.positions.keys()))
+        self.signals_seen += len(fresh)
+        for sig in fresh:
+            if not self._apply_oracle(sig):
+                self.not_traded["Oracle: no approval"] += 1
+                continue
+            self._enter(sig, current_time)
 
     def _apply_oracle(self, sig: StrategySignal) -> bool:
         if not self.settings.oracle_enabled:
@@ -133,117 +162,118 @@ class BacktestEngine:
             return self.oracle_decisions[sig.signal_id]
         return False  # Abstain / default veto if not found in replay
 
-    def _apply_risk_and_queue(
-        self, sig: StrategySignal, equity: Decimal, eval_time: datetime
-    ) -> None:
-        # Determine current price for risk logic using the closed bar
-        df = self.df_15m.get(sig.symbol)
+    def _bars_before(self, symbol: str, moment: datetime) -> Optional[pd.DataFrame]:
+        """The bars of `symbol` that had closed by `moment`, or None if there are none."""
+        df = self.df_15m.get(symbol)
         if df is None or df.empty:
-            return
+            return None
+        closed = df[df["timestamp"] + BAR <= moment]
+        return None if closed.empty else closed
 
-        closed_bars = df[df["timestamp"] + pd.Timedelta(minutes=15) <= eval_time]
-        if closed_bars.empty:
-            return
-
-        last_close = Decimal(str(closed_bars.iloc[-1]["close"]))
-
-        # Calculate risk based on config percentages
-        risk_per_trade = equity * Decimal(str(self.settings.max_planned_risk_per_trade_pct))
-        stop_dist = last_close * Decimal(str(self.settings.stop_loss_pct))
-        if stop_dist == 0:
-            return
-
-        shares = risk_per_trade / stop_dist
-        if not self.bt_config.allow_fractional:
-            shares = Decimal(int(shares))
-
-        position_size = shares * last_close
-        max_size = equity * Decimal(str(self.settings.position_size_pct))
-
-        if position_size > max_size:
-            shares = max_size / last_close
-            if not self.bt_config.allow_fractional:
-                shares = Decimal(int(shares))
-
-        if shares <= 0:
-            return
-
-        required_cash = shares * last_close
-        if self.cash >= required_cash:
-            # We strictly enforce 1 active entry per symbol. filter_signals handles this, but double check.
-            if sig.symbol not in self.positions and sig.symbol not in self.pending_orders:
-                self.pending_orders[sig.symbol] = sig
-                # In Backtest we just track it. The actual limit entry price is usually the close of the signal bar.
-                sig._suggested_limit = last_close
-                sig._suggested_shares = shares
-
-    def _process_pending_orders(self, current_time: datetime) -> None:
-        # Pending orders are assumed to be limit orders placed at the close of the signal bar.
-        # If the low of the *current* bar is <= limit price, we get filled.
-        filled = []
-        for sym, sig in self.pending_orders.items():
-            df = self.df_15m.get(sym)
-            if df is None:
-                continue
-
-            bar = df[df["timestamp"] == current_time]
-            if bar.empty:
-                continue
-            bar = bar.iloc[0]
-
-            low = Decimal(str(bar["low"]))
-            open_px = Decimal(str(bar["open"]))
-            limit_px = getattr(sig, "_suggested_limit", Decimal("0"))
-            shares = getattr(sig, "_suggested_shares", Decimal("0"))
-
-            if limit_px > 0 and low <= limit_px:
-                # Gap down below limit? We get filled at open if open < limit, else limit.
-                fill_price = open_px if open_px < limit_px else limit_px
-
-                # Apply slippage (we buy slightly higher)
-                fill_price = fill_price * (Decimal("1") + Decimal(str(self.bt_config.slippage_pct)))
-
-                # Calculate fees
-                notional = shares * fill_price
-                fee = self.bt_config.fee_per_trade + (
-                    notional * Decimal(str(self.bt_config.fee_pct_per_trade))
+    def _account_at(self, current_time: datetime) -> tuple[AccountSnapshot, list[PositionSnapshot]]:
+        """The account as the risk engine sees it at the decision: positions marked at the last
+        closed bar (what was known then, not the close of the bar being replayed)."""
+        equity = self.cash
+        snapshots: list[PositionSnapshot] = []
+        for sym, pos in self.positions.items():
+            closed = self._bars_before(sym, current_time)
+            mark = (
+                Decimal(str(closed.iloc[-1]["close"]))
+                if closed is not None
+                else pos.average_entry_price
+            )
+            value = pos.quantity * mark
+            equity += value
+            snapshots.append(
+                PositionSnapshot(
+                    symbol=sym,
+                    quantity=pos.quantity,
+                    market_value=value,
+                    average_entry_price=pos.average_entry_price,
+                    unrealized_pl=value - pos.quantity * pos.average_entry_price,
                 )
+            )
+        account = AccountSnapshot(
+            equity=equity,
+            cash=self.cash,
+            buying_power=self.cash,  # no margin
+            day_trade_count=0,  # the day trader rule is Phase 4
+            updated_at=self._decision_time,
+        )
+        return account, snapshots
 
-                total_cost = notional + fee
-                if self.cash >= total_cost:
-                    self.cash -= total_cost
+    def _enter(self, sig: StrategySignal, current_time: datetime) -> None:
+        """One signal through the live price check, the real risk engine, and a fill."""
+        closed = self._bars_before(sig.symbol, current_time)
+        df = self.df_15m.get(sig.symbol)
+        starting = df[df["timestamp"] == current_time] if df is not None else None
+        if closed is None or starting is None or starting.empty:
+            # No print after the signal bar: the live system would have no fresh price either.
+            self.not_traded["No bar after the signal bar"] += 1
+            return
 
-                    stop_loss = fill_price * (
-                        Decimal("1") - Decimal(str(self.settings.stop_loss_pct))
-                    )
-                    take_profit = fill_price * (
-                        Decimal("1") + Decimal(str(self.settings.take_profit_pct))
-                    )
+        reference_close = Decimal(str(closed.iloc[-1]["close"]))
+        first_print = Decimal(str(starting.iloc[0]["open"]))
+        try:
+            price = check_live_price(
+                LivePrice(first_print, current_time),
+                reference_close=reference_close,
+                now=self._decision_time,
+                max_age_seconds=self.settings.live_price_max_age_seconds,
+                max_deviation_pct=Decimal(str(self.settings.live_price_max_deviation_pct)),
+            )
+        except UnusableLivePrice:
+            self.not_traded["No usable price"] += 1
+            return
 
-                    self.positions[sym] = BacktestPosition(
-                        symbol=sym,
-                        quantity=shares,
-                        average_entry_price=fill_price,
-                        entry_time=current_time,  # Actually it's the timestamp of this bar
-                        stop_loss=stop_loss,
-                        take_profit=take_profit,
-                    )
+        account, positions = self._account_at(current_time)
+        state = TradingState(
+            daily_start_equity=self._day_start_equity,
+            daily_equity_date=day_marker(trading_day(current_time)),
+        )
+        decision, intent = self.risk_engine.evaluate_signal(
+            signal=sig,
+            account=account,
+            positions=positions,
+            active_orders=[],  # an entry fills at once here, so none is ever waiting
+            current_price=price,
+            state=state,
+        )
+        if not (decision.approved and intent):
+            self.not_traded[f"Risk: {decision.reasoning.split(':')[0]}"] += 1
+            return
+        if (
+            intent.limit_price is None
+            or intent.stop_price is None
+            or intent.take_profit_price is None
+        ):
+            self.not_traded["Incomplete entry plan"] += 1
+            return
 
-                    filled.append(sym)
-                else:
-                    # Insufficient cash for fill, cancel order
-                    filled.append(sym)
+        # A marketable limit fills at once at about the price; the limit caps what it can cost.
+        fill_price = min(
+            intent.limit_price, price * (Decimal("1") + Decimal(str(self.bt_config.slippage_pct)))
+        )
+        notional = intent.quantity * fill_price
+        fee = self.bt_config.fee_per_trade + notional * Decimal(
+            str(self.bt_config.fee_pct_per_trade)
+        )
+        if self.cash < notional + fee:
+            self.not_traded["Not enough cash"] += 1
+            return
 
-        for sym in filled:
-            self.pending_orders.pop(sym, None)
-
-    def _expire_orders(self, current_time: datetime) -> None:
-        expired = []
-        for sym, sig in self.pending_orders.items():
-            if sig.expires_at and current_time >= sig.expires_at:
-                expired.append(sym)
-        for sym in expired:
-            self.pending_orders.pop(sym, None)
+        self.cash -= notional + fee
+        # The legs sit where the entry plan put them (measured from the limit), not where the
+        # fill happened to land.
+        self.positions[sig.symbol] = BacktestPosition(
+            symbol=sig.symbol,
+            quantity=intent.quantity,
+            average_entry_price=fill_price,
+            entry_time=current_time,
+            entry_fee=fee,
+            stop_loss=intent.stop_price,
+            take_profit=intent.take_profit_price,
+        )
 
     def _process_bar_executions(self, current_time: datetime) -> None:
         closed_positions = []
@@ -300,8 +330,9 @@ class BacktestEngine:
                 self.cash += notional - fee
 
                 entry_notional = pos.quantity * pos.average_entry_price
-                pnl = (notional - fee) - entry_notional
-                pnl_pct = float(pnl / entry_notional) if entry_notional > 0 else 0.0
+                pnl = (notional - fee) - entry_notional - pos.entry_fee
+                cost = entry_notional + pos.entry_fee
+                pnl_pct = float(pnl / cost) if cost > 0 else 0.0
 
                 trade = BacktestTrade(
                     symbol=sym,
@@ -314,7 +345,7 @@ class BacktestEngine:
                     exit_reason=reason,
                     pnl=pnl,
                     pnl_pct=pnl_pct,
-                    fees_paid=fee,  # Simplified, missing entry fee here but reflected in cash
+                    fees_paid=fee + pos.entry_fee,
                     slippage_paid=Decimal("0"),  # Already baked into price
                 )
                 self.trades.append(trade)
@@ -381,4 +412,6 @@ class BacktestEngine:
             total_slippage=total_slippage,
             max_exposure_pct=self.peak_exposure,
             trades=self.trades,
+            signals=self.signals_seen,
+            not_traded=dict(self.not_traded),
         )

@@ -59,7 +59,7 @@ docker compose exec data python -m trading_system backtest --days 30
 - `resume-entries`: Removes the trading halt (requires manual reconciliation check).
 - `status`: Displays current system status (halt state, equity).
 - `fetch-history`: Downloads candles from Alpaca into the database (`--days`, default 180). The first run takes about a minute; later runs only fetch what is missing.
-- `backtest`: Replays the stored candles through the strategy (`--days`, default 60). Run `fetch-history` first. It is not yet the live system's sizing and entry plan; the report lists the differences.
+- `backtest`: Replays the stored candles through the strategy (`--days`, default 60). Run `fetch-history` first. Entries go through the live system's `RiskEngine` and entry plan; the report lists the assumptions that remain and which signals did not become a trade, and why.
 
 For detailed command behaviors, refer to `docs/operations.md`.
 

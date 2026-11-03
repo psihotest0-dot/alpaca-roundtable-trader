@@ -8,8 +8,6 @@ import os
 from trading_system.config import Settings
 from trading_system.backtest.models import BacktestConfig
 from trading_system.backtest.engine import BacktestEngine
-from trading_system.domain.models import StrategySignal
-from trading_system.domain.enums import SignalDirection
 
 
 @pytest.fixture
@@ -34,55 +32,6 @@ def _create_mock_bar(
             "volume": [1000],
         }
     )
-
-
-def test_backtest_pending_order_fill_and_slippage(dummy_settings):
-    # Test that a pending limit order is filled correctly when the price drops below the limit
-    bt_config = BacktestConfig(
-        initial_capital=Decimal("10000.0"), slippage_pct=0.01
-    )  # 1% slippage for easy math
-
-    t0 = datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc)
-    t1 = t0 + timedelta(minutes=15)
-
-    # Empty dataframes since we will inject state manually
-    engine = BacktestEngine(
-        dummy_settings, bt_config, {"AAPL": pd.DataFrame()}, {"AAPL": pd.DataFrame()}
-    )
-
-    # Inject a pending limit order for AAPL at $100
-    sig = StrategySignal(
-        version="1.0",
-        symbol="AAPL",
-        timeframe="15m",
-        closed_bar_timestamp=t0,
-        direction=SignalDirection.LONG,
-    )
-    sig._suggested_limit = Decimal("100.0")
-    sig._suggested_shares = Decimal("10")
-    engine.pending_orders["AAPL"] = sig
-
-    # Create the current bar where price drops to $90
-    bar_df = _create_mock_bar(t1, 95.0, 95.0, 90.0, 92.0)
-    engine.df_15m = {"AAPL": bar_df}
-
-    # Process
-    engine._process_pending_orders(t1)
-
-    # Check that order was filled.
-    # Open is 95, which is < limit 100. So we get filled at open price (95).
-    # Slippage is 1%, so fill price = 95 * 1.01 = 95.95
-    assert "AAPL" not in engine.pending_orders
-    assert "AAPL" in engine.positions
-
-    pos = engine.positions["AAPL"]
-    assert pos.quantity == Decimal("10")
-    assert pos.average_entry_price == Decimal("95.95")
-
-    # Cash should be 10000 - (10 * 95.95) - fees. Let's just assert that it's correctly calculated
-    # 95.95 * 10 = 959.50. Fee (0.0001) = 0.09595. Total cost = 959.59595
-    # Cash = 10000 - 959.59595 = 9040.40405
-    assert round(engine.cash, 5) == Decimal("9040.40405")
 
 
 def test_backtest_gap_aware_stop_loss(dummy_settings):

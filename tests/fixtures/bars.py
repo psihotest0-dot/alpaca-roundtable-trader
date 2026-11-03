@@ -81,6 +81,42 @@ def with_timestamp_column(frame: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
+QUIET = (1.0, 1.001, 0.999, 1.0)  # (open, high, low, close) as multiples of the cross-up close
+GAP_UP_6_PCT = (1.06, 1.07, 1.05, 1.06)  # opens 6 % up: past the 5 % take-profit
+
+
+def make_bars_with_follow_up(
+    now: datetime, follow: list[tuple[float, float, float, float]]
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DatetimeIndex]:
+    """The cross-up fixture (`make_bars`) followed by bars shaped by `follow`, each row
+    (open, high, low, close) as a multiple of the cross-up bar's close. Both frames come with
+    the `timestamp` column the engines read. Returns the 15m frame, the 1h frame and the start
+    times of the follow-up bars; the first of them is the bar in which the signal is acted on."""
+    bars_15m, bars_1h = make_bars(now)
+    cross = float(bars_15m["close"].iloc[-1])
+    rows = np.array(follow, dtype=float) * cross
+    extra = pd.DataFrame(
+        {
+            "open": rows[:, 0],
+            "high": rows[:, 1],
+            "low": rows[:, 2],
+            "close": rows[:, 3],
+            "volume": 1000.0,
+        },
+        index=pd.date_range(
+            bars_15m.index[-1] + pd.Timedelta(minutes=15),
+            periods=len(follow),
+            freq="15min",
+            tz="UTC",
+        ),
+    )
+    return (
+        with_timestamp_column(pd.concat([bars_15m, extra])),
+        with_timestamp_column(bars_1h),
+        extra.index,
+    )
+
+
 def alpaca_shaped(symbol: str, frame: pd.DataFrame) -> pd.DataFrame:
     """The shape of alpaca-py's `BarSet.df`: MultiIndex (symbol, timestamp),
     no `timestamp` column."""
