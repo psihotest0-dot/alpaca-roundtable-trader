@@ -15,6 +15,8 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 
 ## Local Operations Commands
 
+> **With the Docker setup the commands below are run in the container.** Read `poetry run python -m trading_system X` as `docker compose exec trader python -m trading_system X`. The data is in the Docker volume `alpaca_trader_var`; a command run on the host would create a second, empty `var/trading.db`.
+
 - **Config Validation**: `poetry run python -m trading_system validate-config` (Verifies Pydantic settings).
 - **Diagnostics**: `poetry run python -m trading_system doctor [--network]` (Checks Alpaca connection).
 - **Candles**: `poetry run python -m trading_system fetch-history [--days 180] [--symbols AAPL,MSFT]` downloads or updates the stored candles (needs the Alpaca keys; run `alembic upgrade head` first). It is safe to run while the system is running, and as often as you like: it only fetches what is missing and checks that the stored prices are still current.
@@ -38,9 +40,14 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 
 ## Database Backup and Restore (SQLite)
 
-- **Backup**: SQLite stores the entire state in a single file (default: `./var/trading.db`). To back up safely while running (using WAL mode):
+- **Backup**: SQLite stores the entire state in a single file (default: `./var/trading.db`; in the Docker setup it is `/app/var/trading.db` in the volume). To back up safely while running (using WAL mode):
   ```bash
   sqlite3 ./var/trading.db ".backup './var/trading_backup.db'"
+  ```
+  In the Docker setup (the image has no `sqlite3` command, Python does the same):
+  ```bash
+  docker compose exec trader python -c "import sqlite3; s=sqlite3.connect('var/trading.db'); d=sqlite3.connect('var/backup.db'); s.backup(d); d.close()"
+  docker cp alpaca-trader:/app/var/backup.db ./var/backups/trading-$(date +%F).db
   ```
 - **Restore**:
   1. Stop all users/processes interacting with the database.
@@ -59,7 +66,7 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 ## Docker & Connectivity
 
 - **News store (Chroma, to be replaced by a SQL table; see `decisions.md`)**: a local directory (`CHROMA_DB_PATH`, default `./var/chroma_db`) opened in-process with `PersistentClient`. There is no Chroma server to run or to reach over the network. In the container it lives in `/app/var`, which is the Docker volume `alpaca_trader_var` (see below).
-- **Data container**: `docker compose up -d data` starts `alpaca-trader-data` from the project image. It runs `alembic upgrade head`, then `fetch-history --days 180` once an hour, and keeps `var/` (the SQLite file `trading.db` with the `market_bars` table) in the named volume `alpaca_trader_var`. This database is a separate copy from the host's `var/trading.db`: the host trading loop and the host `backtest` use the host file, the container's commands (`docker compose exec data python -m trading_system backtest`) use the volume. They are not synchronised, and the host file is not mounted into the container on purpose (SQLite with WAL does not work reliably on a Windows bind mount, and two writers on the trading state would be dangerous). Only the variables `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `IS_PAPER` and `DATABASE_URL` reach the container; nothing else from `.env`. It only reads from Alpaca. To remove it with its data: `docker compose down -v`.
+- **Containers** (`docker compose up -d`): `alpaca-trader` runs the trading loop (`run`, dry-run: real data, simulated orders; it does not use `--paper`) and `alpaca-trader-data` runs `fetch-history --days 180` once an hour. Both run `alembic upgrade head` first and share the named volume `alpaca_trader_var`, mounted at `/app/var`: that volume is the only copy of the data (`trading.db` with the state, signals, orders and the `market_bars` candles, and the log). The host's `var/` is not mounted on purpose (SQLite in WAL mode does not work reliably over a Windows bind mount, and a host copy would diverge). Both restart by themselves (`unless-stopped`) when Docker Desktop starts. `docker compose logs -f trader` follows the loop; `docker compose stop trader` is a clean stop (SIGTERM). Only `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `IS_PAPER` and `DATABASE_URL` reach the containers; nothing else from `.env`. `docker compose down` keeps the data; `docker compose down -v` deletes it. After a code change: `docker compose build && docker compose up -d`. One-off commands: `docker compose exec trader python -m trading_system status`, or `docker compose run --rm app …` when the loop is not running.
 - **Database**: the trading state is the project's own SQLite file. The Go backend's containers and their SQL database are separate and are not used by this project.
 - **Host services from a container**: when a real Oracle provider is added (Phase 2.2), a container reaches a service on the host through the OS-specific gateway (`host.docker.internal` on Mac/Win, `172.17.0.1` on Linux), never through `127.0.0.1`.
 

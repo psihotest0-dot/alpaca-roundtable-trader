@@ -1,15 +1,21 @@
 name: alpaca-roundtable-trader
 
-# Two services, one image (alpaca-roundtable-trader:latest, built from ./Dockerfile) and one
-# named volume. Docker Desktop shows the `alpaca-trader-data` container under Containers and
-# the `alpaca_trader_var` volume under Volumes.
+# One image (alpaca-roundtable-trader:latest, built from ./Dockerfile) and one named volume
+# (alpaca_trader_var, mounted at /app/var). The volume is the ONLY copy of the system's data:
+# the SQLite database trading.db (state, signals, orders, candles) and the log. There is no
+# var/trading.db on the host any more; do not run the CLI on the host, run it in the container.
+# Docker Desktop shows the containers under Containers and the volume under Volumes.
 #
-#   docker compose up -d data                                     start the data container
-#   docker compose exec data python -m trading_system status      look inside it
-#   docker compose run --rm app python -m trading_system --help   one-off command
+#   docker compose up -d                                          start trader and data
+#   docker compose logs -f trader                                 follow the trading loop
+#   docker compose exec trader python -m trading_system status    ask the running system
+#   docker compose exec trader python -m trading_system backtest --days 90
+#   docker compose exec trader python -m trading_system pause-entries   (and resume-entries)
+#   docker compose build && docker compose up -d                  after a code change
+#   docker compose down                                           stop; the volume stays
 #
 # The keys are read from .env (git-ignored) by Compose itself; only the variables named below
-# reach the container, nothing else from .env does.
+# reach the containers, nothing else from .env does.
 
 x-alpaca-env: &alpaca-env
   ALPACA_API_KEY: ${ALPACA_API_KEY:?Put ALPACA_API_KEY in .env}
@@ -18,12 +24,29 @@ x-alpaca-env: &alpaca-env
   DATABASE_URL: sqlite:///./var/trading.db
 
 services:
-  # The data container. On start it brings the database to the latest migration, then keeps the
-  # candle store (table market_bars: 15-minute and 1-hour bars of the watchlist, 180 days)
-  # up to date once an hour. An update takes a few seconds; the first run downloads everything
-  # (about a minute). Read-only calls to Alpaca: it never places an order.
-  data:
+  # The trading loop in dry-run mode: real data from Alpaca, simulated orders (nothing is sent
+  # to the broker; `run --paper` would send paper orders and is not used here on purpose).
+  # `exec` makes the loop PID 1, so `docker stop` reaches it as SIGTERM and it stops cleanly.
+  trader:
     build: .
+    image: alpaca-roundtable-trader:latest
+    container_name: alpaca-trader
+    restart: unless-stopped
+    stop_grace_period: 30s
+    environment: *alpaca-env
+    volumes:
+      - trading_var:/app/var
+    command:
+      - sh
+      - -c
+      - |
+        python -m alembic upgrade head || exit 1
+        exec python -m trading_system run
+
+  # Keeps the candle store (table market_bars: 15-minute and 1-hour bars of the watchlist, 180
+  # days) up to date once an hour in the same database. An update takes a few seconds. Read-only
+  # calls to Alpaca: it never places an order.
+  data:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-data
     restart: unless-stopped
@@ -40,8 +63,8 @@ services:
           sleep 3600
         done
 
-  # For one-off commands against the same database (backtest, status, ...). Not started by
-  # `docker compose up`.
+  # For one-off commands against the same database. Not started by `docker compose up`:
+  #   docker compose run --rm app python -m trading_system status
   app:
     image: alpaca-roundtable-trader:latest
     profiles: ["tools"]

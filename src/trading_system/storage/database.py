@@ -11,11 +11,18 @@ def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
     cursor.close()
 
 
+# Two containers share the database (the trading loop and the hourly candle update). SQLite
+# lets one writer in at a time; the default wait for the lock is 5 s, which a bigger candle
+# write can exceed. A short wait here beats a failed cycle there.
+SQLITE_BUSY_TIMEOUT_SECONDS = 30
+
+
 def get_engine(database_url: str) -> Engine:
-    engine = create_engine(database_url)
     if "sqlite" in database_url:
+        engine = create_engine(database_url, connect_args={"timeout": SQLITE_BUSY_TIMEOUT_SECONDS})
         event.listen(engine, "connect", set_sqlite_pragma)
-    return engine
+        return engine
+    return create_engine(database_url)
 
 
 def get_session_factory(engine: Engine) -> sessionmaker[Session]:
