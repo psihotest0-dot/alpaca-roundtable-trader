@@ -59,6 +59,8 @@ docker compose exec trader python -m trading_system backtest --days 30
 - `pause-entries`: Manual kill switch to halt new trades.
 - `resume-entries`: Removes the trading halt (requires manual reconciliation check).
 - `status`: Displays current system status (halt state, equity).
+- `report`: What the system did on one New York trading day (`--date YYYY-MM-DD`, default today): passes, signals, risk decisions, orders, fills, equity, alerts.
+- `health`: Exit 0 if the trading loop is doing its job, 1 with the reasons if not (Docker's healthcheck runs it).
 - `backup-db`: Writes a checked, compressed copy of the database to a folder (`--out`, default `var/backups`) and keeps the newest `--keep` (default 28). The `backup` container runs it every 6 hours.
 - `fetch-history`: Downloads candles from Alpaca into the database (`--days`, default 180). The first run takes about a minute; later runs only fetch what is missing.
 - `compare-strategies`: Replays several strategies (`--strategies a,b`, default all) on the same stored candles, risk engine, entry plan and costs, and prints them side by side with the t-statistic of the average trade (`--days`, default 90). The choices: `trend_cross` (what the live loop runs), `ema_crossover` and `strict_ema_crossover` (the two strategies of the original Money_bot) and their `_5pct` variants (pullback distance widened to 5 %).

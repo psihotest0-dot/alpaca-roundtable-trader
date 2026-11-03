@@ -181,15 +181,30 @@ class TradingCycle:
                     "submitted": report.submitted,
                     "held": report.held,
                     "errors": report.errors,
+                    # The account's equity at this pass: the daily report reads the day's
+                    # course from these (nothing else records it between the two baselines).
+                    "equity": self._equity_now(),
                 },
                 when=now,
             )
         except Exception as e:  # a journal that cannot be written must not stop the trading
             logger.warning(f"Could not journal the entry look-up: {e}")
 
+    def _equity_now(self) -> Optional[str]:
+        try:
+            return str(_amount(self.broker.get_account().equity, "the account's equity"))
+        except Exception:  # the journal is better with a gap than with no entry
+            return None
+
     def _alert(self, title: str, message: str) -> None:
+        """A CRITICAL log line, and a journal entry that outlives the log."""
         if self.alerts is not None:
             self.alerts.send_alert(title, message)
+        if self.audit_repo is not None:
+            try:
+                self.audit_repo.record("alert", {"title": title, "message": message})
+            except Exception as e:
+                logger.warning(f"Could not journal the alert: {e}")
 
     def _run_entries(self, now: datetime, expected_bar_start: datetime) -> EntriesReport:
         """Signals from the newest closed bar, through risk, into orders.

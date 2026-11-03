@@ -122,6 +122,12 @@ def create_parser() -> argparse.ArgumentParser:
     # status command
     subparsers.add_parser("status", help="Prints the current status of the trading system.")
 
+    # report command
+    report_parser = subparsers.add_parser(
+        "report", help="What the system did on one New York trading day (default: today)."
+    )
+    report_parser.add_argument("--date", help="The day, YYYY-MM-DD (New York).")
+
     # health command
     subparsers.add_parser(
         "health",
@@ -465,6 +471,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
         except Exception as e:
             print(f"compare-strategies error: {e}")
+            return 1
+
+    elif args.command == "report":
+        try:
+            from datetime import date, datetime, timezone
+
+            from trading_system.observability.report import (
+                build_daily_report,
+                format_daily_report,
+            )
+            from trading_system.risk.daily_equity import trading_day
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import StateRepository
+
+            inject_offline_dummy_keys()
+            settings = Settings()
+            day = (
+                date.fromisoformat(args.date)
+                if args.date
+                else trading_day(datetime.now(timezone.utc))
+            )
+            factory = get_session_factory(get_engine(settings.database_url))
+            print(
+                format_daily_report(
+                    build_daily_report(factory, day, StateRepository(factory).get_state())
+                )
+            )
+            return 0
+        except ValueError as e:
+            print(f"Report error: {e} (the date is YYYY-MM-DD)")
+            return 1
+        except Exception as e:
+            print(f"Report error: {e}")
             return 1
 
     elif args.command == "health":
