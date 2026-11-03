@@ -19,6 +19,13 @@ name: alpaca-roundtable-trader
 # The keys are read from .env (git-ignored) by Compose itself; only the variables named below
 # reach the containers, nothing else from .env does.
 
+# Docker keeps what a container prints in a file that grows without a limit unless told otherwise.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 x-alpaca-env: &alpaca-env
   ALPACA_API_KEY: ${ALPACA_API_KEY:?Put ALPACA_API_KEY in .env}
   ALPACA_SECRET_KEY: ${ALPACA_SECRET_KEY:?Put ALPACA_SECRET_KEY in .env}
@@ -34,6 +41,7 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader
     restart: unless-stopped
+    logging: *logging
     stop_grace_period: 30s
     environment: *alpaca-env
     volumes:
@@ -61,6 +69,7 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-data
     restart: unless-stopped
+    logging: *logging
     environment: *alpaca-env
     volumes:
       - trading_var:/app/var
@@ -90,6 +99,7 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-backup
     restart: unless-stopped
+    logging: *logging
     environment:
       DATABASE_URL: sqlite:///./var/trading.db
     volumes:

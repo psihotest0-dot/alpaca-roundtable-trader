@@ -149,14 +149,24 @@ def create_parser() -> argparse.ArgumentParser:
     return parser
 
 
+LOG_FILE = "var/alpaca_trading.log"
+
+
+def log_file_for(command: Optional[str]) -> Optional[str]:
+    """Only the long-running loop writes the log file. A short command (a healthcheck every
+    minute, `status`, `report`) that also opened it would add a handler for a few seconds to a
+    file that is being rotated under it; its output goes to the console only."""
+    return LOG_FILE if command == "run" else None
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
     import logging
     from trading_system.observability.logging import setup_json_logger
 
-    setup_json_logger("", level=logging.INFO, log_file="var/alpaca_trading.log")
-
     parser = create_parser()
     args = parser.parse_args(argv)
+
+    setup_json_logger("", level=logging.INFO, log_file=log_file_for(args.command))
 
     if args.command == "validate-config":
         try:

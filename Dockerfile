@@ -31,4 +31,13 @@ RUN poetry install --only-root --no-interaction --no-ansi
 # excluded from the build context, so create it; `alembic upgrade head` needs it to exist.
 RUN mkdir -p /app/var
 
+# Run as an ordinary user, not as root: a bug or a bad dependency then cannot write over the
+# image, only into /app/var (the database, the log, the heartbeat). A new volume mounted there
+# takes this ownership; a volume created while the image still ran as root needs a one-time
+# `chown -R 10001:10001` (see docs/operations.md).
+RUN groupadd --system --gid 10001 trader \
+    && useradd --system --uid 10001 --gid trader --create-home --shell /usr/sbin/nologin trader \
+    && chown -R trader:trader /app/var
+USER trader
+
 CMD ["python", "-m", "trading_system"]

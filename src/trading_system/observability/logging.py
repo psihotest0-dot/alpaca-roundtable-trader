@@ -1,5 +1,6 @@
 import json
 import logging
+import logging.handlers
 import re
 from datetime import datetime
 from typing import Any, Dict
@@ -101,8 +102,18 @@ class JSONFormatter(logging.Formatter):
         return json.dumps(redacted_data)
 
 
+# The log file is rotated: 5 files of up to 5 MB. A week of a quiet system is well under one.
+LOG_MAX_BYTES = 5 * 1024 * 1024
+LOG_BACKUP_COUNT = 5
+
+
 def setup_json_logger(
-    name: str, level: int = logging.INFO, log_file: str | None = None
+    name: str,
+    level: int = logging.INFO,
+    log_file: str | None = None,
+    *,
+    max_bytes: int = LOG_MAX_BYTES,
+    backup_count: int = LOG_BACKUP_COUNT,
 ) -> logging.Logger:
     logger = logging.getLogger(name)
     logger.setLevel(level)
@@ -124,7 +135,9 @@ def setup_json_logger(
         log_dir = os.path.dirname(log_file)
         if log_dir:
             os.makedirs(log_dir, exist_ok=True)
-        file_handler = logging.FileHandler(log_file)
+        file_handler = logging.handlers.RotatingFileHandler(
+            log_file, maxBytes=max_bytes, backupCount=backup_count, encoding="utf-8"
+        )
         file_handler.setFormatter(JSONFormatter())
         logger.addHandler(file_handler)
 

@@ -49,6 +49,8 @@ jobs:
           docker run --rm alpaca-roundtable-trader:ci python -m trading_system --help
           docker run --rm alpaca-roundtable-trader:ci python -m alembic upgrade head
           docker run --rm alpaca-roundtable-trader:ci python -m pip check
+          # The image must not run as root (Phase 6.3).
+          test "$(docker run --rm alpaca-roundtable-trader:ci id -u)" != "0"
 
   test:
     runs-on: ubuntu-latest

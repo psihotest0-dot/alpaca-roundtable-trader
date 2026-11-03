@@ -41,6 +41,9 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 - `docker compose exec trader python -m trading_system report [--date YYYY-MM-DD]` is the day in numbers (a New York trading day; today by default): passes over a bar, signals, how many became an order, how many broke, risk decisions with the reasons for refusals, orders (simulated or not), fills, the equity at the first and the last pass, the alerts. A quiet failure shows as `BROKE` and `ALERTS`.
 - What each pass over a bar did is in the table `audit_events` (type `entries_cycle`), and the risk decision of every signal, with its reason, is in `risk_decisions`.
 
+- The containers run as an ordinary user (`trader`, uid 10001), not as root. A **new** volume takes its ownership from the image. A volume made while the image still ran as root (the `alpaca_trader_var` of 2026-11-03 was one) needs this once, with the containers stopped and a fresh archive taken first: `docker run --rm -v alpaca_trader_var:/v alpine chown -R 10001:10001 /v`. A restored database file (see the restore steps) needs the same owner: add `&& chown 10001:10001 /app/var/trading.db` to the restore command.
+- Logs: `var/alpaca_trading.log` is rotated (5 files of up to 5 MB) and only the `run` process writes it; everything also goes to the container's output (`docker compose logs`), which Docker keeps to 3 files of 10 MB per container.
+
 ### Incident Procedures
 - **Reconciliation**: If the system crashes mid-submission or enters an unknown state, it halts entries. The `reconcile_order` function attempts to recover status on restart.
 - **Unprotected Positions**: The check `emergency_check_unprotected_positions` runs on every tick of the runner, also while entries are halted or the market is closed. A position without a covering stop halts new entries and raises an alarm; it is not sold. Closing it at market happens only with `EMERGENCY_CLOSE_UNPROTECTED=true` (default `false`). Undo the halt with `resume-entries` after checking the account.
@@ -51,7 +54,7 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 - **Restore (Docker setup)**: (1) `docker compose stop trader data backup`. (2) Choose an archive in `var/backups`. (3) Put it into the volume (Git Bash: prefix with `MSYS_NO_PATHCONV=1`):
   ```bash
   docker run --rm -v alpaca_trader_var:/app/var -v "$PWD/var/backups:/backups:ro" alpine sh -c \
-    "rm -f /app/var/trading.db /app/var/trading.db-wal /app/var/trading.db-shm && gunzip -c /backups/trading-YYYYMMDD-HHMMSS.db.gz > /app/var/trading.db"
+    "rm -f /app/var/trading.db /app/var/trading.db-wal /app/var/trading.db-shm && gunzip -c /backups/trading-YYYYMMDD-HHMMSS.db.gz > /app/var/trading.db && chown 10001:10001 /app/var/trading.db"
   ```
   (4) `docker compose up -d`, then `docker compose exec trader python -m trading_system status`, and reconcile the broker state before resuming entries. To try an archive without touching the live data, do step 3 into a scratch volume (`docker volume create alpaca_restore_test`, mount that instead of `alpaca_trader_var`), run `status` and `alembic current` on it with the image, and remove the volume. That was done for the first archive on 2026-11-03: integrity ok, revision `b6d1f4a82c35`, the daily baseline present.
 - **Backup**: SQLite stores the entire state in a single file (default: `./var/trading.db`; in the Docker setup it is `/app/var/trading.db` in the volume). To back up safely while running (using WAL mode):
