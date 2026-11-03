@@ -66,6 +66,15 @@ class HeldSignal:
     asked: int = 1
 
 
+def _amount(value: Any, what: str) -> Decimal:
+    """A number Alpaca sends as text. Every field of its models can come back empty (the paper
+    account leaves several empty), and an empty amount is not zero: the cycle stops with a
+    message that says which one, instead of a bare error from `Decimal(str(None))`."""
+    if value is None:
+        raise ValueError(f"Alpaca did not return {what}")
+    return Decimal(str(value))
+
+
 def ensure_daily_start_equity(
     broker: Any, state_repo: Any, state: Optional[TradingState], now: datetime
 ) -> TradingState:
@@ -347,19 +356,23 @@ class TradingCycle:
         signal of this cycle must count towards the limits of the next one."""
         account = self.broker.get_account()
         snapshot = AccountSnapshot(
-            equity=Decimal(str(account.equity)),
-            cash=Decimal(str(account.cash)),
-            buying_power=Decimal(str(account.buying_power)),
-            day_trade_count=int(account.daytrade_count),
+            equity=_amount(account.equity, "the account's equity"),
+            cash=_amount(account.cash, "the account's cash"),
+            buying_power=_amount(account.buying_power, "the account's buying power"),
+            day_trade_count=(
+                None if account.daytrade_count is None else int(account.daytrade_count)
+            ),
             updated_at=now,
         )
         positions = [
             PositionSnapshot(
                 symbol=p.symbol,
-                quantity=Decimal(str(p.qty)),
-                market_value=Decimal(str(p.market_value)),
-                average_entry_price=Decimal(str(p.avg_entry_price)),
-                unrealized_pl=Decimal(str(p.unrealized_pl)),
+                quantity=_amount(p.qty, f"the quantity of {p.symbol}"),
+                market_value=_amount(p.market_value, f"the market value of {p.symbol}"),
+                average_entry_price=_amount(
+                    p.avg_entry_price, f"the average entry price of {p.symbol}"
+                ),
+                unrealized_pl=_amount(p.unrealized_pl, f"the unrealized P&L of {p.symbol}"),
             )
             for p in self.broker.get_positions()
         ]

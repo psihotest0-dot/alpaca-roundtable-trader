@@ -11,6 +11,8 @@ from typing import Any
 
 import pandas as pd
 from alpaca.data.models import Trade
+from alpaca.trading.enums import AccountStatus
+from alpaca.trading.models import TradeAccount
 
 from tests.fixtures.bars import alpaca_shaped
 
@@ -102,13 +104,20 @@ class FakeBroker:
             is_open=self.market_open, timestamp=now, next_open=now + timedelta(hours=16)
         )
 
-    def get_account(self) -> SimpleNamespace:
-        return SimpleNamespace(
+    def get_account(self) -> TradeAccount:
+        """The real model of alpaca-py, filled the way the paper account fills it: the amounts
+        as text, and `daytrade_count`, `pattern_day_trader` and several more left empty. A
+        hand-made account with numbers everywhere hid exactly that (the first live signal died
+        on `int(None)`)."""
+        return TradeAccount(
+            id=uuid.uuid4(),
+            account_number="PA0000000000",
+            status=AccountStatus.ACTIVE,
+            currency="USD",
             equity=self.equity,
             cash=self.equity,
             buying_power=str(float(self.equity) * 4),
-            daytrade_count=0,
-            **({} if self.last_equity is None else {"last_equity": self.last_equity}),
+            last_equity=self.last_equity,
         )
 
     def get_positions(self) -> list[Any]:

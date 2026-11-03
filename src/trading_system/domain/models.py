@@ -120,7 +120,9 @@ class AccountSnapshot(BaseModel):
     equity: Decimal
     cash: Decimal
     buying_power: Decimal
-    day_trade_count: int
+    # Alpaca leaves it empty on the paper account, so "unknown" has to be possible. It is not 0:
+    # the pattern day trader rule (Phase 4) must not read a missing count as "no day trades".
+    day_trade_count: Optional[int] = None
     updated_at: datetime
 
 
