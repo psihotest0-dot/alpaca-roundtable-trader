@@ -40,6 +40,13 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 
 ## Database Backup and Restore (SQLite)
 
+- **Automatic archive (Docker setup)**: the container `alpaca-trader-backup` runs `python -m trading_system backup-db --out /backups --keep 28` at start and then every 6 hours (`BACKUP_INTERVAL_SECONDS`, `BACKUP_KEEP` in `.env`). The archives land on the PC, in `./var/backups/trading-YYYYMMDD-HHMMSS.db.gz` (UTC), outside Docker, so they survive a reset of Docker Desktop or `docker compose down -v`. Each one is a consistent snapshot made with SQLite's backup API (a plain file copy would miss what is still in the `-wal` file), it is checked (`integrity_check`, a migration revision present) before it is kept, it is written under a temporary name and renamed when complete, and old archives are removed only after a new one is safely there. A failed backup prints `Backup FAILED` (`docker compose logs backup`) and is retried at the next interval; nothing already archived is touched. One archive is about 4 MB (the candles are most of the database and compress well). Only files named `trading-YYYYMMDD-HHMMSS.db.gz` are ever deleted; anything else in the folder is left alone. A backup can also be taken by hand: `docker compose exec backup python -m trading_system backup-db --out /backups`.
+- **Restore (Docker setup)**: (1) `docker compose stop trader data backup`. (2) Choose an archive in `var/backups`. (3) Put it into the volume (Git Bash: prefix with `MSYS_NO_PATHCONV=1`):
+  ```bash
+  docker run --rm -v alpaca_trader_var:/app/var -v "$PWD/var/backups:/backups:ro" alpine sh -c \
+    "rm -f /app/var/trading.db /app/var/trading.db-wal /app/var/trading.db-shm && gunzip -c /backups/trading-YYYYMMDD-HHMMSS.db.gz > /app/var/trading.db"
+  ```
+  (4) `docker compose up -d`, then `docker compose exec trader python -m trading_system status`, and reconcile the broker state before resuming entries. To try an archive without touching the live data, do step 3 into a scratch volume (`docker volume create alpaca_restore_test`, mount that instead of `alpaca_trader_var`), run `status` and `alembic current` on it with the image, and remove the volume. That was done for the first archive on 2026-11-03: integrity ok, revision `b6d1f4a82c35`, the daily baseline present.
 - **Backup**: SQLite stores the entire state in a single file (default: `./var/trading.db`; in the Docker setup it is `/app/var/trading.db` in the volume). To back up safely while running (using WAL mode):
   ```bash
   sqlite3 ./var/trading.db ".backup './var/trading_backup.db'"

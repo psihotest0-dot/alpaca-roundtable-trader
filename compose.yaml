@@ -13,6 +13,8 @@ name: alpaca-roundtable-trader
 #   docker compose exec trader python -m trading_system pause-entries   (and resume-entries)
 #   docker compose build && docker compose up -d                  after a code change
 #   docker compose down                                           stop; the volume stays
+#   (never `docker compose down -v`: it deletes the volume, i.e. the database; the
+#   archives in ./var/backups survive it, see the `backup` service)
 #
 # The keys are read from .env (git-ignored) by Compose itself; only the variables named below
 # reach the containers, nothing else from .env does.
@@ -61,6 +63,29 @@ services:
         while true; do
           python -m trading_system fetch-history --days 180
           sleep 3600
+        done
+
+  # The archive of the database OUTSIDE Docker. Every BACKUP_INTERVAL_SECONDS (default 6 hours,
+  # first one at start) it writes a checked, compressed snapshot to ./var/backups on the PC
+  # and keeps the newest BACKUP_KEEP (default 28 = a week). It gets no Alpaca keys. If a backup
+  # fails the log says "Backup FAILED" (`docker compose logs backup`) and it tries again at the
+  # next interval. Restore: see docs/operations.md.
+  backup:
+    image: alpaca-roundtable-trader:latest
+    container_name: alpaca-trader-backup
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: sqlite:///./var/trading.db
+    volumes:
+      - trading_var:/app/var
+      - ./var/backups:/backups
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          python -m trading_system backup-db --out /backups --keep ${BACKUP_KEEP:-28}
+          sleep ${BACKUP_INTERVAL_SECONDS:-21600}
         done
 
   # For one-off commands against the same database. Not started by `docker compose up`:

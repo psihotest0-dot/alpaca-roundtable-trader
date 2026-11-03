@@ -42,7 +42,7 @@ Or using Docker:
 docker compose run --rm app python -m trading_system --help
 ```
 
-**The system's data lives in Docker.** Two containers share one volume (`alpaca_trader_var`), which holds the only copy of the database and the log: `alpaca-trader` runs the trading loop in dry-run mode (real data, simulated orders) and `alpaca-trader-data` keeps the candle store up to date. Both are visible in Docker Desktop. They need `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` in `.env`. Run the CLI commands below in the container (`docker compose exec trader python -m trading_system status`), not on the host, which would create a second, empty database:
+**The system's data lives in Docker.** The containers share one volume (`alpaca_trader_var`), which holds the only copy of the database and the log: `alpaca-trader` runs the trading loop in dry-run mode (real data, simulated orders), `alpaca-trader-data` keeps the candle store up to date, and `alpaca-trader-backup` writes a checked archive of the database to `var/backups` on the PC every 6 hours, outside Docker. All are visible in Docker Desktop. They need `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` in `.env`. Run the CLI commands below in the container (`docker compose exec trader python -m trading_system status`), not on the host, which would create a second, empty database:
 
 ```bash
 docker compose build                                 # after code changes
@@ -59,6 +59,7 @@ docker compose exec trader python -m trading_system backtest --days 30
 - `pause-entries`: Manual kill switch to halt new trades.
 - `resume-entries`: Removes the trading halt (requires manual reconciliation check).
 - `status`: Displays current system status (halt state, equity).
+- `backup-db`: Writes a checked, compressed copy of the database to a folder (`--out`, default `var/backups`) and keeps the newest `--keep` (default 28). The `backup` container runs it every 6 hours.
 - `fetch-history`: Downloads candles from Alpaca into the database (`--days`, default 180). The first run takes about a minute; later runs only fetch what is missing.
 - `backtest`: Replays the stored candles through the strategy (`--days`, default 60). Run `fetch-history` first. Entries go through the live system's `RiskEngine` and entry plan; the report lists the assumptions that remain and which signals did not become a trade, and why.
 

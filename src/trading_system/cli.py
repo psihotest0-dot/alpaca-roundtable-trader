@@ -95,6 +95,18 @@ def create_parser() -> argparse.ArgumentParser:
     # status command
     subparsers.add_parser("status", help="Prints the current status of the trading system.")
 
+    # backup-db command
+    backup_parser = subparsers.add_parser(
+        "backup-db",
+        help="Writes a checked, compressed copy of the SQLite database and removes old copies.",
+    )
+    backup_parser.add_argument(
+        "--out", default="var/backups", help="Folder for the archives (default: var/backups)."
+    )
+    backup_parser.add_argument(
+        "--keep", type=int, default=28, help="How many of the newest archives to keep."
+    )
+
     return parser
 
 
@@ -353,6 +365,30 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"Status error: {e}")
+            return 1
+
+    elif args.command == "backup-db":
+        try:
+            from pathlib import Path
+
+            from trading_system.storage.backup import BackupError, backup_database
+
+            # Only the database location is needed: no Alpaca keys, so the container that
+            # takes the backups is not given any.
+            inject_offline_dummy_keys()
+            settings = Settings()
+            try:
+                archive = backup_database(settings.database_url, Path(args.out), keep=args.keep)
+            except BackupError as e:
+                print(f"Backup FAILED: {e}")
+                return 1
+            print(
+                f"Backup written: {archive.path} ({archive.size_bytes / 1e6:.1f} MB); "
+                f"{archive.kept} kept, {len(archive.removed)} old removed."
+            )
+            return 0
+        except Exception as e:
+            print(f"Backup FAILED: {e}")
             return 1
 
     # Normally we would start the app here
