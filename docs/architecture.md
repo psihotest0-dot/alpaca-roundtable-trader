@@ -34,7 +34,17 @@ The strategy produces a signal, the Oracle says yes, no or not now, and Risk sti
 
 ## Storage
 
-- **Trading state** lives in this project's own SQLite file, `var/trading.db`, migrated with Alembic. Only this project reads or writes it.
+- **Trading state** lives in this project's own SQLite file, `trading.db`, migrated with Alembic. Only this project reads or writes it. Since 2026-11-03 the file is in the Docker volume `alpaca_trader_var` (`/app/var`), the only copy; the host has none. A checked, compressed archive is written to `var/backups` on the PC every 6 hours.
 - **The Go backend** runs in its own Docker containers (four of them) with its own SQL database. That database belongs to the backend: it is not shared with this project and is not a store for it. How the two talk to each other (Phase 2.2) is decided when the owner shows the backend.
 - **News** (Phase 5): today the RSS pipeline writes to a local Chroma `PersistentClient` directory (`CHROMA_DB_PATH`, default `./var/chroma_db`), and nothing reads the news into the Oracle yet. Decided on 2026-11-02, not built: Chroma goes away and the news are stored in a SQL table.
 - **Market data** (Phase 3.2): the closed candles from Alpaca (15 minutes and 1 hour) are kept in the table `market_bars` of `trading.db`. `fetch-history` fills and updates it (`data/history.py`; the price policy is in `decisions.md`) and the backtest reads it. The live loop does not use it yet: every cycle still downloads 30 days of 15-minute and 90 days of hourly bars again.
+
+## Operations (Phase 6)
+
+Three containers from one image, on one volume (`compose.yaml`; the commands are in `operations.md`):
+
+- `alpaca-trader` runs the trading loop in dry-run mode. Every tick it writes a heartbeat file; every pass over a closed 15-minute bar is journalled in `audit_events` (with the account's equity), every risk decision in `risk_decisions`, every alert in `audit_events` and as a `CRITICAL` log line starting with `ALERT:`.
+- `alpaca-trader-data` keeps the candle store up to date once an hour.
+- `alpaca-trader-backup` archives the database outside Docker.
+
+Each has a Docker healthcheck. `trading_system health` judges the loop from its heartbeat (stopped ticking, unreadable market clock, no completed look-up for 20 minutes with the market open, broken signals in the last look-up). `trading_system report` is the day in numbers, built from the same records. `reconcile` and `resume-entries` compare the account with our records before a halt is lifted. The containers run as an ordinary user, and their logs are rotated.

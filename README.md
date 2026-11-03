@@ -4,7 +4,7 @@ Automated trading system for US stocks using Alpaca for market data and paper tr
 
 ## Status
 
-Under active development and **paper-only**. The trading loop runs against Alpaca's paper account: data, strategy, the optional Oracle, risk, bracket orders with a protection check, reconciliation and a daily loss guard, all covered by tests. A full session on live data that produced a signal has not been observed yet. The Oracle is an interface (`APPROVE` / `VETO` / `HOLD`); no real model is connected, and `ORACLE_PROVIDER=null` lets every signal through. Where things stand and what comes next: [`docs/action-plan.md`](docs/action-plan.md). Why: [`docs/analysis-and-update-plan.md`](docs/analysis-and-update-plan.md). Decisions: [`docs/decisions.md`](docs/decisions.md).
+Under active development and **paper-only**. The trading loop runs against Alpaca's paper account: data, strategy, the optional Oracle, risk, bracket orders with a protection check, reconciliation and a daily loss guard, all covered by tests. The first signal on live data (2026-11-03) broke at the risk step and was fixed; a signal followed through to a simulated order has not been observed yet. No strategy has shown a positive expectancy on 180 days of history, so nothing here is ready for real money. The Oracle is an interface (`APPROVE` / `VETO` / `HOLD`); no real model is connected, and `ORACLE_PROVIDER=null` lets every signal through. Where things stand and what comes next: [`docs/action-plan.md`](docs/action-plan.md). Why: [`docs/analysis-and-update-plan.md`](docs/analysis-and-update-plan.md). Decisions: [`docs/decisions.md`](docs/decisions.md).
 
 ## Installation (Clean Install)
 
