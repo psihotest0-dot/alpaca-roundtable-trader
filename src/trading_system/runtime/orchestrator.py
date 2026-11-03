@@ -41,9 +41,12 @@ class Orchestrator:
         from trading_system.execution.engine import ExecutionEngine
         from trading_system.oracle import create_oracle
         from trading_system.risk.engine import RiskEngine
+        from trading_system.observability.alerts import LoggingAlertManager
         from trading_system.storage.repositories import (
+            AuditRepository,
             OracleDecisionRepository,
             OrderRepository,
+            RiskDecisionRepository,
             SignalRepository,
         )
 
@@ -66,6 +69,9 @@ class Orchestrator:
             state_repo=self.state_repo,
             strategy_config=RUNTIME_STRATEGY,
             oracle=create_oracle(self.settings, OracleDecisionRepository(self.session_factory)),
+            risk_repo=RiskDecisionRepository(self.session_factory),
+            audit_repo=AuditRepository(self.session_factory),
+            alerts=LoggingAlertManager(logger),
         )
 
     def run(

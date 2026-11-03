@@ -114,9 +114,11 @@ def run_cycle(
         positions: list[Any] | None = None,
         positions_error: Exception | None = None,
         oracle: Any = None,
+        tweak: Callable[[Any], None] | None = None,
     ) -> SimpleNamespace:
         """`live_price_factor`: the last trade as a multiple of the last bar close (1.0 =
-        unchanged). The other live_* arguments make that trade old, missing or fail."""
+        unchanged). The other live_* arguments make that trade old, missing or fail.
+        `tweak(cycle)` runs on the built cycle before it works: break a part, swap a repository."""
         now = datetime.now(timezone.utc)
         bars_15m, bars_1h = make_bars(now)
         broker = FakeBroker(equity=equity, last_equity=last_equity)
@@ -150,6 +152,8 @@ def run_cycle(
         orchestrator = Orchestrator(settings)
         cycle = orchestrator.build_cycle(is_paper)
         cycle.oracle = oracle
+        if tweak is not None:
+            tweak(cycle)
         cycle.run_housekeeping(now)
         report = cycle.run_entries(now, expected_bar_start(now))
         return SimpleNamespace(

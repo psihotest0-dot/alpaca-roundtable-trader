@@ -7,6 +7,7 @@ order record is durable the moment the method returns, and one failed write can
 never leave a half-broken session behind for the next caller.
 """
 
+import json
 from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any, Optional, Sequence, cast
@@ -22,15 +23,18 @@ from ..domain.models import (
     BrokerOrder,
     OracleDecision,
     OrderIntent,
+    RiskDecision,
     StrategySignal,
     TradingState,
 )
 from .models import (
+    AuditEventModel,
     BrokerOrderModel,
     FillModel,
     MarketBarModel,
     OracleDecisionModel,
     OrderIntentModel,
+    RiskDecisionModel,
     RuntimeStateModel,
     StrategySignalModel,
 )
@@ -70,6 +74,65 @@ class SignalRepository:
         except IntegrityError:
             return False
         return True
+
+
+class RiskDecisionRepository:
+    """Why a signal was traded or not. The decision is the only place that says it: the log
+    says it once and rotates away."""
+
+    def __init__(self, session_factory: SessionFactory):
+        self._session_factory = session_factory
+
+    def save(self, decision: RiskDecision) -> None:
+        """Needs the signal to be saved first (the table points at it)."""
+        with self._session_factory.begin() as session:
+            session.add(
+                RiskDecisionModel(
+                    signal_id=decision.signal_id,
+                    approved=decision.approved,
+                    reasoning=decision.reasoning,
+                    suggested_quantity=decision.suggested_quantity,
+                    suggested_limit_price=decision.suggested_limit_price,
+                    decision_timestamp=decision.decision_timestamp,
+                )
+            )
+
+
+class AuditRepository:
+    """A journal of what the system did, one JSON object per event. Small and append-only:
+    the daily report reads it, nothing else depends on it."""
+
+    def __init__(self, session_factory: SessionFactory):
+        self._session_factory = session_factory
+
+    def record(
+        self, event_type: str, details: dict[str, Any], *, when: Optional[datetime] = None
+    ) -> None:
+        with self._session_factory.begin() as session:
+            session.add(
+                AuditEventModel(
+                    event_type=event_type,
+                    details=json.dumps(details, default=str, sort_keys=True),
+                    timestamp=when or datetime.now(timezone.utc),
+                )
+            )
+
+    def events(
+        self, event_type: str, start: datetime, end: datetime
+    ) -> list[tuple[datetime, dict[str, Any]]]:
+        """(when, details) of the events of a type in [start, end), oldest first."""
+        with self._session_factory() as session:
+            rows = session.scalars(
+                select(AuditEventModel)
+                .where(
+                    AuditEventModel.event_type == event_type,
+                    # The stubs type a comparison on this old-style Column as a bool.
+                    AuditEventModel.timestamp >= start,  # type: ignore[arg-type]
+                    AuditEventModel.timestamp < end,  # type: ignore[arg-type]
+                )
+                .order_by(AuditEventModel.id)
+            ).all()
+            return [(_utc(cast(datetime, r.timestamp)), json.loads(str(r.details))) for r in rows]
 
 
 class OrderRepository:

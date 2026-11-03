@@ -47,6 +47,7 @@ class EntriesReport:
     signals: int = 0
     submitted: int = 0
     held: int = 0  # signals the Oracle asked to wait on; they are asked again each tick
+    errors: int = 0  # signals that broke in risk or execution: no order, and the cause is a bug
 
 
 class Outcome(Enum):
@@ -121,6 +122,9 @@ class TradingCycle:
         state_repo: Any,
         strategy_config: StrategyConfig,
         oracle: Any = None,
+        risk_repo: Any = None,
+        audit_repo: Any = None,
+        alerts: Any = None,
     ) -> None:
         self.settings = settings
         self.broker = broker
@@ -132,6 +136,9 @@ class TradingCycle:
         self.state_repo = state_repo
         self.strategy_config = strategy_config
         self.oracle = oracle
+        self.risk_repo = risk_repo
+        self.audit_repo = audit_repo
+        self.alerts = alerts
         self._fills_after: Optional[datetime] = None
         self._held: dict[str, HeldSignal] = {}
 
@@ -142,6 +149,49 @@ class TradingCycle:
     # ------------------------------------------------------------------ entries
 
     def run_entries(self, now: datetime, expected_bar_start: datetime) -> EntriesReport:
+        """One pass over the newest bar, recorded: the outcome goes into the journal, and an
+        error in a signal raises an alert. (The pass itself is `_run_entries`.)"""
+        try:
+            report = self._run_entries(now, expected_bar_start)
+        except Exception as e:
+            self._journal(now, expected_bar_start, EntriesReport(errors=1, skipped=f"crashed: {e}"))
+            self._alert("Entry look-up crashed", f"{type(e).__name__}: {e}")
+            raise
+        self._journal(now, expected_bar_start, report)
+        if report.errors:
+            self._alert(
+                "Signals broke before they became orders",
+                f"{report.errors} of {report.signals} signals failed in risk or execution on the "
+                f"bar of {expected_bar_start:%H:%M} UTC; no order was placed for them. "
+                "See the error lines in the log.",
+            )
+        return report
+
+    def _journal(self, now: datetime, bar_start: datetime, report: EntriesReport) -> None:
+        if self.audit_repo is None:
+            return
+        try:
+            self.audit_repo.record(
+                "entries_cycle",
+                {
+                    "bar_start": bar_start.isoformat(),
+                    "skipped": report.skipped,
+                    "retry_later": report.retry_later,
+                    "signals": report.signals,
+                    "submitted": report.submitted,
+                    "held": report.held,
+                    "errors": report.errors,
+                },
+                when=now,
+            )
+        except Exception as e:  # a journal that cannot be written must not stop the trading
+            logger.warning(f"Could not journal the entry look-up: {e}")
+
+    def _alert(self, title: str, message: str) -> None:
+        if self.alerts is not None:
+            self.alerts.send_alert(title, message)
+
+    def _run_entries(self, now: datetime, expected_bar_start: datetime) -> EntriesReport:
         """Signals from the newest closed bar, through risk, into orders.
 
         `expected_bar_start` is the start of the bar that should be the newest by now. If the
@@ -194,6 +244,7 @@ class TradingCycle:
                 outcome = self._enter(signal, state, bars_15m, bars_1h, now)
             except Exception as e:
                 logger.error(f"Error in risk evaluation / execution for {signal.symbol}: {e}")
+                report.errors += 1
                 continue
             if outcome is Outcome.ORDERED:
                 report.submitted += 1
@@ -289,6 +340,7 @@ class TradingCycle:
             state=state,
         )
         logger.info(f"Risk decision: {decision.approved} ({decision.reasoning})")
+        self._save_risk_decision(decision)
         if not (decision.approved and intent):
             return Outcome.DROPPED
 
@@ -296,6 +348,14 @@ class TradingCycle:
         return (
             Outcome.ORDERED if self.execution.submit_order(intent) is not None else Outcome.DROPPED
         )
+
+    def _save_risk_decision(self, decision: Any) -> None:
+        if self.risk_repo is None:
+            return
+        try:
+            self.risk_repo.save(decision)
+        except Exception as e:  # the decision still stands; only its record is missing
+            logger.warning(f"Could not save the risk decision: {e}")
 
     def _ask_oracle(
         self,
