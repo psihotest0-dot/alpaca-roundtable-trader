@@ -5,14 +5,13 @@ position limit, the daily loss guard, the entry plan, fees and slippage are the 
 so a difference in the result is the strategy's (or noise: a few dozen trades in one market
 regime do not separate a good strategy from a lucky one, and the table says so)."""
 
-import math
-import statistics
 from dataclasses import dataclass
 from decimal import Decimal
 from typing import Dict, List, Sequence
 
 import pandas as pd
 
+from trading_system.backtest.analysis import t_statistic as _t_stat
 from trading_system.backtest.engine import BacktestEngine
 from trading_system.backtest.models import BacktestConfig
 from trading_system.config import Settings
@@ -34,15 +33,6 @@ class ComparisonRow:
     # Below 2 (in absolute value) the average cannot be told from luck.
     t_stat: float
     costs: Decimal  # fees plus slippage, both already inside the return
-
-
-def _t_stat(returns: Sequence[float]) -> float:
-    if len(returns) < 2:
-        return 0.0
-    spread = statistics.stdev(returns)
-    if spread == 0:
-        return 0.0
-    return statistics.mean(returns) / (spread / math.sqrt(len(returns)))
 
 
 def compare_strategies(

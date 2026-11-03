@@ -55,6 +55,17 @@ def create_parser() -> argparse.ArgumentParser:
         help="Which strategy to replay (default trend_cross, the one the live loop runs). "
         "See compare-strategies for the choices.",
     )
+    backtest_parser.add_argument(
+        "--windows",
+        type=int,
+        default=4,
+        help="Cut the replay into this many consecutive periods and report each (default 4).",
+    )
+    backtest_parser.add_argument(
+        "--cost-sweep",
+        action="store_true",
+        help="Also replay at higher slippage (0 to 0.2 % a side) to see how fragile the result is.",
+    )
 
     # compare-strategies command
     compare_parser = subparsers.add_parser(
@@ -231,6 +242,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print("\n=== Signals that did not become a trade ===")
                 for reason, count in sorted(result.not_traded.items(), key=lambda kv: -kv[1]):
                     print(f"- {reason}: {count}")
+
+            from trading_system.backtest.analysis import (
+                cost_sweep,
+                format_analysis,
+                format_cost_sweep,
+                format_oracle_value,
+                oracle_value,
+            )
+
+            print("\n" + format_analysis(result, periods=args.windows))
+            value = oracle_value(result)
+            if value is not None:
+                print("\n" + format_oracle_value(value))
+            if args.cost_sweep:
+                print("\nRunning the replay again at higher costs...")
+                print(
+                    "\n" + format_cost_sweep(cost_sweep(settings, config, df_15m, df_1h, strategy))
+                )
 
             print("\n=== Assumptions & Limitations ===")
             for a in result.assumptions_and_limitations:

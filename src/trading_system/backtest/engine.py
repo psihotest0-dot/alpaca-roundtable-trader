@@ -19,18 +19,22 @@ from trading_system.domain.models import (
 )
 from trading_system.risk.daily_equity import day_marker, trading_day
 from trading_system.risk.engine import RiskEngine
+from trading_system.risk.entry_plan import InvalidEntryPlan, build_entry_plan
 from trading_system.runtime.runner import ENTRY_DELAY
 from trading_system.runtime.schedule import BAR, is_regular_session
 from trading_system.strategy.base import BaseStrategy
 from trading_system.strategy.config import RUNTIME_STRATEGY
 from trading_system.strategy.trend import filter_signals
 from trading_system.strategy.trend_cross import TrendCrossStrategy
+from trading_system.backtest.exits import resolve_exit
 from trading_system.backtest.models import (
     BacktestConfig,
     BacktestTrade,
     BacktestPosition,
     BacktestResult,
+    ShadowTrade,
 )
+from trading_system.backtest.shadow import simulate_shadow_trade
 
 logger = logging.getLogger(__name__)
 
@@ -84,6 +88,7 @@ class BacktestEngine:
         self._day_start_equity: Decimal = bt_config.initial_capital
 
         self.signals_seen = 0
+        self.shadow_skipped = 0
         self.not_traded: Counter[str] = Counter()
         self.daily_equity: Dict[str, float] = {}
 
@@ -93,6 +98,10 @@ class BacktestEngine:
         self._could_signal: Dict[str, np.ndarray] = {}
 
         self.oracle_decisions: Dict[str, bool] = {}
+        self.oracle_verdicts: Dict[str, str] = {}
+        self.shadow_trades: List[ShadowTrade] = []
+        # A shadow position is held like a real one: no second one on a symbol while it is open.
+        self._shadow_busy_until: Dict[str, datetime] = {}
         if bt_config.replay_oracle_path:
             self._load_replay_oracle(bt_config.replay_oracle_path)
 
@@ -107,8 +116,11 @@ class BacktestEngine:
                 for k, v in data.items():
                     if isinstance(v, dict) and "approved" in v:
                         self.oracle_decisions[k] = bool(v["approved"])
+                        fallback = "APPROVE" if v["approved"] else "VETO"
+                        self.oracle_verdicts[k] = str(v.get("verdict") or fallback)
                     else:
                         self.oracle_decisions[k] = bool(v)
+                        self.oracle_verdicts[k] = "APPROVE" if v else "VETO"
             logger.info(f"Loaded {len(self.oracle_decisions)} oracle decisions from replay.")
         except Exception as e:
             logger.error(f"Failed to load replay oracle: {e}")
@@ -175,6 +187,10 @@ class BacktestEngine:
         for sig in fresh:
             if not self._apply_oracle(sig):
                 self.not_traded["Oracle: no approval"] += 1
+                if (
+                    sig.signal_id in self.oracle_decisions
+                ):  # the Oracle was asked and did not approve
+                    self._shadow(sig, current_time)
                 continue
             self._enter(sig, current_time)
 
@@ -228,8 +244,8 @@ class BacktestEngine:
         return frame.iloc[first:end]
 
     def _apply_oracle(self, sig: StrategySignal) -> bool:
-        if not self.settings.oracle_enabled:
-            return True
+        if not (self.bt_config.replay_oracle_path or self.settings.oracle_enabled):
+            return True  # no Oracle to replay: every signal goes on
         if sig.signal_id in self.oracle_decisions:
             return self.oracle_decisions[sig.signal_id]
         return False  # Abstain / default veto if not found in replay
@@ -274,15 +290,16 @@ class BacktestEngine:
         )
         return account, snapshots
 
-    def _enter(self, sig: StrategySignal, current_time: datetime) -> None:
-        """One signal through the live price check, the real risk engine, and a fill."""
-        closed = self._bars_before(sig.symbol, current_time)
-        df = self.df_15m.get(sig.symbol)
+    def _entry_price(self, symbol: str, current_time: datetime) -> tuple[Optional[Decimal], str]:
+        """The price an entry at `current_time` would be planned around: the first print of the
+        bar that just started, through the same freshness and distance check as the live price.
+        (price, "") or (None, why not)."""
+        closed = self._bars_before(symbol, current_time)
+        df = self.df_15m.get(symbol)
         starting = df[df["timestamp"] == current_time] if df is not None else None
         if closed is None or starting is None or starting.empty:
             # No print after the signal bar: the live system would have no fresh price either.
-            self.not_traded["No bar after the signal bar"] += 1
-            return
+            return None, "No bar after the signal bar"
 
         reference_close = Decimal(str(closed.iloc[-1]["close"]))
         first_print = Decimal(str(starting.iloc[0]["open"]))
@@ -295,7 +312,56 @@ class BacktestEngine:
                 max_deviation_pct=Decimal(str(self.settings.live_price_max_deviation_pct)),
             )
         except UnusableLivePrice:
-            self.not_traded["No usable price"] += 1
+            return None, "No usable price"
+        return price, ""
+
+    def _shadow(self, sig: StrategySignal, current_time: datetime) -> None:
+        """Plays out a signal the Oracle did not approve, as if it had been traded (Phase 3.5)."""
+        busy = self._shadow_busy_until.get(sig.symbol)
+        if busy is not None and current_time < busy:
+            return  # an earlier shadow position in this symbol is still open
+        price, _ = self._entry_price(sig.symbol, current_time)
+        bars = self._bars_15m.get(sig.symbol)
+        if price is None or bars is None or bars.empty:
+            self.shadow_skipped += 1
+            return
+        try:
+            plan = build_entry_plan(
+                price,
+                limit_buffer_pct=Decimal(str(self.settings.entry_limit_buffer_pct)),
+                stop_loss_pct=Decimal(str(self.settings.stop_loss_pct)),
+                take_profit_pct=Decimal(str(self.settings.take_profit_pct)),
+            )
+        except InvalidEntryPlan:
+            self.shadow_skipped += 1
+            return
+        fill = min(
+            plan.limit_price, price * (Decimal("1") + Decimal(str(self.bt_config.slippage_pct)))
+        )
+        shadow = simulate_shadow_trade(
+            symbol=sig.symbol,
+            signal_id=sig.signal_id or "",
+            verdict=self.oracle_verdicts.get(sig.signal_id or "", "VETO"),
+            bars=bars,
+            entry_time=current_time,
+            entry_price=fill,
+            stop_loss=plan.stop_price,
+            take_profit=plan.take_profit_price,
+            slippage_pct=self.bt_config.slippage_pct,
+            fee_pct=self.bt_config.fee_pct_per_trade,
+        )
+        self.shadow_trades.append(shadow)
+        self._shadow_busy_until[sig.symbol] = (
+            datetime.max.replace(tzinfo=timezone.utc)
+            if shadow.exit_reason == "OPEN"
+            else shadow.exit_time
+        )
+
+    def _enter(self, sig: StrategySignal, current_time: datetime) -> None:
+        """One signal through the live price check, the real risk engine, and a fill."""
+        price, why_not = self._entry_price(sig.symbol, current_time)
+        if price is None:
+            self.not_traded[why_not] += 1
             return
 
         account, positions = self._account_at(current_time)
@@ -361,38 +427,16 @@ class BacktestEngine:
                 continue
             bar = bar.iloc[0]
 
-            high = Decimal(str(bar["high"]))
-            low = Decimal(str(bar["low"]))
-            open_px = Decimal(str(bar["open"]))
+            hit = resolve_exit(
+                Decimal(str(bar["open"])),
+                Decimal(str(bar["high"])),
+                Decimal(str(bar["low"])),
+                pos.stop_loss,
+                pos.take_profit,
+            )
 
-            hit_stop = False
-            hit_tp = False
-            exit_price = Decimal("0")
-            reason = ""
-
-            # Gap aware stops
-            if pos.stop_loss and low <= pos.stop_loss:
-                hit_stop = True
-                exit_price = pos.stop_loss
-                if open_px < pos.stop_loss:
-                    exit_price = open_px  # Gap down, filled worse
-                reason = "STOP_LOSS"
-
-            if pos.take_profit and high >= pos.take_profit:
-                hit_tp = True
-                tp_price = pos.take_profit
-                if open_px > pos.take_profit:
-                    tp_price = open_px  # Gap up, filled better
-
-                # Conservative intra-bar collision:
-                if hit_stop:
-                    # Both hit. Assume worst case: stop hit first.
-                    pass
-                else:
-                    exit_price = tp_price
-                    reason = "TAKE_PROFIT"
-
-            if hit_stop or hit_tp:
+            if hit is not None:
+                reason, exit_price = hit
                 # Apply slippage (we sell slightly lower)
                 price_seen = exit_price
                 exit_price = exit_price * (Decimal("1") - Decimal(str(self.bt_config.slippage_pct)))
@@ -491,4 +535,5 @@ class BacktestEngine:
             signals=self.signals_seen,
             not_traded=dict(self.not_traded),
             daily_equity=dict(self.daily_equity),
+            shadow_trades=list(self.shadow_trades),
         )

@@ -38,6 +38,23 @@ class BacktestTrade(BaseModel):
     slippage_paid: Decimal = Decimal("0.0")
 
 
+class ShadowTrade(BaseModel):
+    """A signal the Oracle did not approve, played out as if it had been traded (Phase 3.5).
+    Not part of the account: it never took cash or a place."""
+
+    symbol: str
+    signal_id: str
+    verdict: str  # what the Oracle said: VETO, or HOLD / no answer
+    entry_time: datetime
+    entry_price: Decimal
+    exit_time: datetime
+    exit_price: Decimal
+    exit_reason: (
+        str  # STOP_LOSS, TAKE_PROFIT, or OPEN (neither level reached before the data ended)
+    )
+    pnl_pct: float  # on the cost basis, after fees and slippage, like BacktestTrade.pnl_pct
+
+
 class BacktestPosition(BaseModel):
     symbol: str
     quantity: Decimal
@@ -67,6 +84,8 @@ class BacktestResult(BaseModel):
     not_traded: Dict[str, int] = Field(default_factory=dict)
     # The equity at the end of each New York trading day (ISO date -> value), in date order.
     daily_equity: Dict[str, float] = Field(default_factory=dict)
+    # Signals the replayed Oracle did not approve, played out on the bars (see backtest/shadow.py).
+    shadow_trades: List[ShadowTrade] = Field(default_factory=list)
 
     def daily_returns(self) -> List[Tuple[str, float]]:
         """(day, change of the equity over that day as a fraction), the first day measured from
@@ -90,6 +109,8 @@ class BacktestResult(BaseModel):
             "Account as the risk engine sees it: equity is cash plus positions marked at the last closed bar; buying power is the cash (no margin); the daily loss baseline is the equity at the end of the previous New York day. The pattern day trader rule is not modelled (Phase 4). An entry order that does not fill at once (the price runs away from the limit) is not modelled.",
             "Fees are counted at entry and at exit. Slippage is a fixed share of the price (BacktestConfig.slippage_pct), part of every fill price and listed on its own in the report; it is not drawn from real spreads.",
             "The strategy sees the same window of history as the live loop (LOOKBACK_DAYS of 15-minute bars, HTF_LOOKBACK_DAYS of 1-hour bars), never bars from after the decision. The first days of a replay have less history and are warm-up.",
+            "Periods in the report are consecutive stretches of one run with fixed parameters: nothing is fitted, so they show how steady the result is, not an out-of-sample test of a tuned strategy.",
+            "Shadow trades (signals the replayed Oracle did not approve) ignore the position limit and the cash, and a signal the replay knows nothing about is not counted as a veto.",
             "Survivorship bias: Uses a fixed watchlist, ignoring delistings or index changes over the historical period.",
             "Results do not guarantee or promise future profitability.",
         ]

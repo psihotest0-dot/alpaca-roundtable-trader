@@ -139,3 +139,27 @@ def test_the_table_stays_aligned_for_the_longest_name(settings: Any, stored: Any
 
     assert len({len(line) for line in lines}) == 1  # header, rule and rows are equally wide
     assert lines[0].rstrip().endswith("costs $") and " t " in lines[0]
+
+
+def test_backtest_prints_the_analysis_and_the_cost_sweep_when_asked(
+    settings: Any, stored: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with patch("trading_system.cli.Settings", return_value=settings):
+        code = main(["backtest", "--days", "3650", "--windows", "3", "--cost-sweep"])
+
+    out = capsys.readouterr().out
+    assert code == 0
+    assert "=== Per trade ===" in out and "Sharpe (daily):" in out
+    assert "3 consecutive periods" in out
+    assert "=== The same replay at higher costs" in out and "0.20%" in out
+
+
+def test_backtest_without_the_flag_does_not_run_the_cost_sweep(
+    settings: Any, stored: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with patch("trading_system.cli.Settings", return_value=settings):
+        code = main(["backtest", "--days", "3650"])
+
+    out = capsys.readouterr().out
+    assert code == 0 and "=== Per trade ===" in out
+    assert "higher costs" not in out and "Did the Oracle keep us out" not in out
