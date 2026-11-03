@@ -1,71 +1,26 @@
 security:
   ignore-vulnerabilities:
-    73432:
-      reason: Test/Dev
-      expires: 2027-06-01
-    21661:
-      reason: Test/Dev
-      expires: 2027-06-01
-    19125:
-      reason: Test/Dev
-      expires: 2027-06-01
-    61402:
-      reason: Test/Dev
-      expires: 2027-06-01
-    81716:
-      reason: Test/Dev
-      expires: 2027-06-01
-    67432:
-      reason: Test/Dev
-      expires: 2027-06-01
-    58666:
-      reason: Ignore NLTK false pos
-      expires: 2027-06-01
-    69199:
-      reason: Pip ignore
-      expires: 2027-06-01
-    60812:
-      reason: Pip ignore
-      expires: 2027-06-01
-    69629:
-      reason: Pip ignore
-      expires: 2027-06-01
-    70233:
-      reason: Pip ignore
-      expires: 2027-06-01
-    20373:
-      reason: Pytest ignore
-      expires: 2027-06-01
-    45832:
-      reason: Chroma ignore
-      expires: 2027-06-01
-    45831:
-      reason: Chroma ignore
-      expires: 2027-06-01
-    45833:
-      reason: Chroma ignore
-      expires: 2027-06-01
-    45830:
-      reason: Chroma ignore
-      expires: 2027-06-01
-    45829:
-      reason: Chroma ignore
-      expires: 2027-06-01
-    SFTY-20260902-58666:
-      reason: Test/Dev
-      expires: 2027-06-01
-    SFTY-20260612-67432:
-      reason: Test/Dev
-      expires: 2027-06-01
-    SFTY-20260612-21661:
-      reason: Test/Dev
-      expires: 2027-06-01
-    SFTY-20260612-19125:
-      reason: Test/Dev
-      expires: 2027-06-01
-    SFTY-20260612-61402:
-      reason: Test/Dev
-      expires: 2027-06-01
+    # chromadb 1.5.9 is a main dependency (the RSS news store, in-process only). These five are
+    # flaws of Chroma's SERVER (its HTTP API and its authorization providers). This project never
+    # starts a Chroma server and nothing can reach one: it opens a local PersistentClient. No fixed
+    # release is named in the advisories. Chroma is being removed (decisions.md, 2026-11-02): drop
+    # these five entries together with the dependency.
     SFTY-20260518-81716:
-      reason: Test/Dev
-      expires: 2027-06-01
+      reason: "CVE-2026-45829, pre-auth code injection in Chroma's server HTTP API; no server here (in-process client only), Chroma is being removed"
+      expires: 2027-03-01
+    SFTY-20260612-19125:
+      reason: "CVE-2026-45833, code injection in Chroma's server collection-update endpoint; no server here, Chroma is being removed"
+      expires: 2027-03-01
+    SFTY-20260612-67432:
+      reason: "CVE-2026-45832, IDOR in Chroma's server V1 HTTP endpoints; no server here, Chroma is being removed"
+      expires: 2027-03-01
+    SFTY-20260612-21661:
+      reason: "CVE-2026-45831, Chroma's SimpleRBACAuthorizationProvider (server authorization); no server here, Chroma is being removed"
+      expires: 2027-03-01
+    SFTY-20260612-61402:
+      reason: "CVE-2026-45830, tenant access control bypass for authenticated network users of a Chroma server; no server here, Chroma is being removed"
+      expires: 2027-03-01
+    # nltk 3.10.3 is a dev-group dependency only (not in the Docker image) and nothing in src/ imports it.
+    SFTY-20260902-58666:
+      reason: "CVE-2026-81726, path traversal in nltk's parser/tagger save and load functions, which nothing here calls; dev-group only"
+      expires: 2027-03-01

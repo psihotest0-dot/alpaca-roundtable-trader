@@ -111,6 +111,8 @@ jobs:
         run: |
           mkdir -p var
           poetry run alembic upgrade head
+          # The migrations must build exactly what the models describe (no model change without one).
+          poetry run alembic check
           poetry run alembic downgrade base
 
       - name: Run Pytest

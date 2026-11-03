@@ -11,8 +11,10 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Same Poetry version CI uses, so the image resolves poetry.lock the way CI does.
-RUN pip install "poetry==1.8.2"
+# Same Poetry version CI uses, so the image resolves poetry.lock the way CI does. The base image
+# brings its own setuptools (79.x), which has a known vulnerability fixed in 83.0.0 and is not
+# in poetry.lock, so the dependency check never sees it: the floor is set here.
+RUN pip install "poetry==1.8.2" "setuptools>=83.0.0"
 
 # Dependencies first: this layer is rebuilt only when pyproject.toml or poetry.lock change.
 COPY pyproject.toml poetry.lock ./
