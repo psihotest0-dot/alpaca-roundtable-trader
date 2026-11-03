@@ -122,6 +122,12 @@ def create_parser() -> argparse.ArgumentParser:
     # status command
     subparsers.add_parser("status", help="Prints the current status of the trading system.")
 
+    # health command
+    subparsers.add_parser(
+        "health",
+        help="Exit 0 if the trading loop is doing its job, 1 if not (for Docker's healthcheck).",
+    )
+
     # backup-db command
     backup_parser = subparsers.add_parser(
         "backup-db",
@@ -460,6 +466,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         except Exception as e:
             print(f"compare-strategies error: {e}")
             return 1
+
+    elif args.command == "health":
+        try:
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            from trading_system.observability.health import evaluate_heartbeat
+            from trading_system.runtime.heartbeat import read_heartbeat
+
+            inject_offline_dummy_keys()
+            settings = Settings()
+            verdict = evaluate_heartbeat(
+                read_heartbeat(Path(settings.heartbeat_path)), datetime.now(timezone.utc)
+            )
+        except Exception as e:
+            print(f"UNHEALTHY: could not judge the heartbeat: {e}")
+            return 1
+        if verdict.healthy:
+            print("healthy")
+            return 0
+        print("UNHEALTHY: " + "; ".join(verdict.reasons))
+        return 1
 
     elif args.command == "backup-db":
         try:

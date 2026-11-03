@@ -3,12 +3,14 @@ import logging
 import signal
 import threading
 import time
+from pathlib import Path
 from typing import Any, Callable, Optional
 
 from trading_system.config import Settings
 from trading_system.data.rss_pipeline import RSSIngestionPipeline
 from trading_system.domain.models import TradingState
 from trading_system.runtime.cycle import TradingCycle
+from trading_system.runtime.heartbeat import Heartbeat
 from trading_system.runtime.runner import Runner
 from trading_system.storage.database import get_engine, get_session_factory
 from trading_system.storage.repositories import SessionFactory, StateRepository
@@ -92,7 +94,9 @@ class Orchestrator:
             logger.info("Running in DRY-RUN mode. (No live broker orders will be sent)")
 
         cycle = self.build_cycle(is_paper)
-        runner = Runner(cycle, cycle.broker)
+        runner = Runner(
+            cycle, cycle.broker, heartbeat=Heartbeat(Path(self.settings.heartbeat_path))
+        )
         self._start_rss_worker()
         restore = self._stop_on_signals(runner) if handle_signals else None
         try:

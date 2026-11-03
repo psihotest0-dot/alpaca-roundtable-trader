@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
 from trading_system.runtime.cycle import TradingCycle
+from trading_system.runtime.heartbeat import Heartbeat
 from trading_system.runtime.schedule import BAR, bar_boundary, expected_bar_start
 
 logger = logging.getLogger(__name__)
@@ -43,10 +44,17 @@ class Runner:
         *,
         now: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         wait: Optional[Callable[[float], Any]] = None,
+        heartbeat: Optional[Heartbeat] = None,
     ) -> None:
         self.cycle = cycle
         self.broker = broker
         self._now = now
+        self.heartbeat = heartbeat
+        self._started_at = now()
+        self._open_since: Optional[datetime] = None  # when this stretch of open market began
+        self._last_entries_at: Optional[datetime] = None  # the last look-up that completed
+        self._last_entries_errors = 0
+        self._last_entries_skipped: Optional[str] = None
         self._stop = threading.Event()
         # Tests pass a fake clock instead.
         self._wait = wait if wait is not None else self._sleep_until_stopped
@@ -86,7 +94,7 @@ class Runner:
             clock = self.broker.get_clock()
         except Exception as e:
             logger.error(f"Could not read the market clock: {e}")
-            self._wait(CLOCK_RETRY.total_seconds())
+            self._pause(CLOCK_RETRY.total_seconds(), market_open=None, clock_error=True)
             return
 
         # Housekeeping does not depend on the market being open: a GTC entry left over from
@@ -96,12 +104,44 @@ class Runner:
         if not clock.is_open:
             until_open = max((clock.next_open - clock.timestamp).total_seconds(), 1.0)
             logger.info(f"Market is closed; next open in {until_open / 3600:.1f} h.")
-            self._wait(min(until_open, CLOSED_HEARTBEAT.total_seconds()))
+            self._open_since = None
+            self._pause(min(until_open, CLOSED_HEARTBEAT.total_seconds()), market_open=False)
             return
 
+        if self._open_since is None:
+            self._open_since = now
         if not self._look_for_entries(now):
             self._revisit_held(now)
-        self._wait(self._seconds_until_next_event(self._now()))
+        self._pause(self._seconds_until_next_event(self._now()), market_open=True)
+
+    def _pause(
+        self, seconds: float, *, market_open: Optional[bool], clock_error: bool = False
+    ) -> None:
+        """Says how the loop is (and when it will next say so), then waits."""
+        self._beat(seconds, market_open, clock_error)
+        self._wait(seconds)
+
+    def _beat(self, next_within: float, market_open: Optional[bool], clock_error: bool) -> None:
+        if self.heartbeat is None:
+            return
+        try:
+            self.heartbeat.beat(
+                {
+                    "started_at": self._started_at.isoformat(),
+                    "market_open": market_open,
+                    "market_open_since": self._open_since.isoformat() if self._open_since else None,
+                    "clock_error": clock_error,
+                    "next_within_seconds": next_within,
+                    "last_entries_at": (
+                        self._last_entries_at.isoformat() if self._last_entries_at else None
+                    ),
+                    "last_entries_errors": self._last_entries_errors,
+                    "last_entries_skipped": self._last_entries_skipped,
+                },
+                now=self._now(),
+            )
+        except Exception as e:  # a pulse that cannot be written is for the healthcheck to notice
+            logger.warning(f"Could not write the heartbeat: {e}")
 
     def _revisit_held(self, now: datetime) -> None:
         try:
@@ -117,9 +157,15 @@ class Runner:
         try:
             report = self.cycle.run_entries(now, expected_bar_start(now))
             bar_ready = not report.retry_later
+            if bar_ready:
+                self._last_entries_at = now
+                self._last_entries_errors = report.errors
+                self._last_entries_skipped = report.skipped
         except Exception:
             logger.exception("The entry look-up failed.")
             bar_ready = False
+            self._last_entries_errors = 1
+            self._last_entries_skipped = "crashed"
         if bar_ready:
             self._last_bar = boundary
         elif now >= boundary + ENTRY_DELAY + BARS_GIVE_UP:

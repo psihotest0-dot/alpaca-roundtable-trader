@@ -68,8 +68,27 @@ class FakeWorld:
         self.waits.append(seconds)
         self.now += timedelta(seconds=seconds)
 
-    def runner(self) -> Runner:
-        return Runner(self, self, now=lambda: self.now, wait=self.wait)  # type: ignore[arg-type]
+    def runner(self, heartbeat: Any = None) -> Runner:
+        return Runner(
+            self,
+            self,
+            now=lambda: self.now,
+            wait=self.wait,
+            heartbeat=heartbeat,  # type: ignore[arg-type]
+        )
+
+
+class RecordingHeartbeat:
+    """Stands in for the file: keeps every beat."""
+
+    def __init__(self) -> None:
+        self.beats: list[tuple[dict[str, Any], datetime]] = []
+        self.error: Exception | None = None
+
+    def beat(self, fields: dict[str, Any], *, now: datetime) -> None:
+        if self.error:
+            raise self.error
+        self.beats.append((fields, now))
 
 
 def test_the_first_tick_after_the_bar_closed_looks_for_entries_once() -> None:
@@ -267,3 +286,119 @@ def test_nothing_is_revisited_while_the_market_is_closed() -> None:
     world.runner().tick()
 
     assert world.revisits == []
+
+
+# --- the pulse (Phase 6.1b) ------------------------------------------------------------------
+
+
+def test_a_tick_with_the_market_open_beats_with_the_wait_it_is_about_to_make() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY + timedelta(seconds=2))
+    pulse = RecordingHeartbeat()
+    runner = world.runner(pulse)
+
+    runner.tick()
+
+    [(beat, at)] = pulse.beats
+    assert beat["market_open"] is True and beat["clock_error"] is False
+    assert beat["next_within_seconds"] == world.waits[-1]  # what it says it will do, it does
+    assert beat["market_open_since"] == (BOUNDARY + ENTRY_DELAY + timedelta(seconds=2)).isoformat()
+    assert beat["last_entries_at"] == beat["market_open_since"] and beat["last_entries_errors"] == 0
+    assert beat["started_at"] == (BOUNDARY + ENTRY_DELAY + timedelta(seconds=2)).isoformat()
+    assert at == BOUNDARY + ENTRY_DELAY + timedelta(seconds=2)
+
+
+def test_a_pass_with_broken_signals_is_in_the_beat_until_a_clean_one_replaces_it() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    world.entry_reports = [EntriesReport(signals=2, errors=2), EntriesReport(signals=1)]
+    pulse = RecordingHeartbeat()
+    runner = world.runner(pulse)
+
+    runner.tick()
+    world.now = BOUNDARY + timedelta(minutes=15) + ENTRY_DELAY
+    runner.tick()
+
+    assert [b["last_entries_errors"] for b, _ in pulse.beats] == [2, 0]
+
+
+def test_a_pass_that_will_be_retried_does_not_count_as_a_look_up_that_completed() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    world.entry_reports = [EntriesReport(skipped="bar not available yet", retry_later=True)]
+    pulse = RecordingHeartbeat()
+
+    world.runner(pulse).tick()
+
+    [(beat, _)] = pulse.beats
+    assert beat["last_entries_at"] is None
+
+
+def test_a_pass_that_completed_but_skipped_says_why() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    world.entry_reports = [EntriesReport(skipped="trading halted")]
+    pulse = RecordingHeartbeat()
+
+    world.runner(pulse).tick()
+
+    [(beat, _)] = pulse.beats
+    assert beat["last_entries_skipped"] == "trading halted" and beat["last_entries_at"]
+
+
+def test_a_look_up_that_crashes_is_in_the_beat_as_an_error() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    world.entry_reports = [RuntimeError("boom")]
+    pulse = RecordingHeartbeat()
+
+    world.runner(pulse).tick()
+
+    [(beat, _)] = pulse.beats
+    assert beat["last_entries_errors"] == 1 and beat["last_entries_skipped"] == "crashed"
+
+
+def test_a_closed_market_beats_with_its_longer_wait_and_forgets_that_it_was_open() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    pulse = RecordingHeartbeat()
+    runner = world.runner(pulse)
+    runner.tick()  # open
+    world.market_open = False
+
+    runner.tick()  # closed
+
+    open_beat, closed_beat = (b for b, _ in pulse.beats)
+    assert open_beat["market_open"] is True and open_beat["market_open_since"]
+    assert closed_beat["market_open"] is False and closed_beat["market_open_since"] is None
+    assert closed_beat["next_within_seconds"] == CLOSED_HEARTBEAT.total_seconds()
+
+
+def test_the_market_opening_again_starts_a_new_stretch() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY, market_open=False)
+    pulse = RecordingHeartbeat()
+    runner = world.runner(pulse)
+    runner.tick()
+    world.market_open = True
+    world.now += timedelta(hours=16)
+    reopened_at = world.now
+
+    runner.tick()
+
+    assert pulse.beats[-1][0]["market_open_since"] == reopened_at.isoformat()
+
+
+def test_an_unreadable_clock_beats_with_the_error_and_the_retry_wait() -> None:
+    world = FakeWorld(BOUNDARY)
+    world.clock_error = RuntimeError("no clock")
+    pulse = RecordingHeartbeat()
+
+    world.runner(pulse).tick()
+
+    [(beat, _)] = pulse.beats
+    assert beat["clock_error"] is True and beat["market_open"] is None
+    assert beat["next_within_seconds"] == CLOCK_RETRY.total_seconds()
+
+
+def test_a_pulse_that_cannot_be_written_does_not_stop_the_loop() -> None:
+    world = FakeWorld(BOUNDARY + ENTRY_DELAY)
+    pulse = RecordingHeartbeat()
+    pulse.error = OSError("read-only file system")
+
+    world.runner(pulse).tick()
+
+    assert len(world.entries) == 1 and len(world.waits) == 1  # it looked, and it waited

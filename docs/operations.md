@@ -34,6 +34,12 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 - **Status**: `poetry run python -m trading_system status`
   Shows whether entries are halted and the daily loss baseline (start-of-day equity and the trading day it belongs to).
 
+### Is it healthy? (Phase 6)
+- `docker ps` (or Docker Desktop) shows `healthy` / `unhealthy` for each container. `docker compose exec trader python -m trading_system health` says why: it reads the heartbeat file the loop writes every tick (`HEARTBEAT_PATH`, default `var/heartbeat.json`) and exits 1 with the reasons if the loop stopped ticking, cannot read the market clock, has not looked at a bar for 20 minutes with the market open, or its last look-up had signals that broke before they became orders.
+- `alpaca-trader-data` is healthy while its last successful download is under 2.5 hours old (`var/data_ok`); `alpaca-trader-backup` while an archive under 7 hours old exists in `var/backups`.
+- An alert is a `CRITICAL` log line that starts with `ALERT:` (a signal broke in risk or execution; the whole look-up crashed): `docker compose logs trader | grep ALERT`. Docker does not restart an unhealthy container by itself; it only shows it.
+- What each pass over a bar did is in the table `audit_events` (type `entries_cycle`), and the risk decision of every signal, with its reason, is in `risk_decisions`.
+
 ### Incident Procedures
 - **Reconciliation**: If the system crashes mid-submission or enters an unknown state, it halts entries. The `reconcile_order` function attempts to recover status on restart.
 - **Unprotected Positions**: The check `emergency_check_unprotected_positions` runs on every tick of the runner, also while entries are halted or the market is closed. A position without a covering stop halts new entries and raises an alarm; it is not sold. Closing it at market happens only with `EMERGENCY_CLOSE_UNPROTECTED=true` (default `false`). Undo the halt with `resume-entries` after checking the account.

@@ -44,6 +44,15 @@ services:
       - |
         python -m alembic upgrade head || exit 1
         exec python -m trading_system run
+    # `health` reads the loop's heartbeat file: unhealthy if the loop stopped ticking, cannot
+    # read the market clock, has not looked at a bar for 20 minutes with the market open, or
+    # had signals break before they became orders. Docker Desktop shows it; `docker ps` too.
+    healthcheck:
+      test: ["CMD", "python", "-m", "trading_system", "health"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 180s
 
   # Keeps the candle store (table market_bars: 15-minute and 1-hour bars of the watchlist, 180
   # days) up to date once an hour in the same database. An update takes a few seconds. Read-only
@@ -61,9 +70,16 @@ services:
       - |
         python -m alembic upgrade head || exit 1
         while true; do
-          python -m trading_system fetch-history --days 180
+          python -m trading_system fetch-history --days 180 && touch /app/var/data_ok
           sleep 3600
         done
+    # data_ok is touched after every successful download: older than 2.5 hours = two failed runs.
+    healthcheck:
+      test: ["CMD-SHELL", "find /app/var/data_ok -mmin -150 | grep -q ."]
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      start_period: 5m
 
   # The archive of the database OUTSIDE Docker. Every BACKUP_INTERVAL_SECONDS (default 6 hours,
   # first one at start) it writes a checked, compressed snapshot to ./var/backups on the PC
@@ -87,6 +103,13 @@ services:
           python -m trading_system backup-db --out /backups --keep ${BACKUP_KEEP:-28}
           sleep ${BACKUP_INTERVAL_SECONDS:-21600}
         done
+    # An archive newer than 7 hours exists (one every 6).
+    healthcheck:
+      test: ["CMD-SHELL", "find /backups -name 'trading-*.db.gz' -mmin -420 | grep -q ."]
+      interval: 10m
+      timeout: 10s
+      retries: 1
+      start_period: 3m
 
   # For one-off commands against the same database. Not started by `docker compose up`:
   #   docker compose run --rm app python -m trading_system status

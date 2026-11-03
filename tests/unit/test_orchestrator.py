@@ -134,7 +134,7 @@ class _RunnerThatReceivesASignal:
 
     instances: list["_RunnerThatReceivesASignal"] = []
 
-    def __init__(self, cycle: object, broker: object) -> None:
+    def __init__(self, cycle: object, broker: object, heartbeat: object = None) -> None:
         self.stopped = False
         self.handler_during_run: object = None
         _RunnerThatReceivesASignal.instances.append(self)
@@ -211,7 +211,7 @@ def test_a_keyboard_interrupt_ends_the_run_like_a_signal(
     settings: Settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     class Interrupted:
-        def __init__(self, cycle: object, broker: object) -> None: ...
+        def __init__(self, cycle: object, broker: object, heartbeat: object = None) -> None: ...
 
         def run(self) -> None:
             raise KeyboardInterrupt

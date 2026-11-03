@@ -17,6 +17,8 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     database_url: str = "sqlite:///./var/trading.db"
+    # Where the trading loop writes its pulse (see runtime/heartbeat.py); `health` reads it.
+    heartbeat_path: str = "./var/heartbeat.json"
     metrics_enabled: bool = False
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 9100
