@@ -117,6 +117,38 @@ def make_bars_with_follow_up(
     )
 
 
+def random_walk_session_bars(
+    seed: int, first_day: str, days: int, drift: float = 0.0
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(15m, 1h) frames with a `timestamp` column for `days` weekdays from `first_day`: the
+    regular session of a New York winter day (14:30-21:00 UTC), 26 bars a day, a random walk
+    with per-bar noise of 0.4 % and a per-bar `drift`. Crossings of the EMAs are frequent, so
+    the strategy has something to find. The hourly bars are made from the 15-minute ones."""
+    rng = np.random.default_rng(seed)
+    sessions = [
+        pd.date_range(day + pd.Timedelta(hours=14, minutes=30), periods=26, freq="15min", tz="UTC")
+        for day in pd.bdate_range(first_day, periods=days)
+    ]
+    index = sessions[0].append(sessions[1:]) if len(sessions) > 1 else sessions[0]
+    closes = 100.0 * np.cumprod(1.0 + rng.normal(drift, 0.004, len(index)))
+    opens = np.concatenate([[100.0], closes[:-1]])
+    frame = pd.DataFrame(
+        {
+            "open": opens,
+            "high": np.maximum(opens, closes) * 1.001,
+            "low": np.minimum(opens, closes) * 0.999,
+            "close": closes,
+            "volume": 1000.0,
+        },
+        index=index,
+    )
+    hourly = frame.resample("1h").agg(
+        {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
+    )
+    hourly = hourly.dropna()
+    return with_timestamp_column(frame), with_timestamp_column(hourly)
+
+
 def alpaca_shaped(symbol: str, frame: pd.DataFrame) -> pd.DataFrame:
     """The shape of alpaca-py's `BarSet.df`: MultiIndex (symbol, timestamp),
     no `timestamp` column."""

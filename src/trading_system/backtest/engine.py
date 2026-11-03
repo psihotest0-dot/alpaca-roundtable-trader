@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 from collections import Counter
 from typing import Dict, List, Optional
@@ -8,6 +9,7 @@ import json
 
 from trading_system.config import Settings
 from trading_system.data.live_price import LivePrice, UnusableLivePrice, check_live_price
+from trading_system.data.bars import normalize_bars
 from trading_system.domain.enums import OrderSide
 from trading_system.domain.models import (
     AccountSnapshot,
@@ -20,7 +22,7 @@ from trading_system.risk.engine import RiskEngine
 from trading_system.runtime.runner import ENTRY_DELAY
 from trading_system.runtime.schedule import BAR, is_regular_session
 from trading_system.strategy.config import RUNTIME_STRATEGY
-from trading_system.strategy.trend import generate_signals, filter_signals
+from trading_system.strategy.trend import calculate_indicators, generate_signals, filter_signals
 from trading_system.backtest.models import (
     BacktestConfig,
     BacktestTrade,
@@ -32,6 +34,10 @@ logger = logging.getLogger(__name__)
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
+# The prefilter below must never drop a signal the strategy would give, so it accepts a bar
+# whose indicators are this close (relative) to the line, and the strategy has the last word.
+_MARGIN = 1e-6
+
 
 class BacktestEngine:
     def __init__(
@@ -40,7 +46,13 @@ class BacktestEngine:
         bt_config: BacktestConfig,
         df_15m: Dict[str, pd.DataFrame],
         df_1h: Dict[str, pd.DataFrame],
+        prefilter: bool = True,
     ):
+        """`prefilter`: ask the strategy only about symbols whose last closed bar could be a
+        signal (an EMA cross-up with the RSI in its band, both read off indicators computed once
+        for the whole history). It gives the same signals as asking about every symbol at every
+        bar, because the strategy judges each symbol on its own, and it is many times faster.
+        Turn it off to get the slow, exhaustive behaviour (the tests compare the two)."""
         self.settings = settings
         self.bt_config = bt_config
 
@@ -72,6 +84,12 @@ class BacktestEngine:
 
         self.signals_seen = 0
         self.not_traded: Counter[str] = Counter()
+        self.daily_equity: Dict[str, float] = {}
+
+        self.prefilter = prefilter
+        self._bars_15m: Dict[str, pd.DataFrame] = {}
+        self._bars_1h: Dict[str, pd.DataFrame] = {}
+        self._could_signal: Dict[str, np.ndarray] = {}
 
         self.oracle_decisions: Dict[str, bool] = {}
         if bt_config.replay_oracle_path:
@@ -95,6 +113,8 @@ class BacktestEngine:
             logger.error(f"Failed to load replay oracle: {e}")
 
     def run(self) -> BacktestResult:
+        self._prepare()
+
         # Align all unique timestamps from 15m data
         all_timestamps = set()
         for df in self.df_15m.values():
@@ -123,6 +143,7 @@ class BacktestEngine:
             total_equity = self._calculate_equity(current_time)
             self._last_equity = total_equity
             self.equity_curve.append(float(total_equity))
+            self.daily_equity[trading_day(current_time).isoformat()] = float(total_equity)
             if total_equity > self.max_equity:
                 self.max_equity = float(total_equity)
             drawdown = (self.max_equity - float(total_equity)) / self.max_equity
@@ -146,7 +167,8 @@ class BacktestEngine:
     def _look_for_entries(self, current_time: datetime) -> None:
         self._decision_time = current_time + ENTRY_DELAY
         # `generate_signals` filters internally using the evaluation time: closed bars only.
-        signals = generate_signals(self.df_15m, self.df_1h, self.strategy_config, current_time)
+        data_15m, data_1h = self._strategy_inputs(current_time)
+        signals = generate_signals(data_15m, data_1h, self.strategy_config, current_time)
         fresh = filter_signals(signals, set(self.positions.keys()))
         self.signals_seen += len(fresh)
         for sig in fresh:
@@ -154,6 +176,66 @@ class BacktestEngine:
                 self.not_traded["Oracle: no approval"] += 1
                 continue
             self._enter(sig, current_time)
+
+    def _prepare(self) -> None:
+        """Brings every symbol's bars into one shape (sorted, one row per instant, UTC) and, if
+        the prefilter is on, marks the bars where a signal is possible at all."""
+        self._bars_15m = {s: normalize_bars(df) for s, df in self.df_15m.items()}
+        self._bars_1h = {s: normalize_bars(df) for s, df in self.df_1h.items()}
+        self._could_signal = {}
+        if not self.prefilter:
+            return
+        config = self.strategy_config
+        for symbol, frame in self._bars_15m.items():
+            if frame.empty:
+                continue
+            ind = calculate_indicators(frame, config, is_htf=False)
+            fast = ind["ema_fast"].to_numpy(dtype=float)
+            slow = ind["ema_slow"].to_numpy(dtype=float)
+            rsi = ind["rsi"].to_numpy(dtype=float)
+            margin = _MARGIN * np.abs(slow)
+            crossed = np.zeros(len(frame), dtype=bool)
+            crossed[1:] = (fast[:-1] <= slow[:-1] + margin[:-1]) & (
+                fast[1:] > slow[1:] - margin[1:]
+            )
+            in_band = (rsi >= config.rsi_lower_bound - _MARGIN) & (
+                rsi <= config.rsi_upper_bound + _MARGIN
+            )
+            self._could_signal[symbol] = crossed & in_band
+
+    def _may_signal(self, symbol: str, current_time: datetime) -> bool:
+        """Whether the last bar closed by `current_time` could be a signal bar for `symbol`."""
+        flags = self._could_signal.get(symbol)
+        if flags is None:
+            return False
+        position = self._bars_15m[symbol].index.searchsorted(current_time - BAR, side="right") - 1
+        return position >= 1 and bool(flags[position])
+
+    def _strategy_inputs(
+        self, current_time: datetime
+    ) -> tuple[Dict[str, pd.DataFrame], Dict[str, pd.DataFrame]]:
+        """What the strategy is shown at `current_time`: for each symbol the bars of the live
+        loop's window (LOOKBACK_DAYS of 15-minute bars, HTF_LOOKBACK_DAYS of 1-hour bars) that
+        started before now. Nothing from the future, and no more history than the live loop has."""
+        span_15m = pd.Timedelta(days=self.settings.lookback_days)
+        span_1h = pd.Timedelta(days=self.settings.htf_lookback_days)
+        data_15m: Dict[str, pd.DataFrame] = {}
+        data_1h: Dict[str, pd.DataFrame] = {}
+        for symbol, frame in self._bars_15m.items():
+            hourly = self._bars_1h.get(symbol)
+            if frame.empty or hourly is None or hourly.empty:
+                continue
+            if self.prefilter and not self._may_signal(symbol, current_time):
+                continue
+            data_15m[symbol] = self._window(frame, current_time, span_15m)
+            data_1h[symbol] = self._window(hourly, current_time, span_1h)
+        return data_15m, data_1h
+
+    @staticmethod
+    def _window(frame: pd.DataFrame, current_time: datetime, span: pd.Timedelta) -> pd.DataFrame:
+        first = frame.index.searchsorted(current_time - span, side="left")
+        end = frame.index.searchsorted(current_time, side="left")
+        return frame.iloc[first:end]
 
     def _apply_oracle(self, sig: StrategySignal) -> bool:
         if not self.settings.oracle_enabled:
@@ -263,6 +345,7 @@ class BacktestEngine:
             return
 
         self.cash -= notional + fee
+        entry_slippage = intent.quantity * (fill_price - price)
         # The legs sit where the entry plan put them (measured from the limit), not where the
         # fill happened to land.
         self.positions[sig.symbol] = BacktestPosition(
@@ -271,6 +354,7 @@ class BacktestEngine:
             average_entry_price=fill_price,
             entry_time=current_time,
             entry_fee=fee,
+            entry_slippage=entry_slippage,
             stop_loss=intent.stop_price,
             take_profit=intent.take_profit_price,
         )
@@ -320,7 +404,9 @@ class BacktestEngine:
 
             if hit_stop or hit_tp:
                 # Apply slippage (we sell slightly lower)
+                price_seen = exit_price
                 exit_price = exit_price * (Decimal("1") - Decimal(str(self.bt_config.slippage_pct)))
+                exit_slippage = pos.quantity * (price_seen - exit_price)
 
                 notional = pos.quantity * exit_price
                 fee = self.bt_config.fee_per_trade + (
@@ -346,7 +432,7 @@ class BacktestEngine:
                     pnl=pnl,
                     pnl_pct=pnl_pct,
                     fees_paid=fee + pos.entry_fee,
-                    slippage_paid=Decimal("0"),  # Already baked into price
+                    slippage_paid=pos.entry_slippage + exit_slippage,  # already in the prices
                 )
                 self.trades.append(trade)
                 closed_positions.append(sym)
@@ -414,4 +500,5 @@ class BacktestEngine:
             trades=self.trades,
             signals=self.signals_seen,
             not_traded=dict(self.not_traded),
+            daily_equity=dict(self.daily_equity),
         )

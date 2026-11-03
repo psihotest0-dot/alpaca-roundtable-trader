@@ -195,7 +195,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Profit Factor:   {result.profit_factor:.2f}")
             print(f"Max Exposure:    {result.max_exposure_pct * 100:.2f}%")
             print(f"Fees Paid:       ${result.total_fees:,.2f}")
-            print(f"Slippage Paid:   ${result.total_slippage:,.2f}")
+            print(f"Slippage Paid:   ${result.total_slippage:,.2f} (already inside the prices)")
+
+            days = result.daily_returns()
+            if days:
+                best = max(days, key=lambda d: d[1])
+                worst = min(days, key=lambda d: d[1])
+                down = sum(1 for _, r in days if r < 0)
+                print(f"Days:            {len(days)} ({down} down)")
+                print(f"Best Day:        {best[1] * 100:+.2f}% ({best[0]})")
+                print(f"Worst Day:       {worst[1] * 100:+.2f}% ({worst[0]})")
 
             if result.not_traded:
                 print("\n=== Signals that did not become a trade ===")
