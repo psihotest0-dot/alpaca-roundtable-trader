@@ -53,7 +53,7 @@ docker compose exec trader python -m trading_system backtest --days 30
 
 ### Main CLI Commands
 
-- `validate-config`: Validates the `.env` settings offline.
+- `validate-config`: Checks the real configuration offline: the Alpaca keys are there, the settings are in range and agree with each other, and a key in `.env` that nothing reads is warned about (names only, never values).
 - `doctor`: Runs diagnostic checks (use `--network` for API validation).
 - `run`: Starts the trading loop in `--dry-run` mode (default). Use `--paper` to enable active broker orders.
 - `pause-entries`: Manual kill switch to halt new trades.

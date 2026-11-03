@@ -19,7 +19,7 @@ def load_candles(
 ) -> tuple[Dict[str, pd.DataFrame], Dict[str, pd.DataFrame]]:
     """(15-minute frames, 1-hour frames) of the last `days` days, for the watchlist symbols that
     have both."""
-    symbols = [s.strip() for s in settings.watchlist.split(",") if s.strip()]
+    symbols = settings.watchlist_symbols
     since = (now or datetime.now(timezone.utc)) - timedelta(days=days)
     repo = MarketBarRepository(get_session_factory(get_engine(settings.database_url)))
     df_15m = repo.load(symbols, "15m", start=since)

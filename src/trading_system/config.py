@@ -1,7 +1,7 @@
 import math
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -49,8 +49,9 @@ class Settings(BaseSettings):
     max_total_planned_open_risk_pct: float = Field(0.05, ge=0.0, le=1.0)
     max_daily_loss_pct: float = Field(0.02, ge=0.0, le=1.0)
 
-    stop_loss_pct: float = Field(0.04, ge=0.0, le=1.0)
-    take_profit_pct: float = Field(0.05, ge=0.0, le=1.0)
+    # A stop of 0 is no stop, and a target of 0 is no target: both have to be above zero.
+    stop_loss_pct: float = Field(0.04, gt=0.0, le=1.0)
+    take_profit_pct: float = Field(0.05, gt=0.0, le=1.0)
     # How far above the last price the entry limit sits (see risk/entry_plan.py).
     entry_limit_buffer_pct: float = Field(0.001, ge=0.0, le=0.05)
     # An entry is planned around the last trade (data/live_price.py): no entry if that trade is
@@ -81,6 +82,39 @@ class Settings(BaseSettings):
         if v is False:
             raise ValueError("Live trading is not supported. IS_PAPER must be true.")
         return v
+
+    @model_validator(mode="after")
+    def check_the_settings_agree(self) -> "Settings":
+        """Limits that contradict each other, found at start and not on the first signal."""
+        if self.position_size_pct > self.max_gross_exposure_pct:
+            raise ValueError(
+                f"POSITION_SIZE_PCT ({self.position_size_pct}) is larger than "
+                f"MAX_GROSS_EXPOSURE_PCT ({self.max_gross_exposure_pct}): no position could ever "
+                "be opened"
+            )
+        if self.max_planned_risk_per_trade_pct > self.max_total_planned_open_risk_pct:
+            raise ValueError(
+                f"MAX_PLANNED_RISK_PER_TRADE_PCT ({self.max_planned_risk_per_trade_pct}) is larger "
+                f"than MAX_TOTAL_PLANNED_OPEN_RISK_PCT ({self.max_total_planned_open_risk_pct})"
+            )
+        if self.chunk_overlap >= self.chunk_size:
+            raise ValueError(
+                f"CHUNK_OVERLAP ({self.chunk_overlap}) must be smaller than CHUNK_SIZE "
+                f"({self.chunk_size})"
+            )
+        # Not read yet: the 15-minute and 1-hour bars are fixed in the data layer. Another value
+        # would be accepted and silently ignored, which is worse than refusing it.
+        if self.timeframe_minutes != 15 or self.htf_timeframe_minutes != 60:
+            raise ValueError(
+                "TIMEFRAME_MINUTES must be 15 and HTF_TIMEFRAME_MINUTES 60: the bar sizes are "
+                "not configurable yet"
+            )
+        return self
+
+    @property
+    def watchlist_symbols(self) -> list[str]:
+        """The watchlist as a list (it is validated, upper-cased and de-duplicated already)."""
+        return [s for s in self.watchlist.split(",") if s]
 
     @field_validator(
         "position_size_pct",

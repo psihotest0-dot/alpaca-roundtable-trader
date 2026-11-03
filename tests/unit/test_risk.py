@@ -488,7 +488,8 @@ def test_a_price_that_cannot_hold_a_bracket_is_rejected(
 
 
 def test_no_stop_means_no_trade(risk_engine, base_signal, base_account, base_state):
-    """STOP_LOSS_PCT=0 is accepted by Settings; it must not produce an entry without a stop."""
+    """Settings refuses STOP_LOSS_PCT=0 now; if a zero got in some other way (the setting is a plain
+    attribute), the risk engine must still not produce an entry without a stop."""
     risk_engine.settings.stop_loss_pct = 0.0
 
     decision, intent = risk_engine.evaluate_signal(

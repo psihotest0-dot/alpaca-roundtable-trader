@@ -169,20 +169,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     setup_json_logger("", level=logging.INFO, log_file=log_file_for(args.command))
 
     if args.command == "validate-config":
-        try:
-            inject_offline_dummy_keys()
-            Settings()
+        from trading_system.config_check import check_config
+
+        config_report = check_config()
+        for warning in config_report.warnings:
+            print(f"WARNING: {warning}")
+        if config_report.valid:
             print("Configuration is valid.")
             return 0
-        except ValidationError as e:
-            print(f"Configuration validation failed:\n{e}")
-            return 1
+        print("Configuration is NOT valid:")
+        for error in config_report.errors:
+            print(f"  - {error}")
+        return 1
 
     elif args.command == "doctor":
         try:
-            if not args.network:
-                inject_offline_dummy_keys()
+            from trading_system.config_check import unknown_key_warnings
+
             settings = Settings()
+            for warning in unknown_key_warnings():
+                print(f"WARNING: {warning}")
             print("Local configuration is valid.")
 
             if args.network:
@@ -305,8 +311,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             from trading_system.storage.repositories import MarketBarRepository
 
             settings = Settings()
-            wanted = args.symbols if args.symbols else settings.watchlist
-            symbols = [s.strip().upper() for s in wanted.split(",") if s.strip()]
+            symbols = (
+                [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+                if args.symbols
+                else settings.watchlist_symbols
+            )
             now = datetime.now(timezone.utc)
             repo = MarketBarRepository(get_session_factory(get_engine(settings.database_url)))
             print(f"Updating {len(symbols)} symbols, {args.days} days back...")

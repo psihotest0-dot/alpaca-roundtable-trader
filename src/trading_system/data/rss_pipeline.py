@@ -59,9 +59,7 @@ class RSSIngestionPipeline:
                     entries = self.parser.parse(feed_url, content)
                     logger.info(f"Parsed {len(entries)} entries from {feed_url}")
 
-                    watchlist_symbols = [
-                        s.strip() for s in self.settings.watchlist.split(",") if s.strip()
-                    ]
+                    watchlist_symbols = self.settings.watchlist_symbols
 
                     for entry in entries:
                         report["entries_seen"] += 1

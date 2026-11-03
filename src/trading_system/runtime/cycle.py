@@ -144,7 +144,7 @@ class TradingCycle:
 
     @property
     def watchlist(self) -> list[str]:
-        return [s.strip() for s in self.settings.watchlist.split(",") if s.strip()]
+        return list(self.settings.watchlist_symbols)
 
     # ------------------------------------------------------------------ entries
 
