@@ -88,6 +88,23 @@ def create_parser() -> argparse.ArgumentParser:
         "--symbols", type=str, help="Comma-separated symbols. Default: the WATCHLIST."
     )
 
+    # fetch-daily command
+    daily_parser = subparsers.add_parser(
+        "fetch-daily",
+        help="Downloads daily bars of the research universe (full-market feed) into research.db.",
+    )
+    daily_parser.add_argument(
+        "--since",
+        type=str,
+        default="2016-01-01",
+        help="First day of history, YYYY-MM-DD. The full-market feed starts on 2016-01-04.",
+    )
+    daily_parser.add_argument(
+        "--symbols",
+        type=str,
+        help="Comma-separated symbols. Default: the research universe (data/universe.py).",
+    )
+
     # run command
     run_parser = subparsers.add_parser("run", help="Runs the trading system.")
     run_parser.add_argument(
@@ -358,6 +375,69 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
         except Exception as e:
             print(f"fetch-history error: {e}")
+            return 1
+
+    elif args.command == "fetch-daily":
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from trading_system.data.alpaca_data import AlpacaData
+            from trading_system.data.history import (
+                RESEARCH_TIMEFRAMES,
+                stale_symbols,
+                update_history,
+            )
+            from trading_system.data.universe import MARKET_SYMBOL, research_universe
+            from trading_system.storage.research import SameDatabaseError, open_research_store
+
+            settings = Settings()
+            symbols = (
+                [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+                if args.symbols
+                else research_universe()
+            )
+            since = datetime.strptime(args.since, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+            try:
+                repo = open_research_store(settings.research_database_url, settings.database_url)
+            except SameDatabaseError as e:
+                print(f"fetch-daily error: {e}")
+                return 1
+            print(f"Updating {len(symbols)} symbols, daily bars from {args.since}...")
+            report = update_history(
+                AlpacaData(settings),
+                repo,
+                symbols,
+                list(RESEARCH_TIMEFRAMES),
+                start=since,
+                now=datetime.now(timezone.utc),
+            )
+            print(f"1d: {report.rows_written:,} rows written")
+            if report.downloaded_again:
+                again = sorted({s for s, _ in report.downloaded_again})
+                print(
+                    "Downloaded again from the start (prices re-adjusted, or the history is "
+                    "shorter than asked for): " + ", ".join(again)
+                )
+            if report.no_data:
+                print(
+                    "No data from Alpaca for: " + ", ".join(sorted({s for s, _ in report.no_data}))
+                )
+            stale = [
+                (s, last)
+                for s, last in stale_symbols(repo, symbols, "1d", tolerance=timedelta(days=5))
+                if (s, "1d") not in report.no_data
+            ]
+            if stale:
+                print(
+                    "WARNING, the newest bar is old (renamed, delisted or halted?): "
+                    + ", ".join(f"{s} ({last:%Y-%m-%d})" for s, last in stale if last is not None)
+                )
+            market = repo.span(MARKET_SYMBOL, "1d")
+            if market is not None:
+                print(f"{MARKET_SYMBOL}: {market[0]:%Y-%m-%d} to {market[1]:%Y-%m-%d}")
+            return 0
+        except Exception as e:
+            print(f"fetch-daily error: {e}")
             return 1
 
     elif args.command == "run":

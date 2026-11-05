@@ -17,6 +17,10 @@ class Settings(BaseSettings):
 
     log_level: str = "INFO"
     database_url: str = "sqlite:///./var/trading.db"
+    # The strategy research's own candle file (daily bars of the research universe, see
+    # data/universe.py). A cache that `fetch-daily` rebuilds, kept out of trading.db so a big
+    # write cannot hold up the trading loop and the backups of trading.db stay small.
+    research_database_url: str = "sqlite:///./var/research.db"
     # Where the trading loop writes its pulse (see runtime/heartbeat.py); `health` reads it.
     heartbeat_path: str = "./var/heartbeat.json"
     metrics_enabled: bool = False

@@ -36,10 +36,30 @@ MAX_PRICE_DRIFT = 1e-4
 # leaves a few days without bars) is taken to be too short and is downloaded from the start.
 BACKFILL_SLACK = timedelta(days=5)
 
-TIMEFRAMES: dict[str, tuple[TimeFrame, timedelta]] = {
-    "15m": (FIFTEEN_MINUTES, timedelta(minutes=15)),
-    "1h": (ONE_HOUR, timedelta(hours=1)),
+
+@dataclass(frozen=True)
+class TimeframeSpec:
+    frame: TimeFrame
+    length: timedelta
+    # None: the configured feed (DATA_FEED). Set where a series must come from one feed only.
+    feed: Optional[str] = None
+
+
+# What `fetch-history` keeps in trading.db: the bars the live loop trades on (the configured feed).
+TIMEFRAMES: dict[str, TimeframeSpec] = {
+    "15m": TimeframeSpec(FIFTEEN_MINUTES, timedelta(minutes=15)),
+    "1h": TimeframeSpec(ONE_HOUR, timedelta(hours=1)),
 }
+
+# What `fetch-daily` keeps in research.db. Daily bars come from SIP, the full-market feed, always:
+# the free IEX feed starts in 2020 and reports 2 to 3 % of the real volume, so a daily signal
+# measured on it would measure the wrong thing. A bar counts as closed from the next midnight New
+# York time (Alpaca stamps a daily bar with the start of its day), a few hours after the close.
+RESEARCH_TIMEFRAMES: dict[str, TimeframeSpec] = {
+    "1d": TimeframeSpec(TimeFrame.Day, timedelta(days=1), feed="sip"),
+}
+
+_SPECS: dict[str, TimeframeSpec] = {**TIMEFRAMES, **RESEARCH_TIMEFRAMES}
 
 
 @dataclass
@@ -76,8 +96,8 @@ def update_history(
     now: datetime,
 ) -> HistoryReport:
     """Brings the store to hold the closed bars of `symbols` from `start` to `now`, in the
-    given timeframes ("15m", "1h"). Downloads only what is missing, as one request for all
-    symbols that need the same thing."""
+    given timeframes (TIMEFRAMES: "15m", "1h"; RESEARCH_TIMEFRAMES: "1d"). Downloads only what
+    is missing, as one request for all symbols that need the same thing."""
     report = HistoryReport()
     for name in timeframes:
         _update_timeframe(data, repo, list(symbols), name, start, now, report)
@@ -93,7 +113,7 @@ def _update_timeframe(
     now: datetime,
     report: HistoryReport,
 ) -> None:
-    timeframe, length = TIMEFRAMES[name]
+    spec = _SPECS[name]
     from_start: list[str] = []  # download the whole history and replace what is stored
     extend: dict[str, datetime] = {}  # download from here on and add to what is stored
     had_history: set[str] = set()
@@ -110,7 +130,7 @@ def _update_timeframe(
             extend[symbol] = span[1] - OVERLAP
 
     if extend:
-        fresh = _download(data, list(extend), timeframe, length, min(extend.values()), now)
+        fresh = _download(data, list(extend), spec, min(extend.values()), now)
         for symbol in extend:
             new = fresh.get(symbol)
             if new is None or new.empty:
@@ -125,7 +145,7 @@ def _update_timeframe(
                 )
 
     if from_start:
-        full = _download(data, from_start, timeframe, length, start, now)
+        full = _download(data, from_start, spec, start, now)
         for symbol in from_start:
             bars = full.get(symbol)
             if bars is None or bars.empty:
@@ -141,11 +161,38 @@ def _update_timeframe(
 def _download(
     data: AlpacaData,
     symbols: list[str],
-    timeframe: TimeFrame,
-    length: timedelta,
+    spec: TimeframeSpec,
     start: datetime,
     now: datetime,
 ) -> dict[str, pd.DataFrame]:
     """The closed bars only: the bar still forming at `now` is not a candle yet."""
-    frames = data.fetch_bars_bulk(symbols, timeframe, start, now)
-    return {symbol: bars[bars.index + length <= now] for symbol, bars in frames.items()}
+    frames = data.fetch_bars_bulk(symbols, spec.frame, start, now, feed=spec.feed)
+    return {symbol: bars[bars.index + spec.length <= now] for symbol, bars in frames.items()}
+
+
+def stale_symbols(
+    repo: MarketBarRepository,
+    symbols: Sequence[str],
+    timeframe: str,
+    *,
+    tolerance: timedelta,
+) -> list[tuple[str, Optional[datetime]]]:
+    """Symbols whose newest stored bar is more than `tolerance` older than the newest bar of
+    any of them, with that bar's time (None: nothing is stored at all).
+
+    A symbol that was renamed, delisted or halted stops getting bars while the rest go on, and
+    nothing in the download says so (the old name just ends); a run of daily research on it
+    would see a gap that is not real. This is how the update reports it."""
+    last: dict[str, datetime] = {}
+    for symbol in symbols:
+        span = repo.span(symbol, timeframe)
+        if span is not None:
+            last[symbol] = span[1]
+    newest = max(last.values(), default=None)
+    flagged: list[tuple[str, Optional[datetime]]] = []
+    for symbol in symbols:
+        if symbol not in last:
+            flagged.append((symbol, None))
+        elif newest is not None and newest - last[symbol] > tolerance:
+            flagged.append((symbol, last[symbol]))
+    return flagged

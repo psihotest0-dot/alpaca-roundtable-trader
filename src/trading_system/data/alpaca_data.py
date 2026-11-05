@@ -1,7 +1,7 @@
 import logging
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Sequence
+from typing import Optional, Sequence
 
 import pandas as pd
 from alpaca.data.enums import Adjustment, DataFeed
@@ -23,6 +23,15 @@ FIFTEEN_MINUTES = TimeFrame(15, TimeFrameUnit.Minute)
 ONE_HOUR = TimeFrame(1, TimeFrameUnit.Hour)
 
 _OHLCV = ("open", "high", "low", "close", "volume")
+
+# Alpaca's free plan serves the full-market (SIP) history only when the request ends at least 15
+# minutes in the past; a request that reaches closer to now is refused. One minute of margin.
+SIP_DELAY = timedelta(minutes=16)
+
+
+def _aware(moment: datetime) -> datetime:
+    """`moment` as a UTC time; a naive one is taken to be UTC already."""
+    return moment if moment.tzinfo is not None else moment.replace(tzinfo=timezone.utc)
 
 
 class AlpacaData:
@@ -53,22 +62,34 @@ class AlpacaData:
 
     @retry_read_request()
     def fetch_bars_bulk(
-        self, symbols: Sequence[str], timeframe: TimeFrame, start: datetime, end: datetime
+        self,
+        symbols: Sequence[str],
+        timeframe: TimeFrame,
+        start: datetime,
+        end: datetime,
+        feed: Optional[str] = None,
     ) -> dict[str, pd.DataFrame]:
         """Bars for all `symbols` in ONE request (alpaca-py pages through the results).
 
         Symbols without any bars are left out of the result. Prices are adjusted for
         splits and dividends so that a split inside the lookback window cannot look like
-        a crash to the indicators."""
+        a crash to the indicators.
+
+        `feed` overrides the configured one for this request. On "sip" the end is held back
+        by SIP_DELAY (the free plan refuses anything closer to now)."""
         if not symbols:
             return {}
+
+        used = (feed or self.feed).lower()
+        if used == "sip":
+            end = min(_aware(end), datetime.now(timezone.utc) - SIP_DELAY)
 
         request = StockBarsRequest(
             symbol_or_symbols=list(symbols),
             timeframe=timeframe,
             start=start,
             end=end,
-            feed=DataFeed(self.feed),
+            feed=DataFeed(used),
             adjustment=Adjustment.ALL,
         )
         # get_stock_bars returns a BarSet (or a raw dict only if raw_data=True, which we never set).

@@ -6,13 +6,16 @@ from typing import Any
 import numpy as np
 import pandas as pd
 import pytest
+from alpaca.data.enums import DataFeed
 
+from tests.fixtures.bars import daily_bars
 from tests.fixtures.fakes import FakeHistoryClient, asked
 from trading_system.data.alpaca_data import AlpacaData
 from trading_system.data.history import (
     ADJUSTMENT,
     OVERLAP,
     prices_drifted,
+    stale_symbols,
     update_history,
 )
 from trading_system.storage.models import MarketBarModel
@@ -343,3 +346,114 @@ def test_the_rows_carry_the_basis_and_the_time_they_were_fetched(
         row = session.query(MarketBarModel).first()
         assert (row.adjustment, row.timeframe) == (ADJUSTMENT, "1h")
         assert row.fetched_at is not None
+
+
+# ------------------------------------------------------------------------------ daily bars
+
+
+def daily_history(*symbols: str, days: int = 30) -> FakeHistoryClient:
+    """`days` of daily bars, the newest being the day that is still open at NOW (Alpaca stamps a
+    daily bar with the start of its New York day: 05:00 UTC in winter)."""
+    today = datetime(2026, 11, 2, 5, 0, tzinfo=UTC)
+    return FakeHistoryClient(
+        {1440: {s: daily_bars(today, days, base=100 + i) for i, s in enumerate(symbols)}}
+    )
+
+
+def test_daily_bars_are_stored_closed_only_and_asked_for_on_the_full_market_feed(
+    store: MarketBarRepository, make_data: Any
+) -> None:
+    client = daily_history("AAPL")
+
+    report = update_history(
+        make_data(client), store, ["AAPL"], ["1d"], start=NOW - timedelta(days=60), now=NOW
+    )
+
+    bars = store.load(["AAPL"], "1d")["AAPL"]
+    # Monday 2 November is still open at 21:07 UTC; the bar of Sunday 1 November is the newest.
+    assert bars.index[-1] == datetime(2026, 11, 1, 5, 0, tzinfo=UTC)
+    assert report.rows[("AAPL", "1d")] == len(bars) == 29
+    (request,) = client.requests
+    assert request.feed == DataFeed.SIP  # whatever DATA_FEED says: the free IEX feed is no basis
+
+
+def test_the_intraday_series_stay_on_the_configured_feed(
+    store: MarketBarRepository, make_data: Any
+) -> None:
+    client = history("AAPL")
+
+    update_history(
+        make_data(client), store, ["AAPL"], ["15m", "1h"], start=NOW - timedelta(days=3), now=NOW
+    )
+
+    assert {r.feed for r in client.requests} == {DataFeed.IEX}
+
+
+def test_a_daily_bar_counts_as_closed_from_the_next_midnight_in_new_york(
+    store: MarketBarRepository, make_data: Any
+) -> None:
+    client = daily_history("AAPL")
+    data = make_data(client)
+    start = NOW - timedelta(days=60)
+
+    update_history(
+        data, store, ["AAPL"], ["1d"], start=start, now=datetime(2026, 11, 3, 4, 59, tzinfo=UTC)
+    )
+    before = store.span("AAPL", "1d")[1]  # type: ignore[index]
+    update_history(
+        data, store, ["AAPL"], ["1d"], start=start, now=datetime(2026, 11, 3, 5, 0, tzinfo=UTC)
+    )
+    after = store.span("AAPL", "1d")[1]  # type: ignore[index]
+
+    assert before == datetime(2026, 11, 1, 5, 0, tzinfo=UTC)
+    assert after == datetime(2026, 11, 2, 5, 0, tzinfo=UTC)  # a minute later, Monday is in
+
+
+def test_daily_and_intraday_bars_live_side_by_side_without_touching_each_other(
+    store: MarketBarRepository, make_data: Any
+) -> None:
+    both = history("AAPL")
+    both._frames[1440] = daily_history("AAPL")._frames[1440]
+    data = make_data(both)
+
+    update_history(data, store, ["AAPL"], ["15m", "1d"], start=NOW - timedelta(days=10), now=NOW)
+
+    assert len(store.load(["AAPL"], "1d")["AAPL"]) == 9
+    assert store.load(["AAPL"], "1h") == {}  # not asked for, not there
+    assert store.span("AAPL", "15m") is not None
+
+
+# ---------------------------------------------------------------------------- stale symbols
+
+
+def _store_daily(store: MarketBarRepository, symbol: str, last: datetime) -> None:
+    store.replace(symbol, "1d", daily_bars(last, 5), adjustment="all", fetched_at=NOW)
+
+
+def test_a_symbol_whose_bars_stopped_long_before_the_others_is_flagged(
+    store: MarketBarRepository,
+) -> None:
+    newest = datetime(2026, 11, 2, 5, 0, tzinfo=UTC)
+    _store_daily(store, "AAPL", newest)
+    _store_daily(store, "MSFT", newest - timedelta(days=3))  # a long weekend: not stale
+    _store_daily(store, "MMC", datetime(2026, 1, 13, 5, 0, tzinfo=UTC))  # renamed in January
+
+    flagged = stale_symbols(store, ["AAPL", "MSFT", "MMC"], "1d", tolerance=timedelta(days=5))
+
+    assert flagged == [("MMC", datetime(2026, 1, 13, 5, 0, tzinfo=UTC))]
+
+
+def test_a_symbol_with_nothing_stored_is_flagged_without_a_date(
+    store: MarketBarRepository,
+) -> None:
+    _store_daily(store, "AAPL", datetime(2026, 11, 2, 5, 0, tzinfo=UTC))
+
+    flagged = stale_symbols(store, ["AAPL", "ZZZZ"], "1d", tolerance=timedelta(days=5))
+
+    assert flagged == [("ZZZZ", None)]
+
+
+def test_an_empty_store_flags_every_symbol(store: MarketBarRepository) -> None:
+    flagged = stale_symbols(store, ["AAPL", "MSFT"], "1d", tolerance=timedelta(days=5))
+
+    assert flagged == [("AAPL", None), ("MSFT", None)]

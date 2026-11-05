@@ -9,10 +9,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tests.fixtures.bars import make_bars
+from tests.fixtures.bars import daily_bars, make_bars
 from tests.fixtures.fakes import FakeHistoryClient
 from trading_system.cli import main
 from trading_system.data.alpaca_data import AlpacaData
+from trading_system.data.universe import research_universe
+from trading_system.storage.database import get_engine, get_session_factory
 from trading_system.storage.repositories import MarketBarRepository
 
 
@@ -141,3 +143,108 @@ def test_backtest_only_replays_the_days_asked_for(
     assert replayed is not None
     first = datetime.strptime(replayed.group(1), "%Y-%m-%d").date()
     assert first >= (now - timedelta(days=3)).date()  # not the 18 days that are stored
+
+
+# ------------------------------------------------------------------------------ fetch-daily
+
+
+def _daily_client(**last_days_ago: int) -> FakeHistoryClient:
+    """Thirty daily bars per symbol, the newest `days ago` closed days back from today."""
+    today = pd.Timestamp.now(tz="UTC").normalize() + pd.Timedelta(hours=5)
+    return FakeHistoryClient(
+        {
+            1440: {
+                symbol: daily_bars((today - pd.Timedelta(days=ago)).to_pydatetime(), 30)
+                for symbol, ago in last_days_ago.items()
+            }
+        }
+    )
+
+
+@pytest.fixture
+def research_url(tmp_path: Any) -> str:
+    return f"sqlite:///{(tmp_path / 'research.db').as_posix()}"
+
+
+def test_fetch_daily_fills_the_research_file_and_leaves_the_trading_database_alone(
+    alpaca: Any,
+    make_settings: Any,
+    research_url: str,
+    session_factory: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    alpaca(_daily_client(AAPL=2, SPY=2))
+
+    with patch(
+        "trading_system.cli.Settings",
+        return_value=make_settings(research_database_url=research_url),
+    ):
+        assert main(["fetch-daily", "--symbols", "aapl,spy"]) == 0
+
+    out = capsys.readouterr().out
+    assert "Updating 2 symbols, daily bars from 2016-01-01" in out
+    assert "1d: 60 rows written" in out and "SPY: " in out and "WARNING" not in out
+    research = MarketBarRepository(get_session_factory(get_engine(research_url)))
+    assert sorted(research.load(["AAPL", "SPY"], "1d")) == ["AAPL", "SPY"]
+    assert MarketBarRepository(session_factory).load(["AAPL", "SPY"], "1d") == {}
+
+
+def test_fetch_daily_without_symbols_asks_for_the_whole_research_universe_in_one_request(
+    alpaca: Any, make_settings: Any, research_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = _daily_client(AAPL=2)
+    alpaca(client)
+
+    with patch(
+        "trading_system.cli.Settings",
+        return_value=make_settings(research_database_url=research_url),
+    ):
+        assert main(["fetch-daily"]) == 0
+
+    (request,) = client.requests
+    assert request.symbol_or_symbols == research_universe()
+    assert "No data from Alpaca for:" in capsys.readouterr().out  # the fake knows only AAPL
+
+
+def test_fetch_daily_says_which_symbol_stopped_getting_bars_and_which_alpaca_does_not_know(
+    alpaca: Any, make_settings: Any, research_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    alpaca(_daily_client(AAPL=2, MMC=300))
+
+    with patch(
+        "trading_system.cli.Settings",
+        return_value=make_settings(research_database_url=research_url),
+    ):
+        assert main(["fetch-daily", "--symbols", "AAPL,MMC,ZZZZ"]) == 0
+
+    out = capsys.readouterr().out
+    warning = next(line for line in out.splitlines() if line.startswith("WARNING"))
+    assert "MMC (" in warning and "AAPL" not in warning and "ZZZZ" not in warning
+    assert "No data from Alpaca for: ZZZZ" in out
+
+
+def test_fetch_daily_refuses_to_write_into_the_trading_database(
+    alpaca: Any, make_settings: Any, db_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    client = _daily_client(AAPL=2)
+    alpaca(client)
+
+    with patch(
+        "trading_system.cli.Settings", return_value=make_settings(research_database_url=db_url)
+    ):
+        assert main(["fetch-daily", "--symbols", "AAPL"]) == 1
+
+    assert "must not go into the trading database" in capsys.readouterr().out
+    assert client.requests == []  # it stopped before asking Alpaca for anything
+
+
+def test_fetch_daily_fails_cleanly_on_a_date_it_cannot_read(
+    make_settings: Any, research_url: str, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with patch(
+        "trading_system.cli.Settings",
+        return_value=make_settings(research_database_url=research_url),
+    ):
+        assert main(["fetch-daily", "--since", "2016/01/01"]) == 1
+
+    assert "fetch-daily error" in capsys.readouterr().out

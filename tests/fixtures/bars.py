@@ -72,6 +72,14 @@ def make_bars(now: datetime | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
     return _ohlcv(closes_15m, idx_15m), _ohlcv(closes_1h, idx_1h)
 
 
+def daily_bars(last_start: datetime, periods: int, base: float = 100.0) -> pd.DataFrame:
+    """`periods` daily bars of rising closes, the newest starting at `last_start`. Alpaca stamps a
+    daily bar with the start of its New York day (05:00 UTC in winter), so pass such a time."""
+    closes = base + np.arange(periods) * 0.1
+    index = pd.date_range(end=last_start, periods=periods, freq="D", tz="UTC")
+    return _ohlcv(closes, index)
+
+
 def with_timestamp_column(frame: pd.DataFrame) -> pd.DataFrame:
     """The shape the unit tests use: a `timestamp` column AND a datetime index.
     The index is unnamed so pandas does not see an ambiguous name."""

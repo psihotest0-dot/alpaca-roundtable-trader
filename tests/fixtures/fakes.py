@@ -187,7 +187,8 @@ class FakeHistoryClient:
     def get_stock_bars(self, request: Any) -> SimpleNamespace:
         self.requests.append(request)
         timeframe = request.timeframe
-        minutes = timeframe.amount_value * (60 if timeframe.unit_value.name == "Hour" else 1)
+        per_unit = {"Minute": 1, "Hour": 60, "Day": 24 * 60}[timeframe.unit_value.name]
+        minutes = timeframe.amount_value * per_unit
         symbols = request.symbol_or_symbols
         symbols = [symbols] if isinstance(symbols, str) else list(symbols)
         shaped = []

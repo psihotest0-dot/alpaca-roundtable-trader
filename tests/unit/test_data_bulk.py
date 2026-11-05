@@ -46,6 +46,39 @@ def test_many_symbols_cost_one_request_with_adjusted_prices_on_the_configured_fe
     assert request.adjustment == Adjustment.ALL
 
 
+def test_a_request_can_name_its_own_feed_and_the_configured_one_is_left_alone(
+    data: AlpacaData,
+) -> None:
+    client = _client(["AAPL"])
+    data.client = client
+    now = datetime.now(timezone.utc)
+
+    data.fetch_bars_bulk(["AAPL"], FIFTEEN_MINUTES, now - timedelta(days=5), now, feed="sip")
+    data.fetch_bars_bulk(["AAPL"], FIFTEEN_MINUTES, now - timedelta(days=5), now)
+
+    assert [r.feed for r in client.requests] == [DataFeed.SIP, DataFeed.IEX]
+    assert data.feed == "iex"
+
+
+def test_a_sip_request_ends_before_the_delay_the_free_plan_allows() -> None:
+    from tests.fixtures.fakes import asked
+
+    data = AlpacaData(Settings(_env_file=None, alpaca_api_key="k", alpaca_secret_key="s"))
+    client = _client(["AAPL"])
+    data.client = client
+    now = datetime.now(timezone.utc)
+    long_ago = now - timedelta(days=3)
+
+    data.fetch_bars_bulk(["AAPL"], FIFTEEN_MINUTES, now - timedelta(days=5), now, feed="sip")
+    data.fetch_bars_bulk(["AAPL"], FIFTEEN_MINUTES, now - timedelta(days=9), long_ago, feed="sip")
+    data.fetch_bars_bulk(["AAPL"], FIFTEEN_MINUTES, now - timedelta(days=5), now, feed="iex")
+
+    asked_sip_to_now, asked_sip_to_the_past, asked_iex = (asked(r.end) for r in client.requests)
+    assert asked_sip_to_now <= now - timedelta(minutes=15)  # held back from "now"
+    assert asked_sip_to_the_past == long_ago  # an end that is old enough is not touched
+    assert asked_iex >= now - timedelta(seconds=5)  # IEX has no such limit
+
+
 def test_symbols_without_bars_are_left_out_not_invented(data: AlpacaData) -> None:
     data.client = _client(["AAPL"])
     now = datetime.now(timezone.utc)
