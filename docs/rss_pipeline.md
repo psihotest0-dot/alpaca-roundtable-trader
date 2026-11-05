@@ -1,5 +1,7 @@
 # RSS Pipeline Documentation
 
+> **REMOVED on 2026-11-05.** The RSS pipeline, the chunker, the embeddings, the Chroma adapter and the search service were deleted together with the dependencies `chromadb`, `feedparser`, `beautifulsoup4`, `httpx` and `tenacity` (the code is in git history up to commit `397509e`). News now come from Alpaca's news API into the cache `var/news.db` and reach the Oracle through `oracle/news_input.py`; see `decisions.md` (2026-11-05) and `operations.md` (News). This page is kept as a record of what was built and why it was dropped.
+
 The RSS pipeline enables the automated extraction, normalization, embedding, storage, and retrieval of news content for use within the automated trading system. **Today it only collects and stores**: nothing reads the news into the Oracle yet. Giving the Oracle a short summary of a matching item is planned for Phase 5 and needs its own protection against prompt injection (see "Limitations").
 
 > **Decision of 2026-11-02:** Chroma, the chunker and the embeddings are to be removed. Articles will be stored in a SQL table with a `source` column, so that the Alpaca News API can use the same table, and the symbol of an item will be found with a company-name dictionary. The sections below describe what exists today.

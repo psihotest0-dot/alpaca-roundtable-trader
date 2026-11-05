@@ -198,11 +198,6 @@ def test_a_trade_risk_above_the_total_risk_is_refused() -> None:
         _settings(max_planned_risk_per_trade_pct=0.06, max_total_planned_open_risk_pct=0.05)
 
 
-def test_a_chunk_overlap_that_is_not_smaller_than_the_chunk_is_refused() -> None:
-    with pytest.raises(ValidationError, match="CHUNK_OVERLAP"):
-        _settings(chunk_size=100, chunk_overlap=100)
-
-
 @pytest.mark.parametrize("overrides", [{"timeframe_minutes": 5}, {"htf_timeframe_minutes": 30}])
 def test_a_bar_size_that_nothing_reads_is_refused_instead_of_ignored(
     overrides: dict[str, int],

@@ -36,7 +36,7 @@ The strategy produces a signal, the Oracle says yes, no or not now, and Risk sti
 
 - **Trading state** lives in this project's own SQLite file, `trading.db`, migrated with Alembic. Only this project reads or writes it. Since 2026-11-03 the file is in the Docker volume `alpaca_trader_var` (`/app/var`), the only copy; the host has none. A checked, compressed archive is written to `var/backups` on the PC every 6 hours.
 - **The Go backend** runs in its own Docker containers (four of them) with its own SQL database. That database belongs to the backend: it is not shared with this project and is not a store for it. How the two talk to each other (Phase 2.2) is decided when the owner shows the backend.
-- **News** (Phase 5): today the RSS pipeline writes to a local Chroma `PersistentClient` directory (`CHROMA_DB_PATH`, default `./var/chroma_db`), and nothing reads the news into the Oracle yet. Decided on 2026-11-02, not built: Chroma goes away and the news are stored in a SQL table.
+- **News** (Phase 5): Alpaca's news API is refreshed every 5 minutes into the cache `var/news.db` (`data/news.py`, `storage/news.py`; two tables, no chunking). When the Oracle is on, each request carries up to 5 cleaned articles about the signal's stock (`oracle/news_input.py`) and the journal records which. Chroma and the RSS pipeline were removed on 2026-11-05.
 - **Market data** (Phase 3.2): the closed candles from Alpaca (15 minutes and 1 hour) are kept in the table `market_bars` of `trading.db`. `fetch-history` fills and updates it (`data/history.py`; the price policy is in `decisions.md`) and the backtest reads it. The live loop does not use it yet: every cycle still downloads 30 days of 15-minute and 90 days of hourly bars again.
 
 ## Operations (Phase 6)

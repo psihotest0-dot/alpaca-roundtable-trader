@@ -30,20 +30,6 @@ class Settings(BaseSettings):
     metrics_host: str = "127.0.0.1"
     metrics_port: int = 9100
 
-    # RSS Pipeline Settings
-    rss_enabled: bool = False
-    rss_feeds: str = ""
-    rss_update_interval_minutes: int = Field(60, gt=0)
-    rss_max_concurrent_requests: int = Field(5, gt=0)
-    rss_max_response_bytes: int = Field(5 * 1024 * 1024, gt=0)  # 5MB
-    rss_max_entries_per_feed: int = Field(50, gt=0)
-    chroma_db_path: str = "./var/chroma_db"
-    chroma_collection_name: str = "news"
-    embedding_provider: str = "chroma_default"
-    chunk_size: int = Field(500, gt=0)
-    chunk_overlap: int = Field(50, ge=0)
-    retrieval_top_k: int = Field(5, gt=0)
-
     timeframe_minutes: int = Field(15, gt=0)
     htf_timeframe_minutes: int = Field(60, gt=0)
     lookback_days: int = Field(30, gt=0)
@@ -103,11 +89,6 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"MAX_PLANNED_RISK_PER_TRADE_PCT ({self.max_planned_risk_per_trade_pct}) is larger "
                 f"than MAX_TOTAL_PLANNED_OPEN_RISK_PCT ({self.max_total_planned_open_risk_pct})"
-            )
-        if self.chunk_overlap >= self.chunk_size:
-            raise ValueError(
-                f"CHUNK_OVERLAP ({self.chunk_overlap}) must be smaller than CHUNK_SIZE "
-                f"({self.chunk_size})"
             )
         # Not read yet: the 15-minute and 1-hour bars are fixed in the data layer. Another value
         # would be accepted and silently ignored, which is worse than refusing it.

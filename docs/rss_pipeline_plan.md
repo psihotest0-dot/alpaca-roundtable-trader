@@ -1,5 +1,7 @@
 # RSS Pipeline Plan
 
+> **REMOVED on 2026-11-05.** The RSS pipeline, the chunker, the embeddings, the Chroma adapter and the search service were deleted together with the dependencies `chromadb`, `feedparser`, `beautifulsoup4`, `httpx` and `tenacity` (the code is in git history up to commit `397509e`). News now come from Alpaca's news API into the cache `var/news.db` and reach the Oracle through `oracle/news_input.py`; see `decisions.md` (2026-11-05) and `operations.md` (News). This page is kept as a record of what was built and why it was dropped.
+
 *Status: the pipeline itself (collector, chunker, embeddings, Chroma adapter, search service, background worker) is built; the CLI commands in the list below and the Oracle integration are not. Giving the Oracle a short summary of a matching item is Phase 5. Decided on 2026-11-02: the Chroma parts of this plan (chunker, embeddings, Chroma adapter, vector search) are dropped and the articles go to a SQL table instead.*
 
 ## Existing Components

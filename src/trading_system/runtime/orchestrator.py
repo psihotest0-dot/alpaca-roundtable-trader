@@ -1,13 +1,10 @@
-import asyncio
 import logging
 import signal
 import threading
-import time
 from pathlib import Path
 from typing import Any, Callable, Optional
 
 from trading_system.config import Settings
-from trading_system.data.rss_pipeline import RSSIngestionPipeline
 from trading_system.domain.models import TradingState
 from trading_system.runtime.cycle import TradingCycle
 from trading_system.runtime.account_check import AccountCheck
@@ -116,7 +113,6 @@ class Orchestrator:
         runner = Runner(
             cycle, cycle.broker, heartbeat=Heartbeat(Path(self.settings.heartbeat_path))
         )
-        self._start_rss_worker()
         restore = self._stop_on_signals(runner) if handle_signals else None
         try:
             runner.run()
@@ -156,21 +152,6 @@ class Orchestrator:
                 signal.signal(number, old)
 
         return restore
-
-    def _start_rss_worker(self) -> None:
-        if not (self.settings.rss_enabled and self.settings.oracle_enabled):
-            return
-        logger.info("Starting background RSS ingestion thread...")
-
-        def rss_worker() -> None:
-            while True:
-                try:
-                    asyncio.run(RSSIngestionPipeline(self.settings).run())
-                except Exception as e:
-                    logger.error(f"RSS Ingestion error: {e}")
-                time.sleep(self.settings.rss_update_interval_minutes * 60)
-
-        threading.Thread(target=rss_worker, daemon=True).start()
 
     def pause_entries(self) -> None:
         logger.info("Pausing new entries...")
