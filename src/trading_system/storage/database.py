@@ -1,8 +1,10 @@
+from pathlib import Path
+from typing import Any, Optional
+
 from sqlalchemy import create_engine, Engine
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import URL, make_url
 from sqlalchemy.orm import sessionmaker, Session
 from sqlalchemy import event
-from typing import Any
 
 
 def set_sqlite_pragma(dbapi_connection: Any, connection_record: Any) -> None:
@@ -31,3 +33,17 @@ def get_engine(database_url: str) -> Engine:
 
 def get_session_factory(engine: Engine) -> sessionmaker[Session]:
     return sessionmaker(bind=engine, autoflush=False)
+
+
+def sqlite_file(url: URL) -> Optional[Path]:
+    """The file a SQLite URL names, or None for any other database (or one in memory)."""
+    if url.get_backend_name() != "sqlite" or url.database in (None, "", ":memory:"):
+        return None
+    return Path(str(url.database)).resolve()
+
+
+def same_database(first: URL, second: URL) -> bool:
+    file_a, file_b = sqlite_file(first), sqlite_file(second)
+    if file_a is not None or file_b is not None:
+        return file_a == file_b  # `./var/x.db` and `var/x.db` are one file
+    return first.render_as_string(hide_password=True) == second.render_as_string(hide_password=True)

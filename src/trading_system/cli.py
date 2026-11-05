@@ -105,6 +105,21 @@ def create_parser() -> argparse.ArgumentParser:
         help="Comma-separated symbols. Default: the research universe (data/universe.py).",
     )
 
+    # fetch-news command
+    news_parser = subparsers.add_parser(
+        "fetch-news", help="Brings the news cache (news.db) up to date from Alpaca's news API."
+    )
+    news_parser.add_argument(
+        "--days",
+        type=int,
+        help="Fetch this many days back (a backfill). Default: from the newest stored article.",
+    )
+    news_parser.add_argument(
+        "--symbols",
+        type=str,
+        help="Comma-separated symbols. Default: the research universe and the WATCHLIST.",
+    )
+
     # measure-signals command (the research modules are imported only when it runs: the
     # health check starts this program every minute and should not pay for pandas)
     measure_parser = subparsers.add_parser(
@@ -468,6 +483,52 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"fetch-daily error: {e}")
+            return 1
+
+    elif args.command == "fetch-news":
+        try:
+            from datetime import datetime, timezone
+
+            from trading_system.data.news import NewsFeed, update_news
+            from trading_system.data.universe import research_universe
+            from trading_system.storage.news import SameNewsDatabaseError, open_news_store
+
+            settings = Settings()
+            news_symbols = (
+                [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+                if args.symbols
+                else sorted(set(research_universe()) | set(settings.watchlist_symbols))
+            )
+            try:
+                store = open_news_store(
+                    settings.news_database_url,
+                    settings.database_url,
+                    settings.research_database_url,
+                )
+            except SameNewsDatabaseError as e:
+                print(f"fetch-news error: {e}")
+                return 1
+            now = datetime.now(timezone.utc)
+            news_report = update_news(
+                NewsFeed(settings), store, news_symbols, now=now, days=args.days
+            )
+            newest = store.latest_created_at()
+            print(
+                f"News for {len(news_symbols)} symbols: {news_report.new} new, "
+                f"{news_report.updated} changed, {news_report.unchanged} already stored "
+                f"({news_report.windows} request window(s)); {store.count():,} articles in the "
+                f"cache, newest published {newest:%Y-%m-%d %H:%M} UTC"
+                if newest
+                else "No news came back."
+            )
+            if news_report.full_windows:
+                print(
+                    "WARNING, a window reached the limit, some articles may be missing: "
+                    + ", ".join(f"{w:%Y-%m-%d %H:%M}" for w in news_report.full_windows)
+                )
+            return 0
+        except Exception as e:
+            print(f"fetch-news error: {e}")
             return 1
 
     elif args.command == "measure-signals":

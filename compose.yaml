@@ -90,6 +90,35 @@ services:
       retries: 1
       start_period: 5m
 
+  # Keeps the news cache (var/news.db: the headlines, summaries and short texts that Alpaca's
+  # news API has about the 155 symbols we follow, about 500 articles a working day) up to date
+  # every 5 minutes. It is a cache in a file of its own, not part of trading.db or its backups:
+  # Alpaca keeps its news from 2015 and `fetch-news --days N` fills a gap again. Read-only calls
+  # to Alpaca. Nothing reads it yet; it is being collected for the Oracle (Phase 2.2).
+  news:
+    image: alpaca-roundtable-trader:latest
+    container_name: alpaca-trader-news
+    restart: unless-stopped
+    logging: *logging
+    environment: *alpaca-env
+    volumes:
+      - trading_var:/app/var
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          python -m trading_system fetch-news && touch /app/var/news_ok
+          sleep 300
+        done
+    # news_ok is touched after every successful update: older than 30 minutes = several failed runs.
+    healthcheck:
+      test: ["CMD-SHELL", "find /app/var/news_ok -mmin -30 | grep -q ."]
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      start_period: 5m
+
   # The archive of the database OUTSIDE Docker. Every BACKUP_INTERVAL_SECONDS (default 6 hours,
   # first one at start) it writes a checked, compressed snapshot to ./var/backups on the PC
   # and keeps the newest BACKUP_KEEP (default 28 = a week). It gets no Alpaca keys. If a backup

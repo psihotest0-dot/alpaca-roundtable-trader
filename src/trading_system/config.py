@@ -21,6 +21,9 @@ class Settings(BaseSettings):
     # data/universe.py). A cache that `fetch-daily` rebuilds, kept out of trading.db so a big
     # write cannot hold up the trading loop and the backups of trading.db stay small.
     research_database_url: str = "sqlite:///./var/research.db"
+    # The news kept for the Oracle and for judging it later (data/news.py): a cache that
+    # `fetch-news` fills from Alpaca every few minutes, not a record, so also its own file.
+    news_database_url: str = "sqlite:///./var/news.db"
     # Where the trading loop writes its pulse (see runtime/heartbeat.py); `health` reads it.
     heartbeat_path: str = "./var/heartbeat.json"
     metrics_enabled: bool = False
