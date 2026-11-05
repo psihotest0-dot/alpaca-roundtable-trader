@@ -5,6 +5,7 @@ yes, no or not now, and the risk engine still has the last word. It is given fac
 with a verdict; it does not choose the order.
 """
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Any, Optional, Protocol
 
@@ -13,12 +14,27 @@ from pydantic import BaseModel, Field
 from trading_system.domain.models import OracleDecision, StrategySignal
 
 
+class OracleNews(BaseModel):
+    """One article about the stock, as much of it as the Oracle is to see: plain, single-line text
+    with no addresses or markup, a headline of at most 160 characters and a summary of at most 300."""
+
+    article_id: int  # for the record of what the Oracle was shown; not for the model
+    published_at: datetime
+    source: str
+    headline: str
+    summary: str = ""
+    other_symbols: int = 0  # how many other stocks the article names (0: about this one alone)
+
+
 class OracleRequest(BaseModel):
     """The facts the Oracle judges a signal by (see oracle/inputs.py, which builds it).
 
-    Everything in it is a number or a fixed label computed here: no text that comes from the
-    outside world, so there is nothing in it for a prompt injection to ride on. (News, in
-    Phase 5, will be the first such text and gets its own handling.)"""
+    Everything in it is a number or a fixed label computed here, except `news`: the one piece of
+    text that comes from the outside world, so the one place a prompt injection could ride on. It
+    is cleaned and bounded before it gets here (oracle/news_input.py), it is data and never
+    instructions, and it can do less harm than it looks: the Oracle only answers APPROVE, VETO or
+    HOLD to a signal the strategy already made, so words in a headline can at worst turn a veto
+    into an approval, never create a trade, change its size or skip the risk engine."""
 
     signal: StrategySignal
     rationale: str = ""
@@ -27,6 +43,7 @@ class OracleRequest(BaseModel):
     volume_ratio: Optional[float] = None  # last bar's volume against the average of the bars before
     live_price: Optional[Decimal] = None
     context: dict[str, Any] = Field(default_factory=dict)  # the account and the risk limits
+    news: list[OracleNews] = Field(default_factory=list)  # newest first; may well be empty
 
 
 class OracleProvider(Protocol):

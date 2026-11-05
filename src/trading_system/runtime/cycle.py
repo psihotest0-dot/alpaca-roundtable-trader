@@ -26,7 +26,9 @@ from trading_system.domain.models import (
     StrategySignal,
     TradingState,
 )
+from trading_system.oracle.contract import OracleNews
 from trading_system.oracle.inputs import build_oracle_request
+from trading_system.oracle.news_input import select_news
 from trading_system.risk.daily_equity import with_daily_start_equity
 from trading_system.runtime.reconciliation import reconcile_orders, record_fills
 from trading_system.strategy.config import StrategyConfig
@@ -125,6 +127,7 @@ class TradingCycle:
         risk_repo: Any = None,
         audit_repo: Any = None,
         alerts: Any = None,
+        news: Any = None,
     ) -> None:
         self.settings = settings
         self.broker = broker
@@ -139,6 +142,7 @@ class TradingCycle:
         self.risk_repo = risk_repo
         self.audit_repo = audit_repo
         self.alerts = alerts
+        self.news = news  # the news cache (storage/news.py); None: the Oracle is given no news
         self._fills_after: Optional[datetime] = None
         self._held: dict[str, HeldSignal] = {}
 
@@ -392,12 +396,14 @@ class TradingCycle:
                 float((account.equity - state.daily_start_equity) / state.daily_start_equity * 100),
                 3,
             )
+        news = self._news_for(signal, now)
         request = build_oracle_request(
             signal,
             bars_15m[signal.symbol],
             bars_1h[signal.symbol],
             self.strategy_config,
             live_price=price,
+            news=news,
             context={
                 "equity": float(account.equity),
                 "daily_pnl_pct": daily_pnl_pct,
@@ -423,6 +429,31 @@ class TradingCycle:
             f"{' (no answer)' if decision.failed else ''} - {decision.reason}"
         )
         return decision
+
+    def _news_for(self, signal: StrategySignal, now: datetime) -> list[OracleNews]:
+        """The news the Oracle may see about the signal's stock, and a line in the journal of
+        which articles it was shown (so that its verdicts can be judged against them later). News
+        is a help and never a condition: a cache that cannot be read means no news, not no signal."""
+        try:
+            news = select_news(self.news, signal.symbol, now)
+        except Exception as e:
+            logger.warning(f"Could not read the news for {signal.symbol}; asking without it: {e}")
+            return []
+        if news and self.audit_repo is not None:
+            try:
+                self.audit_repo.record(
+                    "oracle_news",
+                    {
+                        "signal_id": signal.signal_id,
+                        "symbol": signal.symbol,
+                        "article_ids": [n.article_id for n in news],
+                        "newest": max(n.published_at for n in news).isoformat(),
+                    },
+                    when=now,
+                )
+            except Exception as e:  # the journal is better with a gap than with no Oracle
+                logger.warning(f"Could not journal the news given to the Oracle: {e}")
+        return news
 
     def _snapshot(
         self, now: datetime

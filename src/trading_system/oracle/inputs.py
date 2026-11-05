@@ -8,13 +8,13 @@ price right now, the hourly trend, and where the account stands against its limi
 
 import math
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any, Optional, Sequence
 
 import pandas as pd
 
 from trading_system.data.bars import normalize_bars
 from trading_system.domain.models import StrategySignal
-from trading_system.oracle.contract import OracleRequest
+from trading_system.oracle.contract import OracleNews, OracleRequest
 from trading_system.strategy.config import StrategyConfig
 from trading_system.strategy.trend import calculate_indicators
 
@@ -38,6 +38,7 @@ def build_oracle_request(
     *,
     live_price: Decimal,
     context: dict[str, Any],
+    news: Sequence[OracleNews] = (),
 ) -> OracleRequest:
     m15 = calculate_indicators(normalize_bars(bars_15m), config)
     h1 = calculate_indicators(normalize_bars(bars_1h), config, is_htf=True)
@@ -95,4 +96,5 @@ def build_oracle_request(
         volume_ratio=volume_ratio,
         live_price=live_price,
         context=context,
+        news=list(news),
     )

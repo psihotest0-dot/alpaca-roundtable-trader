@@ -4,7 +4,7 @@ of the paper account's empty fields asks), and a client that answers from a list
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from alpaca.data.models.news import NewsSet
+from alpaca.data.models.news import News, NewsSet
 
 from tests.fixtures.fakes import asked
 
@@ -60,3 +60,31 @@ class FakeNewsClient:
         ]
         chosen.sort(key=lambda a: (a["created_at"], a["id"]), reverse=request.sort == "desc")
         return NewsSet({"news": chosen[: request.limit or len(chosen)]})
+
+
+def news_item(
+    article_id: int,
+    symbols: list[str],
+    created_at: datetime,
+    *,
+    headline: str = "A headline",
+    summary: str = "",
+    updated_at: Optional[datetime] = None,
+    source: str = "benzinga",
+) -> Any:
+    """An article as the cache takes it (what data/news.py makes of Alpaca's)."""
+    from trading_system.data.news import to_item
+
+    return to_item(
+        News(
+            raw_data=raw_news(
+                article_id,
+                symbols,
+                created_at,
+                headline=headline,
+                summary=summary,
+                updated_at=updated_at,
+                source=source,
+            )
+        )
+    )

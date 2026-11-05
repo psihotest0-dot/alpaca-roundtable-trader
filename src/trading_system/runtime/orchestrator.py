@@ -75,7 +75,25 @@ class Orchestrator:
             risk_repo=RiskDecisionRepository(self.session_factory),
             audit_repo=AuditRepository(self.session_factory),
             alerts=LoggingAlertManager(logger),
+            news=self._open_news(),
         )
+
+    def _open_news(self) -> Any:
+        """The news cache for the Oracle, or None if the Oracle is off or the cache cannot be
+        opened (then the Oracle is asked without news; the cache is filled by `fetch-news`)."""
+        if not self.settings.oracle_enabled:
+            return None
+        try:
+            from trading_system.storage.news import open_news_store
+
+            return open_news_store(
+                self.settings.news_database_url,
+                self.settings.database_url,
+                self.settings.research_database_url,
+            )
+        except Exception as e:
+            logger.warning(f"The news cache could not be opened; the Oracle gets no news: {e}")
+            return None
 
     def run(
         self,

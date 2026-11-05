@@ -6,21 +6,18 @@ from typing import Any
 from unittest.mock import patch
 
 import pytest
-from alpaca.data.models.news import News
 
 from tests.fixtures.fakes import asked
-from tests.fixtures.news import FakeNewsClient, raw_news
+from tests.fixtures.news import FakeNewsClient, news_item as item, raw_news
 from trading_system.cli import main
 from trading_system.data import news as news_module
 from trading_system.data.news import (
     MAX_CATCH_UP,
     NewsFeed,
     first_start,
-    to_item,
     update_news,
 )
 from trading_system.storage.news import (
-    NewsItem,
     NewsRepository,
     SameNewsDatabaseError,
     open_news_store,
@@ -28,29 +25,6 @@ from trading_system.storage.news import (
 
 UTC = timezone.utc
 NOW = datetime(2026, 11, 5, 18, 0, tzinfo=UTC)
-
-
-def item(
-    article_id: int,
-    symbols: list[str],
-    created_at: datetime,
-    *,
-    headline: str = "A headline",
-    summary: str = "",
-    updated_at: datetime | None = None,
-) -> NewsItem:
-    return to_item(
-        News(
-            raw_data=raw_news(
-                article_id,
-                symbols,
-                created_at,
-                headline=headline,
-                summary=summary,
-                updated_at=updated_at,
-            )
-        )
-    )
 
 
 @pytest.fixture
