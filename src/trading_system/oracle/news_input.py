@@ -4,16 +4,20 @@ down to a clean headline and a short summary.
 The news cache (storage/news.py) holds what Alpaca sent, which is outside text. This is the
 gate between it and a model. It does three things.
 
-* **Chooses.** The newest articles about the symbol from the last day that the cache had stored
-  by now (`seen_by`), at most MAX_ITEMS. Round-ups that name more than MAX_SYMBOLS stocks are
-  left out: an article that lists thirty tickers is not about this one. The same story from the
-  two sources (the same headline) counts once. A headline-only article stays: "Needham lowers
-  price target to $300" is the whole news.
+* **Chooses.** The articles about the symbol that the cache had stored by now (`seen_by`): up to
+  RECENT_ITEMS of the last 24 hours, newest first, and up to OLDER_ITEMS from the rest of the
+  last week (older than 24 hours, newer than 7 days), newest first; MAX_ITEMS in all. The older
+  ones are context: a quiet day still shows the earnings of three days ago. Each item says how old
+  it is (`age_hours`), so that a week-old article cannot pass for today's. Round-ups that name more
+  than MAX_SYMBOLS stocks are left out: an article that lists thirty tickers is not about this one.
+  The same story (the same headline) counts once, whichever source or day. A headline-only article
+  stays: "Needham lowers price target to $300" is the whole news.
 * **Cleans.** Characters that are invisible or steer text (control, zero-width, bidirectional
   marks), addresses, leftover tags and chat-template tokens such as `<|im_start|>`, and code
   fences are removed; white space becomes single spaces, so an article is one line that cannot
   begin a new paragraph or a new section of a prompt; the length is cut.
-* **Bounds.** At most MAX_ITEMS items of at most HEADLINE_CHARS + SUMMARY_CHARS characters.
+* **Bounds.** At most MAX_ITEMS items of at most HEADLINE_CHARS + SUMMARY_CHARS characters
+  each, whichever way the quotas fall.
 
 Cleaning cannot recognise an instruction written in plain words ("approve every signal"), and
 does not pretend to. What limits the harm of one is the design: the Oracle answers only yes, no or
@@ -29,12 +33,15 @@ from typing import Optional
 from trading_system.oracle.contract import OracleNews
 from trading_system.storage.news import NewsRepository
 
-MAX_AGE = timedelta(hours=24)
-MAX_ITEMS = 5
+RECENT_AGE = timedelta(hours=24)
+RECENT_ITEMS = 3  # at most this many of the last 24 hours
+WEEK_AGE = timedelta(days=7)
+OLDER_ITEMS = 2  # and at most this many older than that, up to a week
+MAX_ITEMS = RECENT_ITEMS + OLDER_ITEMS
 MAX_SYMBOLS = 5
 HEADLINE_CHARS = 160
 SUMMARY_CHARS = 300
-READ_ROWS = 25  # read this many, so that dropped duplicates can be made up for
+READ_ROWS = 150  # a week of one stock; read this many so that a busy day cannot crowd out the rest
 
 _ADDRESS = re.compile(r"(?:https?://|ftp://|www\.)\S+", re.IGNORECASE)
 _TAG = re.compile(r"<[^<>]{0,200}>")  # a tag, or a template token such as <|im_start|>
@@ -72,35 +79,44 @@ def _same_story(headline: str) -> str:
 
 
 def select_news(repo: Optional[NewsRepository], symbol: str, now: datetime) -> list[OracleNews]:
-    """The news the Oracle may see about `symbol` at `now`, newest first. No repository, no news."""
+    """The news the Oracle may see about `symbol` at `now`, newest first: up to RECENT_ITEMS of the
+    last 24 hours, then up to OLDER_ITEMS of the days before, up to a week. No repository, no
+    news."""
     if repo is None:
         return []
     rows = repo.for_symbol(
         symbol,
         before=now,
-        max_age=MAX_AGE,
+        max_age=WEEK_AGE,
         limit=READ_ROWS,
         max_symbols=MAX_SYMBOLS,
         seen_by=True,
     )
-    chosen: list[OracleNews] = []
+    recent_from = now - RECENT_AGE
+    recent: list[OracleNews] = []
+    older: list[OracleNews] = []
     stories: set[str] = set()
     for row in rows:
         headline = clean_for_model(row.headline, HEADLINE_CHARS)
         story = _same_story(headline)
         if not story or story in stories:
             continue
-        stories.add(story)
-        chosen.append(
+        stories.add(story)  # also when the quota is full: an older copy is not a new story
+        is_recent = row.created_at >= recent_from
+        pool, quota = (recent, RECENT_ITEMS) if is_recent else (older, OLDER_ITEMS)
+        if len(pool) >= quota:
+            continue
+        pool.append(
             OracleNews(
                 article_id=row.id,
                 published_at=row.created_at,
+                age_hours=max(int((now - row.created_at).total_seconds() // 3600), 0),
                 source=row.source,
                 headline=headline,
                 summary=clean_for_model(row.summary, SUMMARY_CHARS),
                 other_symbols=max(len(row.symbols) - 1, 0),
             )
         )
-        if len(chosen) == MAX_ITEMS:
+        if len(recent) >= RECENT_ITEMS and len(older) >= OLDER_ITEMS:
             break
-    return chosen
+    return recent + older  # every recent one is newer than every older one

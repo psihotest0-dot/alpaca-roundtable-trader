@@ -20,6 +20,7 @@ class OracleNews(BaseModel):
 
     article_id: int  # for the record of what the Oracle was shown; not for the model
     published_at: datetime
+    age_hours: int = 0  # whole hours between the publication and the request: the model sees this
     source: str
     headline: str
     summary: str = ""

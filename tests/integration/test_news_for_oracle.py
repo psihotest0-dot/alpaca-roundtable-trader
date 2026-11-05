@@ -15,6 +15,8 @@ from trading_system.domain.enums import OracleVerdict
 from trading_system.oracle.news_input import (
     HEADLINE_CHARS,
     MAX_ITEMS,
+    OLDER_ITEMS,
+    RECENT_ITEMS,
     SUMMARY_CHARS,
     select_news,
 )
@@ -44,32 +46,114 @@ def _ago(**kwargs: float) -> datetime:
 # ------------------------------------------------------------------------------- the choice
 
 
-def test_the_newest_articles_of_the_last_day_about_the_stock_and_no_more_than_five(
+def test_three_from_the_last_day_and_two_from_the_rest_of_the_week_newest_first(
     repo: NewsRepository,
 ) -> None:
     repo.save(
-        [news_item(n, ["AMZN"], _ago(hours=n), headline=f"Story number {n}") for n in range(1, 9)]
-        + [news_item(20, ["AMZN"], _ago(hours=30), headline="Yesterday's story")]
-        + [news_item(21, ["MSFT"], _ago(hours=1), headline="Another stock")],
+        [
+            news_item(n, ["AMZN"], _ago(hours=n), headline=f"Today {n}") for n in range(1, 9)
+        ]  # 1h..8h
+        + [news_item(10 + d, ["AMZN"], _ago(days=d), headline=f"Day {d}") for d in range(2, 7)]
+        + [news_item(30, ["AMZN"], _ago(days=8), headline="Last week's story")]  # too old
+        + [news_item(31, ["MSFT"], _ago(hours=1), headline="Another stock")],
         seen_at=_ago(minutes=1),
     )
 
     news = select_news(repo, "AMZN", NOW)
 
-    assert [n.article_id for n in news] == [1, 2, 3, 4, 5]  # newest first, five, none too old
-    assert len(news) == MAX_ITEMS
+    assert [n.article_id for n in news] == [1, 2, 3, 12, 13]  # 3 of today, then 2 of the week
+    assert (RECENT_ITEMS, OLDER_ITEMS, MAX_ITEMS) == (3, 2, 5)
+    assert [n.age_hours for n in news] == [1, 2, 3, 48, 72]  # the model is told how old each is
 
 
-def test_the_window_is_a_day_not_a_minute_more(repo: NewsRepository) -> None:
+def test_a_quiet_day_still_shows_what_happened_earlier_in_the_week(repo: NewsRepository) -> None:
     repo.save(
         [
-            news_item(1, ["AMZN"], _ago(hours=23, minutes=50), headline="Inside the day"),
-            news_item(2, ["AMZN"], _ago(hours=24, minutes=10), headline="Just outside it"),
+            news_item(1, ["AMZN"], _ago(days=3), headline="Amazon reports earnings"),
+            news_item(2, ["AMZN"], _ago(days=4), headline="Amazon names a new CFO"),
+            news_item(3, ["AMZN"], _ago(days=5), headline="A third, older story"),
         ],
         seen_at=_ago(minutes=1),
     )
 
-    assert [n.article_id for n in select_news(repo, "AMZN", NOW)] == [1]
+    news = select_news(repo, "AMZN", NOW)
+
+    assert [n.article_id for n in news] == [1, 2]  # nothing today; the two newest of the week
+    assert [n.age_hours for n in news] == [72, 96]
+
+
+def test_the_places_are_not_swapped_when_one_group_has_too_few(repo: NewsRepository) -> None:
+    """A quota is a ceiling. Only one article today does not hand its places to the older ones."""
+    repo.save(
+        [news_item(1, ["AMZN"], _ago(hours=2), headline="Today")]
+        + [news_item(10 + d, ["AMZN"], _ago(days=d), headline=f"Day {d}") for d in range(2, 7)],
+        seen_at=_ago(minutes=1),
+    )
+
+    assert [n.article_id for n in select_news(repo, "AMZN", NOW)] == [1, 12, 13]
+
+
+def test_the_edges_are_a_day_and_a_week(repo: NewsRepository) -> None:
+    repo.save(
+        [
+            news_item(1, ["AMZN"], _ago(hours=23, minutes=50), headline="Inside the day"),
+            news_item(2, ["AMZN"], _ago(hours=24, minutes=10), headline="Just past the day"),
+            news_item(3, ["AMZN"], _ago(days=6, hours=23), headline="Inside the week"),
+            news_item(4, ["AMZN"], _ago(days=7, hours=1), headline="Just past the week"),
+        ],
+        seen_at=_ago(minutes=1),
+    )
+
+    news = select_news(repo, "AMZN", NOW)
+
+    assert [n.article_id for n in news] == [1, 2, 3]  # 2 and 3 are the older group; 4 is gone
+    assert [n.age_hours for n in news] == [23, 24, 167]  # whole hours, rounded down
+
+
+def test_nothing_older_than_a_week_is_shown_even_when_it_is_all_there_is(
+    repo: NewsRepository,
+) -> None:
+    repo.save(
+        [
+            news_item(1, ["AMZN"], _ago(days=7, hours=1), headline="Eight days ago, nearly"),
+            news_item(2, ["AMZN"], _ago(days=20), headline="Three weeks ago"),
+        ],
+        seen_at=_ago(minutes=1),
+    )
+
+    assert select_news(repo, "AMZN", NOW) == []
+
+
+def test_a_story_told_again_on_another_day_counts_once_whichever_group(
+    repo: NewsRepository,
+) -> None:
+    repo.save(
+        [
+            news_item(1, ["AMZN"], _ago(hours=2), headline="Amazon beats Q3 estimates"),
+            news_item(2, ["AMZN"], _ago(days=3), headline="Amazon beats Q3 estimates!"),
+            news_item(3, ["AMZN"], _ago(days=4), headline="Amazon names a new CFO"),
+        ],
+        seen_at=_ago(minutes=1),
+    )
+
+    assert [n.article_id for n in select_news(repo, "AMZN", NOW)] == [1, 3]
+
+
+def test_a_busy_day_does_not_crowd_the_week_out(repo: NewsRepository) -> None:
+    """Forty articles today must not use up the rows that are read, leaving nothing for the days
+    before."""
+    repo.save(
+        [
+            news_item(n, ["AMZN"], _ago(minutes=5 * n), headline=f"Busy day story {n}")
+            for n in range(1, 41)
+        ]
+        + [news_item(100, ["AMZN"], _ago(days=3), headline="Earnings three days ago")],
+        seen_at=_ago(minutes=1),
+    )
+
+    news = select_news(repo, "AMZN", NOW)
+
+    assert [n.article_id for n in news] == [1, 2, 3, 100]
 
 
 def test_a_round_up_that_names_many_stocks_is_not_news_about_this_one(
