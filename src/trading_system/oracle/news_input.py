@@ -9,7 +9,7 @@ gate between it and a model. It does three things.
   last week (older than 24 hours, newer than 7 days), newest first; MAX_ITEMS in all. The older
   ones are context: a quiet day still shows the earnings of three days ago. Each item says how old
   it is (`age_hours`), so that a week-old article cannot pass for today's. Round-ups that name more
-  than MAX_SYMBOLS stocks are left out: an article that lists thirty tickers is not about this one.
+  than MAX_SYMBOLS stocks are left out: an article that lists four tickers is a round-up, not news about this one.
   The same story (the same headline) counts once, whichever source or day. A headline-only article
   stays: "Needham lowers price target to $300" is the whole news.
 * **Cleans.** Characters that are invisible or steer text (control, zero-width, bidirectional
@@ -38,7 +38,12 @@ RECENT_ITEMS = 3  # at most this many of the last 24 hours
 WEEK_AGE = timedelta(days=7)
 OLDER_ITEMS = 2  # and at most this many older than that, up to a week
 MAX_ITEMS = RECENT_ITEMS + OLDER_ITEMS
-MAX_SYMBOLS = 5
+# An article that names more stocks than this (this one included) is left out. Measured on a week
+# of the real cache (2026-11-05): at 5 the 4- and 5-name round-ups ("Final Trades", "Top 5 AI
+# Stocks", "Whale Alerts") and other companies' stories tagged to the stock got through; at 3 they
+# are gone, and nearly everything else dropped is the same kind of noise; at 2 real two- and
+# three-company stories start to go (a supplier deal with Walmart, a rival's guidance).
+MAX_SYMBOLS = 3
 HEADLINE_CHARS = 160
 SUMMARY_CHARS = 300
 READ_ROWS = 150  # a week of one stock; read this many so that a busy day cannot crowd out the rest

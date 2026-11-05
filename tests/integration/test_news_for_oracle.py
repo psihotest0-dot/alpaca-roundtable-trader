@@ -15,6 +15,7 @@ from trading_system.domain.enums import OracleVerdict
 from trading_system.oracle.news_input import (
     HEADLINE_CHARS,
     MAX_ITEMS,
+    MAX_SYMBOLS,
     OLDER_ITEMS,
     RECENT_ITEMS,
     SUMMARY_CHARS,
@@ -173,6 +174,25 @@ def test_a_round_up_that_names_many_stocks_is_not_news_about_this_one(
 
     assert [n.article_id for n in news] == [2, 3]
     assert [n.other_symbols for n in news] == [2, 0]  # the Oracle can tell the two apart
+
+
+def test_three_names_is_the_most_an_article_may_have_and_four_is_a_round_up(
+    repo: NewsRepository,
+) -> None:
+    repo.save(
+        [
+            news_item(1, ["AMZN", "MSFT", "AAPL"], _ago(hours=1), headline="Big tech reports"),
+            news_item(2, ["AMZN", "MSFT", "AAPL", "GOOGL"], _ago(hours=2), headline="Final Trades"),
+            news_item(3, ["AMZN", "MSFT"], _ago(hours=3), headline="Amazon and Microsoft deal"),
+        ],
+        seen_at=_ago(minutes=1),
+    )
+
+    news = select_news(repo, "AMZN", NOW)
+
+    assert MAX_SYMBOLS == 3
+    assert [n.article_id for n in news] == [1, 3]
+    assert [n.other_symbols for n in news] == [2, 1]
 
 
 def test_the_same_story_from_two_sources_counts_once(repo: NewsRepository) -> None:
