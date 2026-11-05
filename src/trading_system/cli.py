@@ -105,6 +105,36 @@ def create_parser() -> argparse.ArgumentParser:
         help="Comma-separated symbols. Default: the research universe (data/universe.py).",
     )
 
+    # measure-signals command (the research modules are imported only when it runs: the
+    # health check starts this program every minute and should not pay for pandas)
+    measure_parser = subparsers.add_parser(
+        "measure-signals",
+        help="Measures what prices do after a signal (development part of the daily bars only).",
+    )
+    measure_parser.add_argument(
+        "--signal",
+        required=True,
+        help="momentum_12_1, reversal_1w or random_tenth (a control that must show nothing).",
+    )
+    measure_parser.add_argument(
+        "--horizons",
+        type=str,
+        help="Comma-separated trading days held. Default: the signal's own (research/signals.py).",
+    )
+    measure_parser.add_argument(
+        "--regime-filter",
+        help="Count the signal only on days the market is in this regime: spy200.",
+    )
+    measure_parser.add_argument(
+        "--cost",
+        type=float,
+        default=None,
+        help="Round-trip cost as a fraction (default 0.001 = 0.10 %%).",
+    )
+    measure_parser.add_argument(
+        "--symbols", type=str, help="Comma-separated symbols. Default: the research universe."
+    )
+
     # run command
     run_parser = subparsers.add_parser("run", help="Runs the trading system.")
     run_parser.add_argument(
@@ -438,6 +468,90 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"fetch-daily error: {e}")
+            return 1
+
+    elif args.command == "measure-signals":
+        try:
+            from trading_system.research.measure import (
+                MIN_UNIVERSE,
+                ROUND_TRIP_COST,
+                development_note,
+                format_measurement,
+                measure,
+            )
+            from trading_system.research.panel import big_moves, load_panel
+            from trading_system.research.signals import SIGNALS, with_regime_filter
+            from trading_system.research.trials import record_trial, trial_counts
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import AuditRepository
+            from trading_system.storage.research import SameDatabaseError, open_research_store
+
+            settings = Settings()
+            if args.signal not in SIGNALS:
+                print(
+                    f"measure-signals error: unknown signal {args.signal!r}; "
+                    f"known: {', '.join(sorted(SIGNALS))}"
+                )
+                return 1
+            signal = SIGNALS[args.signal]
+            horizons = (
+                tuple(int(h) for h in args.horizons.split(",") if h.strip())
+                if args.horizons
+                else signal.horizons
+            )
+            cost = ROUND_TRIP_COST if args.cost is None else args.cost
+            only_symbols = (
+                [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+                if args.symbols
+                else None
+            )
+            try:
+                repo = open_research_store(settings.research_database_url, settings.database_url)
+            except SameDatabaseError as e:
+                print(f"measure-signals error: {e}")
+                return 1
+            panel = load_panel(repo, only_symbols)
+            if len(panel.symbols) < MIN_UNIVERSE:
+                print(
+                    f"measure-signals error: only {len(panel.symbols)} stocks have daily bars "
+                    f"(need {MIN_UNIVERSE}); run `fetch-daily` first"
+                )
+                return 1
+            print(development_note())
+            print(
+                f"{len(panel.symbols)} stocks, {panel.dates[0].date()} to {panel.dates[-1].date()}"
+            )
+            moves = big_moves(panel)
+            if moves:
+                print(
+                    f"Daily moves beyond 30% still in the data ({len(moves)}): "
+                    + ", ".join(f"{s} {d} {m * 100:+.0f}%" for s, d, m in moves[:6])
+                )
+            on = signal.build(panel)
+            if args.regime_filter:
+                on = with_regime_filter(on, panel, args.regime_filter)
+            audit = AuditRepository(get_session_factory(get_engine(settings.database_url)))
+            for horizon in horizons:
+                measurement = measure(panel, on, signal=signal.name, horizon=horizon, cost=cost)
+                print()
+                print(format_measurement(measurement))
+                if not signal.control:
+                    record_trial(
+                        audit,
+                        measurement,
+                        regime_filter=args.regime_filter,
+                        universe_size=len(panel.symbols),
+                    )
+            runs, distinct = trial_counts(audit)
+            print()
+            print(
+                "Control, not counted as a variant."
+                if signal.control
+                else f"Variants tried so far: {distinct} ({runs} runs)."
+            )
+            return 0
+        except Exception as e:
+            print(f"measure-signals error: {e}")
             return 1
 
     elif args.command == "run":
