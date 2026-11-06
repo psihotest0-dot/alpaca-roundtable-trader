@@ -160,6 +160,14 @@ def create_parser() -> argparse.ArgumentParser:
         "--symbols", type=str, help="Comma-separated symbols. Default: the research universe."
     )
 
+    # judge-oracle command
+    subparsers.add_parser(
+        "judge-oracle",
+        help="Judges the Oracle on its recorded shadow answers (docs/oracle-provider-task.md, "
+        "section 5). Shows counts only until the minimum is reached; one look, then a second at "
+        "double the minimum.",
+    )
+
     # measure-intraday command (the research modules are imported only when it runs)
     intraday_parser = subparsers.add_parser(
         "measure-intraday",
@@ -719,6 +727,41 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"measure-signals error: {e}")
+            return 1
+
+    elif args.command == "judge-oracle":
+        try:
+            from datetime import datetime, timezone
+
+            from trading_system.oracle.judge import format_judgement, judge
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import (
+                AuditRepository,
+                OracleDecisionRepository,
+            )
+            from trading_system.storage.research import SameDatabaseError, open_observe_store
+
+            settings = Settings()
+            factory = get_session_factory(get_engine(settings.database_url))
+            try:
+                candle_store = open_observe_store(
+                    settings.observe_database_url, settings.database_url
+                )
+            except SameDatabaseError as e:
+                print(f"judge-oracle error: {e}")
+                return 1
+            judgement = judge(
+                factory,
+                OracleDecisionRepository(factory),
+                candle_store,
+                AuditRepository(factory),
+                settings,
+                datetime.now(timezone.utc),
+            )
+            print(format_judgement(judgement))
+            return 0
+        except Exception as e:
+            print(f"judge-oracle error: {type(e).__name__}: {e}")
             return 1
 
     elif args.command == "measure-intraday":
