@@ -123,6 +123,38 @@ def test_a_replay_file_is_enough_to_switch_the_oracle_on(
     assert no_oracle.trade_count == 1  # without a replay every signal goes on
 
 
+def test_an_enabled_oracle_without_a_replay_file_refuses_nothing(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """ORACLE_ENABLED is the live loop's switch. In the container it is on, and a plain backtest
+    used to refuse every signal (not found in a replay that was not there): no trades at all."""
+    frame, hourly, _, _ = _case([QUIET, QUIET, GAP_UP_6_PCT])
+    enabled = settings.model_copy(update={"oracle_enabled": True})
+
+    result = _run(enabled, BacktestConfig(**NO_COSTS), frame, hourly)
+
+    assert result.trade_count == 1 and result.shadow_trades == []
+    assert "Oracle: no approval" not in result.not_traded
+
+
+def test_a_shadow_outage_in_the_replay_file_is_traded_and_is_not_shadowed(
+    settings: Settings, tmp_path: Path
+) -> None:
+    """What the export writes for a shadow-mode signal the backend could not answer."""
+    frame, hourly, _, signal_id = _case([QUIET, QUIET, GAP_UP_6_PCT])
+    entry = {
+        "approved": True,
+        "verdict": "HOLD",
+        "final": False,
+        "mode": "shadow",
+        "failed": True,
+    }
+
+    result = _run(settings, _replay(tmp_path, {signal_id: entry}), frame, hourly)
+
+    assert result.trade_count == 1 and result.shadow_trades == []
+
+
 def test_no_second_shadow_position_while_the_first_in_that_symbol_is_open(
     settings: Settings, tmp_path: Path
 ) -> None:

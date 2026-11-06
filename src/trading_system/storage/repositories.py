@@ -272,7 +272,13 @@ class OracleDecisionRepository:
     def replay_export(self) -> dict[str, dict[str, Any]]:
         """One entry per signal the Oracle was asked about, for the backtest's `--replay-oracle`:
         its final decision, or, if it never made one (HOLD until the signal lapsed, or no answer),
-        the latest answer with `approved` false, because that is what happened: no trade."""
+        the latest answer.
+
+        `approved` is what happened to the signal. Where the verdict counted (active mode, or
+        rows from before there was a mode) a signal without a final word was not traded:
+        `approved` false. In shadow mode the loop traded every signal whatever the model said,
+        so one without a final word (HOLD, or no answer because the backend was down) is
+        `approved` true: an outage is not a veto, and must not be played as one."""
         with self._session_factory() as session:
             rows = session.query(OracleDecisionModel).order_by(OracleDecisionModel.id).all()
             latest: dict[str, OracleDecision] = {}
@@ -284,7 +290,7 @@ class OracleDecisionRepository:
                     latest[decision.signal_id] = decision
         return {
             signal_id: {
-                "approved": d.approved,
+                "approved": d.approved or (d.mode == "shadow" and d.verdict is OracleVerdict.HOLD),
                 "verdict": d.verdict.value,
                 "final": d.verdict is not OracleVerdict.HOLD,
                 "reason": d.reason,

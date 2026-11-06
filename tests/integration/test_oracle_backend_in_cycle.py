@@ -333,6 +333,44 @@ def test_the_export_marks_an_outage_so_that_it_is_not_taken_for_a_veto(
     (entry,) = OracleDecisionRepository(session_factory).replay_export().values()
 
     assert entry["failed"] is True and entry["final"] is False  # no word of the model's at all
+    # The loop traded the signal anyway, so the replay must trade it too, not play it as a veto.
+    assert entry["approved"] is True
+
+
+def test_in_shadow_mode_a_hold_of_the_model_was_traded_too_and_a_veto_was_not_approved(
+    run_cycle: RunCycle, make_settings: MakeSettings, session_factory: Any
+) -> None:
+    """`approved` is what the replay will do with the signal. Shadow HOLD: traded (the model gave
+    no final word). Shadow VETO: the model's word stands, the replay plays it as refused."""
+    repo = OracleDecisionRepository(session_factory)
+    export: dict[str, dict[str, Any]] = {}
+    for verdict in ("HOLD", "VETO"):
+        with FakeOracleBackend(answer(verdict)) as backend:
+            settings = _settings(make_settings, backend, oracle_mode="shadow")
+            oracle = create_oracle(settings, repo)
+            assert oracle is not None
+            result = run_cycle(oracle=oracle)
+            assert result.report.submitted == 1  # traded in both cases
+        export[verdict] = next(iter(repo.replay_export().values()))
+        with session_factory() as session:  # the next round starts from an empty record
+            session.query(OracleDecisionModel).delete()
+            session.commit()
+
+    assert export["HOLD"]["approved"] is True and export["HOLD"]["final"] is False
+    assert export["VETO"]["approved"] is False and export["VETO"]["final"] is True
+
+
+@pytest.mark.parametrize("reply", [answer("HOLD"), error(504, "model_timeout")])
+def test_in_active_mode_a_signal_without_a_final_word_was_not_traded_and_the_export_says_so(
+    run_with: Callable[..., SimpleNamespace], session_factory: Any, reply: Reply
+) -> None:
+    with FakeOracleBackend(reply) as backend:
+        cycle = run_with(backend, "active")
+    assert cycle.report.submitted == 0
+
+    (entry,) = OracleDecisionRepository(session_factory).replay_export().values()
+
+    assert entry["approved"] is False and entry["mode"] == "active"
 
 
 def test_a_final_answer_is_not_asked_of_the_backend_twice_and_shadow_still_says_yes(

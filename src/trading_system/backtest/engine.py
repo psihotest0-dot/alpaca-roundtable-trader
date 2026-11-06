@@ -244,7 +244,10 @@ class BacktestEngine:
         return frame.iloc[first:end]
 
     def _apply_oracle(self, sig: StrategySignal) -> bool:
-        if not (self.bt_config.replay_oracle_path or self.settings.oracle_enabled):
+        # Only a replay file brings an Oracle into a backtest. ORACLE_ENABLED is the live loop's
+        # switch: with it on and no file, every signal used to be refused ("not in the replay")
+        # and the backtest showed no trades at all.
+        if not self.bt_config.replay_oracle_path:
             return True  # no Oracle to replay: every signal goes on
         if sig.signal_id in self.oracle_decisions:
             return self.oracle_decisions[sig.signal_id]
