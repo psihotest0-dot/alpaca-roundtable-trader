@@ -10,7 +10,7 @@ import pytest
 from tests.fixtures.oracles import ScriptedOracle
 from trading_system.domain.enums import OracleVerdict
 from trading_system.domain.models import TradingState
-from trading_system.storage.models import BrokerOrderModel
+from trading_system.storage.models import BrokerOrderModel, RiskDecisionModel
 from trading_system.storage.repositories import StateRepository
 
 RunCycle = Callable[..., SimpleNamespace]
@@ -44,7 +44,11 @@ def test_a_veto_ends_the_signal_and_it_is_not_asked_about_again(
 
     assert (cycle.report.submitted, cycle.report.held, ordered) == (0, 0, 0)
     assert len(oracle.requests) == 1  # a VETO is final for the signal
-    assert _orders(session_factory) == 0 and cycle.decisions == []  # risk never saw it
+    # Risk took a first look before the Oracle was asked (and approved); that look is not
+    # recorded, and the final evaluation never came: no risk decision is on record.
+    assert _orders(session_factory) == 0 and len(cycle.decisions) == 1
+    with session_factory() as session:
+        assert session.query(RiskDecisionModel).count() == 0
 
 
 def test_a_hold_waits_and_is_asked_again_until_the_oracle_decides(

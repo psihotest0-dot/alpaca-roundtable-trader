@@ -37,6 +37,12 @@ class OracleDecisionModel(Base):
     provider = Column(String, nullable=False, default="")
     failed = Column(Boolean, nullable=False, default=False)  # no answer: only ever a HOLD
     decision_timestamp = Column(DateTime(timezone=True), nullable=False)
+    # A call to the Go backend (task 2.2). mode: "shadow" (asked and recorded, the loop was told
+    # APPROVE) or "active"; empty for rows made before and by providers without a mode.
+    mode = Column(String, nullable=False, default="", server_default="")
+    error_kind = Column(String, nullable=True)  # why there was no answer; NULL if it answered
+    request_id = Column(String, nullable=True)  # the backend's id of the call, for its journal
+    model = Column(String, nullable=True)
 
 
 class MarketBarModel(Base):

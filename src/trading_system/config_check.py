@@ -8,6 +8,7 @@ named, and only names are looked at: a value never appears in the output."""
 import difflib
 from dataclasses import dataclass, field
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import dotenv_values
 from pydantic import ValidationError
@@ -48,10 +49,47 @@ def unknown_key_warnings(env_file: str = ".env") -> list[str]:
     return warnings
 
 
+# The backend serves its Oracle routes only for a token of at least this many characters.
+MIN_ORACLE_TOKEN_LENGTH = 32
+LOCAL_HOSTS = {"localhost", "127.0.0.1", "::1", "host.docker.internal"}
+
+
+def oracle_warnings(settings: Settings) -> list[str]:
+    """What is wrong with an Oracle that is switched on, said without its token: the length of
+    the token is shown, never a character of it. Warnings, not errors: a shadow Oracle that
+    cannot be reached costs nothing, and the bot keeps trading."""
+    if not (settings.oracle_enabled and settings.oracle_provider == "backend"):
+        return []
+    warnings = []
+    token = settings.oracle_backend_token.get_secret_value()
+    if not token:
+        warnings.append(
+            "ORACLE_BACKEND_TOKEN is not set: every question to the backend would be refused "
+            "(401), so every answer is a HOLD that failed"
+        )
+    elif len(token) < MIN_ORACLE_TOKEN_LENGTH:
+        warnings.append(
+            f"ORACLE_BACKEND_TOKEN is {len(token)} characters long; the backend serves its "
+            f"Oracle routes only for a token of at least {MIN_ORACLE_TOKEN_LENGTH}"
+        )
+    parts = urlsplit(settings.oracle_backend_url)
+    if parts.scheme == "http" and (parts.hostname or "").lower() not in LOCAL_HOSTS:
+        warnings.append(
+            "ORACLE_BACKEND_URL is plain http to a host that is not this machine: the token "
+            "would cross the network unencrypted"
+        )
+    if settings.oracle_mode == "active":
+        warnings.append(
+            "ORACLE_MODE=active: a backend that cannot be reached means no entries at all"
+        )
+    return warnings
+
+
 def check_config(env_file: str = ".env") -> ConfigReport:
     report = ConfigReport(warnings=unknown_key_warnings(env_file))
     try:
-        Settings(_env_file=env_file)
+        settings = Settings(_env_file=env_file)
+        report.warnings.extend(oracle_warnings(settings))
     except ValidationError as e:
         for problem in e.errors():
             name = ".".join(str(part) for part in problem["loc"]).upper() or "SETTINGS"

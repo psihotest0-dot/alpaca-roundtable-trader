@@ -49,3 +49,12 @@ repos:
         entry: \b(PK|AK|CK)[A-Z0-9]{18}\b|\b[A-Z0-9]{7}(-[A-Z0-9]{7}){3}\b
         types: [text]
         exclude: ^poetry\.lock$
+
+      # The Oracle token of the Go backend: a variable of that name given a value of 16 or more
+      # token characters (`ORACLE_BACKEND_TOKEN=<token>` is fine, `ORACLE_BACKEND_TOKEN=abc123...` is not).
+      - id: no-oracle-token
+        name: block an Oracle backend token given a value
+        language: pygrep
+        entry: \bORACLE_(BACKEND_)?TOKEN['"]?\s*[=:]\s*['"]?[A-Za-z0-9_-]{16,}
+        types: [text]
+        exclude: ^poetry\.lock$

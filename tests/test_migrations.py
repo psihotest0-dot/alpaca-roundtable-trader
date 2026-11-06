@@ -286,3 +286,98 @@ def test_market_bars_are_added_with_their_key_and_dropped_again(db: tuple[Any, C
     command.downgrade(cfg, "f1a7c3d95b20")
     names = inspect(engine).get_table_names()
     assert "market_bars" not in names and "oracle_decisions" in names
+
+
+def _insert_oracle_rows_with_verdicts(conn: Any) -> None:
+    """Rows in the shape of the revision before the backend columns (verdict, failed)."""
+    conn.execute(
+        text(
+            "INSERT INTO strategy_signals (signal_id, version, symbol, timeframe, "
+            "closed_bar_timestamp, direction, confidence, created_at) VALUES "
+            "('sig', '1', 'AAPL', '15m', '2026-11-01 10:00:00', 'LONG', 1.0, '2026-11-01 10:00:00')"
+        )
+    )
+    for verdict, reason in (("APPROVE", "fine"), ("VETO", "no")):
+        conn.execute(
+            text(
+                "INSERT INTO oracle_decisions (signal_id, verdict, reasoning, provider, failed, "
+                "decision_timestamp) VALUES ('sig', :v, :r, '', 0, '2026-11-01 10:01:00')"
+            ),
+            {"v": verdict, "r": reason},
+        )
+
+
+MARKET_BARS = "b6d1f4a82c35"
+BACKEND_CALL = "a4c7e91b3d68"
+
+
+def test_oracle_decisions_gain_the_backend_columns_and_old_rows_stay_readable(
+    db: tuple[Any, Config],
+) -> None:
+    """Task 2.2: mode, error_kind, request_id and model. A row made before is not a shadow row
+    and carries no call: its mode is empty and the rest NULL."""
+    engine, cfg = db
+    command.upgrade(cfg, MARKET_BARS)
+    with engine.begin() as conn:
+        _insert_oracle_rows_with_verdicts(conn)
+
+    command.upgrade(cfg, BACKEND_CALL)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text(
+                "SELECT verdict, reasoning, mode, error_kind, request_id, model "
+                "FROM oracle_decisions ORDER BY id"
+            )
+        ).all()
+        assert [tuple(r) for r in rows] == [
+            ("APPROVE", "fine", "", None, None, None),
+            ("VETO", "no", "", None, None, None),
+        ]
+        indexes = [r[1] for r in conn.execute(text("PRAGMA index_list(oracle_decisions)"))]
+        assert "ix_oracle_decisions_signal_id" in indexes  # the table rebuild kept the index
+
+    # a new row made through the application's own repository
+    from trading_system.domain.enums import OracleVerdict
+    from trading_system.domain.models import OracleDecision
+    from trading_system.storage.repositories import OracleDecisionRepository
+
+    repository = OracleDecisionRepository(get_session_factory(get_engine(str(engine.url))))
+    repository.save(
+        OracleDecision(
+            signal_id="sig",
+            verdict=OracleVerdict.HOLD,
+            failed=True,
+            error_kind="timeout",
+            mode="shadow",
+            request_id="req-7",
+            model="gemma",
+            provider="backend",
+        )
+    )
+    with engine.connect() as conn:
+        newest = conn.execute(
+            text(
+                "SELECT mode, error_kind, request_id, model FROM oracle_decisions ORDER BY id DESC"
+            )
+        ).first()
+        assert tuple(newest) == ("shadow", "timeout", "req-7", "gemma")
+
+
+def test_the_backend_columns_go_away_on_downgrade_without_losing_the_rows(
+    db: tuple[Any, Config],
+) -> None:
+    engine, cfg = db
+    command.upgrade(cfg, MARKET_BARS)
+    with engine.begin() as conn:
+        _insert_oracle_rows_with_verdicts(conn)
+    command.upgrade(cfg, BACKEND_CALL)
+
+    command.downgrade(cfg, MARKET_BARS)
+
+    with engine.connect() as conn:
+        columns = [r[1] for r in conn.execute(text("PRAGMA table_info(oracle_decisions)"))]
+        assert not {"mode", "error_kind", "request_id", "model"} & set(columns)
+        assert conn.execute(text("SELECT count(*) FROM oracle_decisions")).scalar() == 2
+        indexes = [r[1] for r in conn.execute(text("PRAGMA index_list(oracle_decisions)"))]
+        assert "ix_oracle_decisions_signal_id" in indexes

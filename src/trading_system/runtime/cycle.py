@@ -310,8 +310,9 @@ class TradingCycle:
         bars_1h: dict[str, pd.DataFrame],
         now: datetime,
     ) -> Outcome:
-        """One signal through live price, Oracle, risk and execution. The cheap check comes
-        first: no Oracle call is spent on a signal that cannot be traded at a usable price."""
+        """One signal through live price, risk (a first look, when there is an Oracle), Oracle,
+        risk and execution. The cheap checks come first: no Oracle call is spent on a signal that
+        cannot be traded at a usable price or that risk would refuse."""
         logger.info(f"Processing signal: {signal.symbol} {signal.direction.value}")
         try:
             self.signal_repo.save_signal(signal)
@@ -342,7 +343,27 @@ class TradingCycle:
         logger.info(f"Live price for {signal.symbol}: {price} (last bar close {bar_close})")
 
         if self.oracle:
-            verdict = self._ask_oracle(signal, state, bars_15m, bars_1h, price, now).verdict
+            # The order is: a cheap look by risk, then the Oracle, then risk again on a fresh
+            # snapshot. The model is slow and is not asked about a trade that risk would refuse
+            # anyway; and what it sees of the account is what the pre-check saw.
+            account, positions, active_orders = self._snapshot(now)
+            pre, _ = self.risk_engine.evaluate_signal(
+                signal=signal,
+                account=account,
+                positions=positions,
+                active_orders=active_orders,
+                current_price=price,
+                state=state,
+            )
+            if not pre.approved:
+                # This is the only evaluation the signal gets, so it is the one on record. An
+                # approval is not recorded here: the final evaluation below is.
+                logger.info(f"Risk refuses {signal.symbol} before the Oracle: {pre.reasoning}")
+                self._save_risk_decision(pre)
+                return Outcome.DROPPED
+            verdict = self._ask_oracle(
+                signal, state, bars_15m, bars_1h, price, now, account, positions
+            ).verdict
             if verdict is OracleVerdict.VETO:
                 return Outcome.DROPPED
             if verdict is OracleVerdict.HOLD:
@@ -384,12 +405,13 @@ class TradingCycle:
         bars_1h: dict[str, pd.DataFrame],
         price: Decimal,
         now: datetime,
+        account: AccountSnapshot,
+        positions: list[PositionSnapshot],
     ) -> OracleDecision:
-        """The Oracle's verdict on a signal. A provider is meant never to raise; if one does,
-        that is a HOLD marked as a failure, not a veto: an Oracle that could not answer has
-        said nothing about the signal."""
+        """The Oracle's verdict on a signal, told the account as `_enter` has just seen it. A
+        provider is meant never to raise; if one does, that is a HOLD marked as a failure, not
+        a veto: an Oracle that could not answer has said nothing about the signal."""
         logger.info("Querying Oracle...")
-        account, positions, _ = self._snapshot(now)
         daily_pnl_pct = None
         if state.daily_start_equity:
             daily_pnl_pct = round(

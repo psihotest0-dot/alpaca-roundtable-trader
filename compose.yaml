@@ -43,7 +43,21 @@ services:
     restart: unless-stopped
     logging: *logging
     stop_grace_period: 30s
-    environment: *alpaca-env
+    # The Oracle settings (and the backend's token) reach THIS service only: data, news and
+    # backup have nothing to do with the model and do not get the token. They come from .env
+    # (git-ignored); with none set the Oracle stays off. The Go backend is on the PC's loopback
+    # and Docker Desktop forwards host.docker.internal to it (no extra_hosts needed there; on
+    # plain Linux Docker add `extra_hosts: ["host.docker.internal:host-gateway"]`).
+    environment:
+      <<: *alpaca-env
+      ORACLE_ENABLED: ${ORACLE_ENABLED:-false}
+      ORACLE_PROVIDER: ${ORACLE_PROVIDER:-null}
+      ORACLE_MODE: ${ORACLE_MODE:-shadow}
+      ORACLE_BACKEND_URL: ${ORACLE_BACKEND_URL:-http://host.docker.internal:8080}
+      # The backend calls its token ORACLE_TOKEN and that name may be what .env holds: it is
+      # accepted when ORACLE_BACKEND_TOKEN is not set (the bot's own name wins if both are).
+      ORACLE_BACKEND_TOKEN: ${ORACLE_BACKEND_TOKEN:-${ORACLE_TOKEN:-}}
+      ORACLE_TIMEOUT_SECONDS: ${ORACLE_TIMEOUT_SECONDS:-10}
     volumes:
       - trading_var:/app/var
     command:

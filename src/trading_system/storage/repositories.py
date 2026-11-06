@@ -245,6 +245,10 @@ class OracleDecisionRepository:
             provider=decision.provider,
             failed=decision.failed,
             decision_timestamp=decision.decision_timestamp,
+            mode=decision.mode,
+            error_kind=decision.error_kind,
+            request_id=decision.request_id,
+            model=decision.model,
         )
         with self._session_factory.begin() as session:
             session.add(model)
@@ -286,6 +290,11 @@ class OracleDecisionRepository:
                 "reason": d.reason,
                 "provider": d.provider,
                 "decided_at": d.decision_timestamp.isoformat(),
+                # For telling a model's answer from an outage when the file is judged: in
+                # shadow mode a "failed" row is no evidence about the model, not a veto.
+                "mode": d.mode,
+                "failed": d.failed,
+                "model": d.model,
             }
             for signal_id, d in latest.items()
         }
@@ -303,6 +312,10 @@ class OracleDecisionRepository:
             provider=cast(str, row.provider),
             failed=cast(bool, row.failed),
             decision_timestamp=moment,
+            mode=cast(str, row.mode or ""),
+            error_kind=cast(Optional[str], row.error_kind),
+            request_id=cast(Optional[str], row.request_id),
+            model=cast(Optional[str], row.model),
         )
 
 

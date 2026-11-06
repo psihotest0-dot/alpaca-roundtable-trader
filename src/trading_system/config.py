@@ -1,5 +1,6 @@
 import math
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,8 +13,19 @@ class Settings(BaseSettings):
     is_paper: bool = True
 
     oracle_enabled: bool = False
-    oracle_provider: Literal["null"] = "null"
-    oracle_timeout_seconds: int = Field(10, gt=0)
+    # null: every signal passes. backend: the second opinion comes from the Go backend's
+    # POST /oracle/evaluate (oracle/backend.py); the bot never calls the model itself.
+    oracle_provider: Literal["null", "backend"] = "null"
+    # shadow: the model is asked and its answers are recorded, but the loop is told APPROVE
+    # whatever it said, so nothing about the orders changes. active: its verdict counts.
+    oracle_mode: Literal["shadow", "active"] = "shadow"
+    # From a container the PC is host.docker.internal (Docker Desktop forwards it to the
+    # backend, which listens on the PC's loopback only). Never a place for a key in the URL.
+    oracle_backend_url: str = "http://host.docker.internal:8080"
+    # The backend's ORACLE_TOKEN (at least 32 characters, or the backend does not serve the
+    # route). Only in `.env` and only in the trader service of compose.yaml; never in git.
+    oracle_backend_token: SecretStr = SecretStr("")
+    oracle_timeout_seconds: int = Field(10, gt=0, le=120)
 
     log_level: str = "INFO"
     database_url: str = "sqlite:///./var/trading.db"
@@ -68,6 +80,22 @@ class Settings(BaseSettings):
     )
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+
+    @field_validator("oracle_backend_url")
+    @classmethod
+    def check_oracle_backend_url(cls, v: str) -> str:
+        """An http(s) address with a host and nothing a secret could hide in. The trailing
+        slash is dropped so that the path of a route can be appended."""
+        v = v.strip()
+        parts = urlsplit(v)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError("ORACLE_BACKEND_URL must be an http:// or https:// address")
+        if parts.username or parts.password or parts.query or parts.fragment:
+            raise ValueError(
+                "ORACLE_BACKEND_URL must be a plain address: the token goes in "
+                "ORACLE_BACKEND_TOKEN, not in the URL"
+            )
+        return v.rstrip("/")
 
     @field_validator("is_paper")
     @classmethod

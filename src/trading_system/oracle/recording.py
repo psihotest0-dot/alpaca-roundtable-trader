@@ -51,9 +51,10 @@ class RecordingOracle:
         ORACLE_LATENCY_SECONDS.set(time.monotonic() - started)
         if decision.failed:
             ORACLE_ERRORS.inc()
-        ORACLE_ANSWERS.labels(
-            verdict=decision.verdict.value, kind="failed" if decision.failed else "answer"
-        ).inc()
+        # kind: answer, failed (no answer, cause unknown), or the cause when the provider knows it
+        # (unavailable, timeout, unauthorized, bad_request, bad_reply, internal).
+        kind = (decision.error_kind or "failed") if decision.failed else "answer"
+        ORACLE_ANSWERS.labels(verdict=decision.verdict.value, kind=kind).inc()
 
         try:
             self.repository.save(decision)

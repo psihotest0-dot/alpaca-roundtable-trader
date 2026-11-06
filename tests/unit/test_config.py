@@ -91,6 +91,64 @@ def test_the_oracle_is_off_by_default_and_only_known_providers_are_accepted():
         Settings(alpaca_api_key="k", alpaca_secret_key="s", oracle_provider="anythingllm")
 
 
+def _oracle_settings(**overrides):
+    return Settings(alpaca_api_key="k", alpaca_secret_key="s", _env_file=None, **overrides)
+
+
+def test_the_backend_oracle_defaults_are_safe():
+    default = _oracle_settings()
+    assert default.oracle_mode == "shadow"  # asked and recorded, the loop is told yes
+    assert default.oracle_backend_url == "http://host.docker.internal:8080"
+    assert default.oracle_backend_token.get_secret_value() == ""
+    assert default.oracle_timeout_seconds == 10
+    assert _oracle_settings(oracle_provider="backend").oracle_provider == "backend"
+
+
+@pytest.mark.parametrize("mode", ["", "on", "paper", "ACTIVE "])
+def test_an_unknown_oracle_mode_is_refused(mode):
+    with pytest.raises(ValidationError):
+        _oracle_settings(oracle_mode=mode)
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "",
+        "host.docker.internal:8080",  # no scheme
+        "ftp://example.com",
+        "http://",
+        "http://user:secret@host.docker.internal:8080",  # a key in the address
+        "http://host.docker.internal:8080/?token=abc",
+        "http://host.docker.internal:8080/#frag",
+    ],
+)
+def test_an_oracle_backend_url_must_be_a_plain_http_address(url):
+    with pytest.raises(ValidationError, match="ORACLE_BACKEND_URL"):
+        _oracle_settings(oracle_backend_url=url)
+
+
+def test_the_backend_url_loses_its_trailing_slash_and_spaces():
+    assert _oracle_settings(oracle_backend_url=" http://127.0.0.1:8080/ ").oracle_backend_url == (
+        "http://127.0.0.1:8080"
+    )
+    assert _oracle_settings(oracle_backend_url="https://b.example/api/").oracle_backend_url == (
+        "https://b.example/api"
+    )
+
+
+@pytest.mark.parametrize("seconds", [0, -1, 121])
+def test_the_oracle_timeout_has_bounds(seconds):
+    with pytest.raises(ValidationError):
+        _oracle_settings(oracle_timeout_seconds=seconds)
+
+
+def test_the_oracle_token_never_shows_in_a_repr():
+    token = "T" * 40
+    s = _oracle_settings(oracle_backend_token=token)
+    assert token not in repr(s) and token not in str(s)
+    assert s.oracle_backend_token.get_secret_value() == token
+
+
 def test_watchlist_normalization_and_dedup():
     s = Settings(alpaca_api_key="k", alpaca_secret_key="s", watchlist=" aApl , MSFT, msft , nvda  ")
     assert s.watchlist == "AAPL,MSFT,NVDA"

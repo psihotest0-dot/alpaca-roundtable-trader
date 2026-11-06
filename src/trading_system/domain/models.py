@@ -45,7 +45,12 @@ class OracleDecision(BaseModel):
 
     `confidence` and `reason` are for the record and for later analysis; nothing is decided
     from them. `failed` marks "the Oracle did not answer" (timeout, unreadable output): that is
-    not an opinion, so it can only be a HOLD and it is never cached as a VETO (H1)."""
+    not an opinion, so it can only be a HOLD and it is never cached as a VETO (H1).
+
+    The last four fields describe a call to the Go backend and are empty for other providers:
+    `mode` is what the bot does with the verdict (shadow: nothing, active: it counts),
+    `error_kind` says why there was no answer (see oracle/backend.py), `request_id` and `model`
+    find the call in the backend's journal."""
 
     signal_id: str
     verdict: OracleVerdict
@@ -54,6 +59,10 @@ class OracleDecision(BaseModel):
     provider: str = ""
     failed: bool = False
     decision_timestamp: datetime = Field(default_factory=_now_utc)
+    mode: str = ""
+    error_kind: Optional[str] = None
+    request_id: Optional[str] = None
+    model: Optional[str] = None
 
     @field_validator("reason")
     @classmethod
@@ -64,6 +73,8 @@ class OracleDecision(BaseModel):
     def _failure_is_not_an_opinion(self) -> "OracleDecision":
         if self.failed and self.verdict is not OracleVerdict.HOLD:
             raise ValueError("A failed Oracle call can only be a HOLD.")
+        if self.error_kind and not self.failed:
+            raise ValueError("An error kind goes with a call that failed.")
         return self
 
     @property

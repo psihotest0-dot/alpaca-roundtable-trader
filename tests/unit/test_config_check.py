@@ -138,6 +138,102 @@ def test_no_file_no_warnings(tmp_path: Path) -> None:
     assert unknown_key_warnings(str(tmp_path / "missing.env")) == []
 
 
+# --- the Oracle's token and address ----------------------------------------------------------
+
+ORACLE_ON = {"ORACLE_ENABLED": "true", "ORACLE_PROVIDER": "backend"}
+GOOD_TOKEN = "a" * 48
+
+
+def test_an_oracle_that_is_off_needs_no_token(tmp_path: Path) -> None:
+    report = check_config(_env(tmp_path, **KEYS, ORACLE_PROVIDER="backend"))  # not enabled
+
+    assert report.valid and report.warnings == []
+
+
+def test_the_null_oracle_needs_no_token(tmp_path: Path) -> None:
+    report = check_config(_env(tmp_path, **KEYS, ORACLE_ENABLED="true"))
+
+    assert report.valid and report.warnings == []
+
+
+def test_a_backend_oracle_without_a_token_is_warned_about(tmp_path: Path) -> None:
+    report = check_config(_env(tmp_path, **KEYS, **ORACLE_ON))
+
+    assert report.valid  # a shadow Oracle that cannot ask costs nothing: a warning, not an error
+    [warning] = report.warnings
+    assert warning.startswith("ORACLE_BACKEND_TOKEN is not set")
+
+
+def test_a_short_token_is_warned_about_by_its_length_and_never_shown(tmp_path: Path) -> None:
+    secret = "SHORT-SECRET-TOKEN"  # 18 characters
+    report = check_config(_env(tmp_path, **KEYS, **ORACLE_ON, ORACLE_BACKEND_TOKEN=secret))
+
+    [warning] = report.warnings
+    assert "18 characters" in warning and "at least 32" in warning
+    assert secret not in warning
+
+
+def test_a_token_of_32_characters_or_more_is_quiet(tmp_path: Path) -> None:
+    for token in ("b" * 32, GOOD_TOKEN):
+        report = check_config(_env(tmp_path, **KEYS, **ORACLE_ON, ORACLE_BACKEND_TOKEN=token))
+        assert report.warnings == [], token
+
+
+def test_plain_http_to_another_machine_is_warned_about_but_this_machine_is_not(
+    tmp_path: Path,
+) -> None:
+    for url in (
+        "http://host.docker.internal:8080",
+        "http://127.0.0.1:8080",
+        "http://localhost:8080",
+    ):
+        report = check_config(
+            _env(
+                tmp_path,
+                **KEYS,
+                **ORACLE_ON,
+                ORACLE_BACKEND_TOKEN=GOOD_TOKEN,
+                ORACLE_BACKEND_URL=url,
+            )
+        )
+        assert report.warnings == [], url
+
+    report = check_config(
+        _env(
+            tmp_path,
+            **KEYS,
+            **ORACLE_ON,
+            ORACLE_BACKEND_TOKEN=GOOD_TOKEN,
+            ORACLE_BACKEND_URL="http://192.168.1.20:8080",
+        )
+    )
+    [warning] = report.warnings
+    assert "unencrypted" in warning
+
+
+def test_active_mode_says_what_an_unreachable_backend_costs(tmp_path: Path) -> None:
+    report = check_config(
+        _env(tmp_path, **KEYS, **ORACLE_ON, ORACLE_BACKEND_TOKEN=GOOD_TOKEN, ORACLE_MODE="active")
+    )
+
+    [warning] = report.warnings
+    assert "ORACLE_MODE=active" in warning and "no entries" in warning
+
+
+def test_a_bad_backend_url_is_an_error(tmp_path: Path) -> None:
+    report = check_config(_env(tmp_path, **KEYS, ORACLE_BACKEND_URL="not-a-url"))
+
+    assert not report.valid and any(e.startswith("ORACLE_BACKEND_URL:") for e in report.errors)
+
+
+def test_the_oracle_settings_are_known_names_in_the_file(tmp_path: Path) -> None:
+    lines = {**ORACLE_ON, "ORACLE_MODE": "shadow", "ORACLE_BACKEND_URL": "http://127.0.0.1:8080"}
+
+    assert (
+        unknown_key_warnings(_env(tmp_path, **KEYS, ORACLE_BACKEND_TOKEN=GOOD_TOKEN, **lines)) == []
+    )
+
+
 # --- the command ----------------------------------------------------------------------------
 
 

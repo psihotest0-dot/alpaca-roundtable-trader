@@ -195,6 +195,16 @@ def create_parser() -> argparse.ArgumentParser:
     )
     export_parser.add_argument("--out", required=True, help="Path of the JSON file to write.")
 
+    # oracle-probe command
+    probe_parser = subparsers.add_parser(
+        "oracle-probe",
+        help="Asks the Oracle backend about one ARTIFICIAL signal, to prove the road (token, "
+        "network, record). Places no order. Run it in the container, where the database is.",
+    )
+    probe_parser.add_argument(
+        "--symbol", help="A symbol for the artificial signal. Default: the first of the watchlist."
+    )
+
     # status command
     subparsers.add_parser("status", help="Prints the current status of the trading system.")
 
@@ -277,11 +287,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     print(
                         f"Broker connection successful. Market is currently {'open' if clock.is_open else 'closed'}."
                     )
-                except ImportError:
-                    print("Error: AlpacaBroker not yet implemented. Cannot run network checks.")
-                    return 1
                 except Exception as e:
                     print(f"Network check failed: {e}")
+                    return 1
+                from trading_system.oracle.checks import ping_backend
+
+                ping = ping_backend(settings)
+                if ping is None:
+                    print("Oracle: not using the backend (ORACLE_ENABLED / ORACLE_PROVIDER).")
+                elif ping.ok:
+                    print(
+                        f"Oracle backend reachable at {settings.oracle_backend_url}; the token "
+                        f"is accepted (mode: {settings.oracle_mode})."
+                    )
+                else:
+                    print(f"Oracle backend check failed ({ping.kind}): {ping.detail}")
                     return 1
             return 0
         except ValidationError as e:
@@ -721,6 +741,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Export error: {e}")
             return 1
 
+    elif args.command == "oracle-probe":
+        try:
+            from trading_system.oracle.checks import run_probe
+            from trading_system.storage.database import get_engine, get_session_factory
+
+            inject_offline_dummy_keys()
+            settings = Settings()
+            symbol = (args.symbol or (settings.watchlist_symbols or ["AAPL"])[0]).upper()
+            probe = run_probe(
+                settings, get_session_factory(get_engine(settings.database_url)), symbol
+            )
+        except Exception as e:
+            print(f"Probe error: {type(e).__name__}: {e}")
+            return 1
+        for line in probe.lines:
+            print(line)
+        return 0 if probe.ok else 1
+
     elif args.command == "status":
         print("Fetching system status...")
         try:
@@ -831,18 +869,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             from trading_system.observability.health import evaluate_heartbeat
             from trading_system.runtime.heartbeat import read_heartbeat
 
+            from trading_system.oracle.checks import health_findings
+
             inject_offline_dummy_keys()
             settings = Settings()
             verdict = evaluate_heartbeat(
                 read_heartbeat(Path(settings.heartbeat_path)), datetime.now(timezone.utc)
             )
+            oracle_problems, oracle_warnings = health_findings(settings)
         except Exception as e:
             print(f"UNHEALTHY: could not judge the heartbeat: {e}")
             return 1
-        if verdict.healthy:
-            print("healthy")
+        problems = list(verdict.reasons) + oracle_problems
+        if verdict.healthy and not oracle_problems:
+            print("healthy" + "".join(f" (warning: {w})" for w in oracle_warnings))
             return 0
-        print("UNHEALTHY: " + "; ".join(verdict.reasons))
+        print("UNHEALTHY: " + "; ".join(problems))
         return 1
 
     elif args.command == "backup-db":

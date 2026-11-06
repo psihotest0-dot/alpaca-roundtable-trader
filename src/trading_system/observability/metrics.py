@@ -40,7 +40,9 @@ ORACLE_LATENCY_SECONDS = Gauge("oracle_latency_seconds", "Latency of Oracle call
 ORACLE_ERRORS = Counter("oracle_errors_total", "Total number of Oracle errors")
 
 # "Unreachable" and "says no" are different things; kind tells them apart:
-# answer (the Oracle answered), cached (a final answer from the record), failed (no answer).
+# answer (the Oracle answered), cached (a final answer from the record), and for no answer
+# either failed (cause unknown) or the cause: unavailable, timeout, unauthorized, bad_request,
+# bad_reply, internal (see oracle/backend.py).
 ORACLE_ANSWERS = Counter(
     "oracle_answers_total",
     "Oracle answers by verdict and kind",
