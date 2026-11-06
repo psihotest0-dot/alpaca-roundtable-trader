@@ -94,6 +94,22 @@ def build_panel(
     )
 
 
+def frames_from_stored(stored: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """`open` and `close` per symbol, indexed by the New York date of each stored daily bar."""
+    frames: dict[str, pd.DataFrame] = {}
+    for symbol, bars in stored.items():
+        day = (
+            pd.DatetimeIndex(bars.index)
+            .tz_convert("America/New_York")
+            .tz_localize(None)
+            .normalize()
+        )
+        frames[symbol] = pd.DataFrame(
+            {"open": bars["open"].to_numpy(), "close": bars["close"].to_numpy()}, index=day
+        )
+    return frames
+
+
 def load_panel(
     repo: MarketBarRepository,
     symbols: Optional[Sequence[str]] = None,
@@ -110,18 +126,7 @@ def load_panel(
     stored = repo.load(
         wanted, TIMEFRAME, end=datetime(end.year, end.month, end.day, tzinfo=timezone.utc)
     )
-    frames: dict[str, pd.DataFrame] = {}
-    for symbol, bars in stored.items():
-        day = (
-            pd.DatetimeIndex(bars.index)
-            .tz_convert("America/New_York")
-            .tz_localize(None)
-            .normalize()
-        )
-        frames[symbol] = pd.DataFrame(
-            {"open": bars["open"].to_numpy(), "close": bars["close"].to_numpy()}, index=day
-        )
-    return build_panel(frames)
+    return build_panel(frames_from_stored(stored))
 
 
 def big_moves(panel: Panel, threshold: float = 0.30) -> list[tuple[str, date, float]]:

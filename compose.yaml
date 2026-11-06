@@ -133,6 +133,35 @@ services:
       retries: 1
       start_period: 5m
 
+  # The weekly signal tested forward in time (docs/strategy-research-plan.md, section 10): every
+  # hour it brings the daily bars of the research universe up to date (`fetch-daily`, about 11
+  # seconds) and, once the day's bar is final (30 minutes after the close), records the signal's
+  # picks for that evening (`forward-record`, once per day, idempotent). Read-only calls to Alpaca,
+  # no order is ever placed. `python -m trading_system forward-report` judges them as prices arrive.
+  forward:
+    image: alpaca-roundtable-trader:latest
+    container_name: alpaca-trader-forward
+    restart: unless-stopped
+    logging: *logging
+    environment: *alpaca-env
+    volumes:
+      - trading_var:/app/var
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          python -m trading_system fetch-daily && python -m trading_system forward-record && touch /app/var/forward_ok
+          sleep 3600
+        done
+    # forward_ok is touched after every successful round: older than 2.5 hours = two failed rounds.
+    healthcheck:
+      test: ["CMD-SHELL", "find /app/var/forward_ok -mmin -150 | grep -q ."]
+      interval: 5m
+      timeout: 10s
+      retries: 1
+      start_period: 10m
+
   # The archive of the database OUTSIDE Docker. Every BACKUP_INTERVAL_SECONDS (default 6 hours,
   # first one at start) it writes a checked, compressed snapshot to ./var/backups on the PC
   # and keeps the newest BACKUP_KEEP (default 28 = a week). It gets no Alpaca keys. If a backup

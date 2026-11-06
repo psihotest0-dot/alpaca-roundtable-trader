@@ -150,6 +150,19 @@ def create_parser() -> argparse.ArgumentParser:
         "--symbols", type=str, help="Comma-separated symbols. Default: the research universe."
     )
 
+    # forward-record / forward-report: the weekly signal tested forward in time (no orders)
+    subparsers.add_parser(
+        "forward-record",
+        help="Records today's picks of the weekly signal (and its control) once the day's bar is "
+        "final. Safe to run every hour; places no order. See docs/strategy-research-plan.md, "
+        "section 10.",
+    )
+    subparsers.add_parser(
+        "forward-report",
+        help="Judges the recorded picks as their prices arrive (same measurement as "
+        "measure-signals); a verdict only after the pre-registered minimum time.",
+    )
+
     # run command
     run_parser = subparsers.add_parser("run", help="Runs the trading system.")
     run_parser.add_argument(
@@ -633,6 +646,32 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"measure-signals error: {e}")
+            return 1
+
+    elif args.command in ("forward-record", "forward-report"):
+        try:
+            from datetime import datetime, timezone
+
+            from trading_system.research.forward import evaluate, format_report, record_picks
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import AuditRepository
+            from trading_system.storage.research import SameDatabaseError, open_research_store
+
+            settings = Settings()
+            try:
+                repo = open_research_store(settings.research_database_url, settings.database_url)
+            except SameDatabaseError as e:
+                print(f"{args.command} error: {e}")
+                return 1
+            audit = AuditRepository(get_session_factory(get_engine(settings.database_url)))
+            now = datetime.now(timezone.utc)
+            if args.command == "forward-record":
+                print(record_picks(audit, repo, now).line())
+            else:
+                print(format_report(evaluate(audit, repo, now)))
+            return 0
+        except Exception as e:
+            print(f"{args.command} error: {type(e).__name__}: {e}")
             return 1
 
     elif args.command == "run":
