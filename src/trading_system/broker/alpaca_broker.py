@@ -89,6 +89,16 @@ class AlpacaBroker:
             params["page_token"] = page[-1]["id"]
 
     @retry_read_request()
+    def get_portfolio_history(self, days: int = 30) -> Any:
+        """Alpaca's own end-of-day equity of the account for the last `days` days (one point
+        per trading day; see observability/equity_check.py for what its stamps mean)."""
+        from alpaca.trading.requests import GetPortfolioHistoryRequest
+
+        return self.client.get_portfolio_history(
+            GetPortfolioHistoryRequest(period=f"{days}D", timeframe="1D")
+        )
+
+    @retry_read_request()
     def get_order_by_id(self, order_id: str) -> Any:
         return self.client.get_order_by_id(order_id=order_id)
 

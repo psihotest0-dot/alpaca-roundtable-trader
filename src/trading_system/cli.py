@@ -270,6 +270,39 @@ def create_parser() -> argparse.ArgumentParser:
     )
     report_parser.add_argument("--date", help="The day, YYYY-MM-DD (New York).")
 
+    # corporate-actions command
+    corporate_parser = subparsers.add_parser(
+        "corporate-actions",
+        help="Splits, spin-offs, mergers and renames that hit (or are about to hit) our stocks.",
+    )
+    corporate_parser.add_argument(
+        "--symbols",
+        help="Comma-separated symbols (default: the open positions and orders and the watchlist).",
+    )
+    corporate_parser.add_argument(
+        "--universe",
+        action="store_true",
+        help="Look at the whole research universe plus the watchlist instead.",
+    )
+    corporate_parser.add_argument(
+        "--ahead",
+        type=int,
+        default=30,
+        help="Days ahead to look (default 30; Alpaca knows ~4 weeks).",
+    )
+    corporate_parser.add_argument(
+        "--back", type=int, default=0, help="Days back to look (default 0)."
+    )
+
+    # equity-check command
+    equity_parser = subparsers.add_parser(
+        "equity-check",
+        help="Compares our journal of the account's equity with Alpaca's end-of-day history.",
+    )
+    equity_parser.add_argument(
+        "--days", type=int, default=30, help="How many days of Alpaca's history (default 30)."
+    )
+
     # health command
     subparsers.add_parser(
         "health",
@@ -346,6 +379,24 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 except Exception as e:
                     print(f"Network check failed: {e}")
                     return 1
+                # Advisory: an event on what we hold is a warning to read, not a broken system.
+                try:
+                    from datetime import datetime, timezone
+
+                    from trading_system.data.corporate_actions import (
+                        CorporateActionsFeed,
+                        check_holdings,
+                    )
+                    from trading_system.risk.daily_equity import trading_day
+
+                    for line in check_holdings(
+                        CorporateActionsFeed(settings),
+                        broker,
+                        trading_day(datetime.now(timezone.utc)),
+                    ):
+                        print(line)
+                except Exception as e:
+                    print(f"Corporate actions could not be checked (advisory only): {e}")
                 from trading_system.oracle.checks import ping_backend
 
                 ping = ping_backend(settings)
@@ -1092,6 +1143,78 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 1
         except Exception as e:
             print(f"Report error: {e}")
+            return 1
+
+    elif args.command == "corporate-actions":
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from trading_system.broker.alpaca_broker import AlpacaBroker
+            from trading_system.data.corporate_actions import (
+                CorporateActionsFeed,
+                format_events,
+                held_symbols,
+            )
+            from trading_system.data.universe import research_universe
+            from trading_system.risk.daily_equity import trading_day
+
+            if args.ahead < 0 or args.back < 0:
+                print("corporate-actions error: --ahead and --back cannot be negative")
+                return 1
+            settings = Settings()
+            if args.symbols:
+                names = sorted({s.strip().upper() for s in args.symbols.split(",") if s.strip()})
+            elif args.universe:
+                names = sorted(set(research_universe()) | set(settings.watchlist_symbols))
+            else:
+                names = sorted(
+                    set(held_symbols(AlpacaBroker(settings))) | set(settings.watchlist_symbols)
+                )
+            today = trading_day(datetime.now(timezone.utc))
+            first, last = today - timedelta(days=args.back), today + timedelta(days=args.ahead)
+            found = CorporateActionsFeed(settings).events(names, first, last)
+            print(f"Corporate actions for {len(names)} symbol(s), {first} to {last}:")
+            print(format_events(found) if found else "  nothing found.")
+            print(
+                "Alpaca lists an event only a few weeks before it happens, so 'nothing found' is "
+                "not a promise that nothing will happen. Dividends are left out (the prices are "
+                "adjusted for them)."
+            )
+            return 0
+        except Exception as e:
+            print(f"corporate-actions error: {e}")
+            return 1
+
+    elif args.command == "equity-check":
+        try:
+            from trading_system.broker.alpaca_broker import AlpacaBroker
+            from trading_system.observability.equity_check import (
+                alpaca_equity_by_day,
+                compare_equity,
+                format_equity_check,
+                journal_equity_by_day,
+            )
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import AuditRepository
+
+            if args.days < 1:
+                print("equity-check error: --days must be at least 1")
+                return 1
+            settings = Settings()
+            alpaca_days = alpaca_equity_by_day(
+                AlpacaBroker(settings).get_portfolio_history(args.days)
+            )
+            if not alpaca_days:
+                print("Alpaca returned no equity history for the period.")
+                return 1
+            journal = AuditRepository(get_session_factory(get_engine(settings.database_url)))
+            equity_check = compare_equity(
+                alpaca_days, journal_equity_by_day(journal, min(alpaca_days), max(alpaca_days))
+            )
+            print(format_equity_check(equity_check))
+            return 0 if equity_check.ok else 1
+        except Exception as e:
+            print(f"equity-check error: {e}")
             return 1
 
     elif args.command == "health":

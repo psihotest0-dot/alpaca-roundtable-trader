@@ -53,6 +53,18 @@ def test_get_open_orders(mock_client, settings):
 
 
 @patch("trading_system.broker.alpaca_broker.TradingClient")
+def test_get_portfolio_history_asks_for_daily_points_over_the_days_given(mock_client, settings):
+    mock_instance = mock_client.return_value
+    broker = AlpacaBroker(settings)
+
+    broker.get_portfolio_history(14)
+
+    request = mock_instance.get_portfolio_history.call_args.args[0]
+    assert request.period == "14D"
+    assert request.timeframe == "1D"
+
+
+@patch("trading_system.broker.alpaca_broker.TradingClient")
 def test_get_clock(mock_client, settings):
     mock_instance = mock_client.return_value
     mock_instance.get_clock.return_value = {"is_open": True}
