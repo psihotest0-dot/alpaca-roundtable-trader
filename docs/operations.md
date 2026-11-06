@@ -89,7 +89,28 @@ After pulling new code, run `poetry install` and then `poetry run alembic upgrad
 - **News cache**: `var/news.db` (`NEWS_DATABASE_URL`), a SQLite file of its own in the same volume, filled by the container `alpaca-trader-news` (see `fetch-news` above). Chroma is gone (2026-11-05); there is no vector store to run.
 - **Containers** (`docker compose up -d`): `alpaca-trader` runs the trading loop (`run`, dry-run: real data, simulated orders; it does not use `--paper`) and `alpaca-trader-data` runs `fetch-history --days 180` once an hour. Both run `alembic upgrade head` first and share the named volume `alpaca_trader_var`, mounted at `/app/var`: that volume is the only copy of the data (`trading.db` with the state, signals, orders and the `market_bars` candles, and the log). The host's `var/` is not mounted on purpose (SQLite in WAL mode does not work reliably over a Windows bind mount, and a host copy would diverge). Both restart by themselves (`unless-stopped`) when Docker Desktop starts. `docker compose logs -f trader` follows the loop; `docker compose stop trader` is a clean stop (SIGTERM). Only `ALPACA_API_KEY`, `ALPACA_SECRET_KEY`, `IS_PAPER` and `DATABASE_URL` reach the containers; nothing else from `.env`. `docker compose down` keeps the data; `docker compose down -v` deletes it. After a code change: `docker compose build && docker compose up -d`. One-off commands: `docker compose exec trader python -m trading_system status`, or `docker compose run --rm app …` when the loop is not running.
 - **Database**: the trading state is the project's own SQLite file. The Go backend's containers and their SQL database are separate and are not used by this project.
-- **Host services from a container**: when a real Oracle provider is added (Phase 2.2), a container reaches a service on the host through the OS-specific gateway (`host.docker.internal` on Mac/Win, `172.17.0.1` on Linux), never through `127.0.0.1`.
+- **Host services from a container**: the container reaches the Go backend (on the PC's `127.0.0.1:8080`) as `http://host.docker.internal:8080`; Docker Desktop forwards that to the PC's loopback (checked 2026-11-05 and 2026-11-06, `/healthz` 200). Never `127.0.0.1` from inside the container, which is the container itself. On plain Linux Docker add `extra_hosts: ["host.docker.internal:host-gateway"]` to the service. Side effect to know: from a container the whole backend is reachable, not only the Oracle routes.
+
+## The Oracle through the Go backend (task 2.2)
+
+The bot asks the backend (`POST /oracle/evaluate`), never the model. Off by default.
+
+**Turning it on** (in the bot's `.env`, which is git-ignored; the same token as the backend's `ORACLE_TOKEN`, at least 32 characters, made with `python -c "import secrets; print(secrets.token_hex(24))"`):
+
+```text
+ORACLE_ENABLED=true
+ORACLE_PROVIDER=backend
+ORACLE_MODE=shadow            # the default; active only by a separate decision
+ORACLE_BACKEND_TOKEN=<the token>
+```
+
+(`compose.yaml` also takes the backend's own name, `ORACLE_TOKEN`, when `ORACLE_BACKEND_TOKEN` is not set; the bot's name wins if both are.) Then `docker compose build && docker compose up -d`. Only the `trader` service gets these variables (not `data`, `news`, `backup`). Check with `docker compose exec trader python -m trading_system validate-config` (warns about a missing or short token; prints no value), `doctor --network` (pings the backend: token accepted?) and `oracle-probe` (one ARTIFICIAL signal marked `oracle-probe`; shows the model's real answer, writes one row each to `strategy_signals` and `oracle_decisions`, places no order).
+
+**Modes.** `shadow`: the model is asked and the answer recorded, but the loop is told `APPROVE` whatever it said, so orders do not change; the record holds the model's own word, with `mode = 'shadow'`. `active`: the verdict counts (`VETO` ends the signal, `HOLD` waits), and a failed call is a `HOLD` that failed, so a backend that is down means no entries. The order for a signal is: risk takes a cheap first look (a refusal is recorded once and the model is not asked), then the model, then risk decides on a fresh snapshot.
+
+**When something is wrong** (the cause is the `error_kind` of the row in `oracle_decisions` and the `kind` label of `oracle_answers_total`): `unauthorized` = the token is missing or differs from the backend's; `unavailable` = the backend is not running, its Oracle route is off (404: `ORACLE_TOKEN` unset or shorter than 32 there) or the model behind it is down (502); `timeout` = no reply in `ORACLE_TIMEOUT_SECONDS` (10) or the backend's own 504; `bad_request` = the backend refused the request (a bug here); `bad_reply` = what came back is not the contract. After a failure the client does not call again for 30 seconds (the rest of that bar's signals fail at once), and asks again on the next tick; the backend finishes a call the bot stopped waiting for and keeps the answer (3 minutes for a `HOLD`, 30 for a final verdict). `health` pings the backend each minute: in shadow mode a failure is only a warning in its output (`healthy (warning: ...)`), in active mode the container turns `unhealthy`.
+
+**Judging the model** is a separate, written-down procedure: `oracle-provider-task.md`, section 5 (minimum numbers, one look, no peeking). Do not run `--replay-oracle` on the recorded decisions before the minimum is reached.
 
 ## Docker image
 
