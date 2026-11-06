@@ -77,8 +77,12 @@ class Counts:
     asked: int  # signals the model was put to (shadow mode, after START, not a probe)
     approve: int
     veto: int
-    availability: float  # (approve + veto) / asked
+    availability: (
+        float  # the share of the asked signals that got a REPLY: (asked - no reply) / asked
+    )
     period: Optional[Period] = None  # the period these counts are of
+    held: int = 0  # the model's own HOLD: a reply, not a final one, and no outage
+    no_reply: int = 0  # asked, no reply at all (the backend or the model failed)
 
     @property
     def answered(self) -> int:
@@ -186,7 +190,13 @@ def count(sample: dict[str, dict[str, Any]], period: Optional[Period] = None) ->
     approve = sum(1 for e in answered if e["verdict"] == "APPROVE")
     veto = sum(1 for e in answered if e["verdict"] == "VETO")
     asked = len(sample)
-    return Counts(asked, approve, veto, (approve + veto) / asked if asked else 0.0, period)
+    no_reply = sum(1 for e in sample.values() if e["failed"])
+    held = sum(1 for e in sample.values() if not e["failed"] and not e["final"])
+    # Availability is about the BACKEND and the model being there. A HOLD is the model answering "not
+    # clear" (it is no final answer and stays out of both groups), so it is not an outage; counting it
+    # as one would make the judge refuse a verdict whenever the model is cautious.
+    availability = (asked - no_reply) / asked if asked else 0.0
+    return Counts(asked, approve, veto, availability, period, held, no_reply)
 
 
 def _shadow_pnl(
@@ -296,8 +306,8 @@ def judge(
     if counts.availability < MIN_AVAILABILITY:
         return said(
             "no verdict",
-            f"availability {counts.availability:.0%} is under {MIN_AVAILABILITY:.0%}: the backend or "
-            "the model fails too often to judge",
+            f"availability {counts.availability:.0%} is under {MIN_AVAILABILITY:.0%}: {counts.no_reply} of "
+            f"{counts.asked} signals got no reply, so the backend or the model fails too often to judge",
         )
 
     trades, unresolved, no_bars = _shadow_pnl(sample, bars, settings)
@@ -382,8 +392,9 @@ def format_judgement(j: Judgement) -> str:
     lines = [
         f"The Oracle's answers since {START:%Y-%m-%d %H:%M} UTC (shadow mode, probes left out):",
         "  period judged (model | prompt label): " + period_key(c.period),
-        f"  asked about {c.asked} signals; answered {c.answered} "
-        f"({c.approve} approve, {c.veto} veto), availability {c.availability:.0%}",
+        f"  asked about {c.asked} signals; final answers {c.answered} "
+        f"({c.approve} approve, {c.veto} veto), the model held on {c.held}, no reply to "
+        f"{c.no_reply}; availability {c.availability:.0%} (replies / asked)",
         f"  looks taken in this period: {j.looks_before} of {MAX_LOOKS}",
         f"  verdict: {j.verdict}",
         f"  {j.reason}",
@@ -391,7 +402,8 @@ def format_judgement(j: Judgement) -> str:
     for other in j.other_periods:
         lines.append(
             f"  other period {period_key(other.period)}: {other.asked} asked, {other.answered} "
-            f"answered ({other.approve} approve, {other.veto} veto); counts only, not judged"
+            f"final ({other.approve} approve, {other.veto} veto), {other.held} held, {other.no_reply} "
+            "without a reply; counts only, not judged"
         )
     d = j.detail
     if d is not None:

@@ -181,7 +181,8 @@ def test_probes_old_answers_other_modes_holds_and_outages_are_not_in_the_sample(
 
     assert (c.approve, c.veto) == (1, 0)
     assert c.asked == 3  # the approve, the hold and the outage were asked in shadow mode
-    assert c.availability == pytest.approx(1 / 3)
+    # replies / asked: the approve and the model's own HOLD are replies, the outage is not
+    assert c.availability == pytest.approx(2 / 3) and (c.held, c.no_reply) == (1, 1)
 
 
 def test_availability_under_eighty_percent_gives_no_verdict_and_no_returns(world: World) -> None:
@@ -193,6 +194,38 @@ def test_availability_under_eighty_percent_gives_no_verdict_and_no_returns(world
 
     assert j.verdict == "no verdict" and "availability 66%" in j.reason and j.detail is None
     assert _looks(world) == 0
+
+
+def test_the_models_own_holds_are_not_an_outage_and_do_not_block_a_verdict(world: World) -> None:
+    """On the first real day the model held on 3 of 7 signals. A HOLD is a reply ("not clear"): it is no
+    final answer and stays out of both groups, but it must not count against the availability, or a
+    cautious model would never be judged."""
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)
+    for _ in range(40):
+        world.add("HOLD")
+
+    j = world.judge()
+
+    assert j.counts.held == 40 and j.counts.no_reply == 0 and j.counts.availability == 1.0
+    assert j.verdict == "helps" and j.detail is not None  # judged on the 60 final answers
+    assert "the model held on 40" in format_judgement(j)
+
+
+def test_holds_and_outages_together_only_the_outages_count_against_availability(
+    world: World,
+) -> None:
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)
+    for _ in range(30):
+        world.add("HOLD")  # 30 holds: fine
+    for _ in range(14):
+        world.add("HOLD", failed=True)  # 14 of 104 asked got no reply: 87 %
+    assert world.judge().verdict == "helps"
+
+    for _ in range(40):  # now 54 of 144 asked got no reply: 62 %
+        world.add("HOLD", failed=True)
+    # the look of the first call is used; availability is what is under test
+    worse = world.judge()
+    assert worse.counts.availability == pytest.approx(90 / 144) and worse.counts.no_reply == 54
 
 
 # ------------------------------------------------------------------------- the verdicts
@@ -343,7 +376,7 @@ def test_the_command_prints_the_counts(
         assert main(["judge-oracle"]) == 0
 
     out = capsys.readouterr().out
-    assert "asked about 9 signals; answered 9 (5 approve, 4 veto)" in out
+    assert "asked about 9 signals; final answers 9 (5 approve, 4 veto)" in out
     assert "looks taken in this period: 0 of 2" in out and "verdict: no verdict" in out
 
 
