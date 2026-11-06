@@ -14,11 +14,19 @@ from trading_system.strategy.ema_crossover import (
     STRICT_EMA_CROSSOVER_5PCT,
     EmaCrossoverStrategy,
 )
+from trading_system.strategy.session_cross import SessionTrendCrossStrategy
 from trading_system.strategy.trend_cross import TrendCrossStrategy
 
 STRATEGIES: Dict[str, Callable[[], BaseStrategy]] = {
     # What the live loop runs.
     "trend_cross": lambda: TrendCrossStrategy(RUNTIME_STRATEGY),
+    # Two candidates to repair it, registered before any result (research plan, section 12):
+    # the same strategy on regular-session bars only, and the same without entries in the first
+    # 30 minutes. The live loop does not run them.
+    "trend_cross_session": lambda: SessionTrendCrossStrategy("trend_cross_session"),
+    "trend_cross_session_late": lambda: SessionTrendCrossStrategy(
+        "trend_cross_session_late", skip_open_minutes=30
+    ),
     # The two strategies of the original Money_bot (ported, LONG only, closed bars).
     "ema_crossover": lambda: EmaCrossoverStrategy(EMA_CROSSOVER, name="ema_crossover"),
     "strict_ema_crossover": lambda: EmaCrossoverStrategy(

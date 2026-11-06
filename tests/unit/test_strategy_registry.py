@@ -17,9 +17,11 @@ def test_the_strategy_the_live_loop_runs_is_in_the_list_with_its_live_parameters
     assert strategy.config == RUNTIME_STRATEGY
 
 
-def test_the_two_originals_and_their_5_percent_variants_are_there() -> None:
+def test_the_live_one_the_two_candidates_the_two_originals_and_their_variants_are_there() -> None:
     assert strategy_names() == [
         "trend_cross",
+        "trend_cross_session",
+        "trend_cross_session_late",
         "ema_crossover",
         "strict_ema_crossover",
         "ema_crossover_5pct",
