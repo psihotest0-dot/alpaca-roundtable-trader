@@ -183,6 +183,45 @@ def test_the_first_update_stores_the_closed_bars_and_not_the_one_still_forming(
     assert len(client.requests) == 2  # one request per timeframe, however many symbols
 
 
+def test_many_symbols_are_downloaded_in_chunks_of_25(
+    store: MarketBarRepository, make_data: Any
+) -> None:
+    """One request for ~150 symbols of 15-minute bars paged for a quarter of an hour at a few KB/s."""
+    names = [f"S{i:03d}" for i in range(60)]
+    client = history(*names, days=3)
+
+    update_history(
+        make_data(client), store, names, ["15m"], start=NOW - timedelta(days=10), now=NOW
+    )
+
+    assert sorted(len(r.symbol_or_symbols) for r in client.requests) == [10, 25, 25]
+    assert len(store.load(names, "15m")) == 60  # every symbol is in
+
+
+def test_a_chunk_that_arrived_is_kept_if_a_later_one_fails(
+    store: MarketBarRepository, make_data: Any
+) -> None:
+    names = [f"S{i:03d}" for i in range(60)]
+    client = history(*names, days=3)
+    real = client.get_stock_bars
+    calls: list[int] = []
+
+    def flaky(request: Any) -> Any:
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("alpaca refuses")  # not a transient error: no retry
+        return real(request)
+
+    client.get_stock_bars = flaky  # type: ignore[method-assign]
+
+    with pytest.raises(RuntimeError):
+        update_history(
+            make_data(client), store, names, ["15m"], start=NOW - timedelta(days=10), now=NOW
+        )
+
+    assert len(store.load(names, "15m")) == 25  # the first chunk is safe
+
+
 def test_the_next_update_asks_for_the_last_week_only_and_adds_what_is_new(
     store: MarketBarRepository, make_data: Any
 ) -> None:

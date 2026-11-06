@@ -88,6 +88,16 @@ def create_parser() -> argparse.ArgumentParser:
         "--symbols", type=str, help="Comma-separated symbols. Default: the WATCHLIST."
     )
 
+    # fetch-observe command
+    observe_fetch_parser = subparsers.add_parser(
+        "fetch-observe",
+        help="Downloads or updates the 15-minute and 1-hour bars of the observation universe "
+        "(~155 symbols) into var/observe.db.",
+    )
+    observe_fetch_parser.add_argument(
+        "--days", type=int, default=180, help="How far back the stored history should reach."
+    )
+
     # fetch-daily command
     daily_parser = subparsers.add_parser(
         "fetch-daily",
@@ -150,6 +160,24 @@ def create_parser() -> argparse.ArgumentParser:
         "--symbols", type=str, help="Comma-separated symbols. Default: the research universe."
     )
 
+    # measure-intraday command (the research modules are imported only when it runs)
+    intraday_parser = subparsers.add_parser(
+        "measure-intraday",
+        help="Measures what prices do in the hours after an intraday signal (development part of "
+        "the 15-minute bars only; needs `fetch-observe` first).",
+    )
+    intraday_parser.add_argument(
+        "--signal",
+        required=True,
+        help="orb_30m_long, or random_entry (a control that must show nothing).",
+    )
+    intraday_parser.add_argument(
+        "--cost",
+        type=float,
+        default=None,
+        help="Round-trip cost as a fraction (default 0.001 = 0.10 %%).",
+    )
+
     # forward-record / forward-report: the weekly signal tested forward in time (no orders)
     subparsers.add_parser(
         "forward-record",
@@ -177,6 +205,13 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="When stopped, pause new entries, so the next start waits for resume-entries "
         "(the PAUSE_ON_SHUTDOWN setting does the same for every run).",
+    )
+
+    # observe command
+    subparsers.add_parser(
+        "observe",
+        help="Runs the Oracle observer: the live strategy over the observation universe, each "
+        "signal put to the Oracle, NO order ever placed (needs `fetch-observe` first).",
     )
 
     # pause-entries command
@@ -455,6 +490,44 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"fetch-history error: {e}")
             return 1
 
+    elif args.command == "fetch-observe":
+        try:
+            from datetime import datetime, timedelta, timezone
+
+            from trading_system.data.alpaca_data import AlpacaData
+            from trading_system.data.history import TIMEFRAMES, update_history
+            from trading_system.data.universe import observation_universe
+            from trading_system.storage.research import SameDatabaseError, open_observe_store
+
+            settings = Settings()
+            symbols = observation_universe(settings.watchlist_symbols)
+            try:
+                repo = open_observe_store(settings.observe_database_url, settings.database_url)
+            except SameDatabaseError as e:
+                print(f"fetch-observe error: {e}")
+                return 1
+            now = datetime.now(timezone.utc)
+            print(f"Updating {len(symbols)} symbols, {args.days} days back...")
+            report = update_history(
+                AlpacaData(settings),
+                repo,
+                symbols,
+                list(TIMEFRAMES),
+                start=now - timedelta(days=args.days),
+                now=now,
+            )
+            for name in TIMEFRAMES:
+                written = sum(n for (_, tf), n in report.rows.items() if tf == name)
+                print(f"{name}: {written:,} rows written")
+            if report.no_data:
+                print(
+                    "No data from Alpaca for: " + ", ".join(sorted({s for s, _ in report.no_data}))
+                )
+            return 0
+        except Exception as e:
+            print(f"fetch-observe error: {e}")
+            return 1
+
     elif args.command == "fetch-daily":
         try:
             from datetime import datetime, timedelta, timezone
@@ -648,6 +721,68 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"measure-signals error: {e}")
             return 1
 
+    elif args.command == "measure-intraday":
+        try:
+            import numpy as np
+
+            from trading_system.data.universe import observation_universe
+            from trading_system.research.intraday import (
+                BUILDERS,
+                CONTROLS,
+                development_note as intraday_note,
+                format_intraday,
+                load_bars,
+                measure_intraday,
+                record_intraday_trial,
+            )
+            from trading_system.research.measure import MIN_UNIVERSE, ROUND_TRIP_COST
+            from trading_system.research.trials import trial_counts
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import AuditRepository
+            from trading_system.storage.research import SameDatabaseError, open_observe_store
+
+            settings = Settings()
+            if args.signal not in BUILDERS:
+                print(
+                    f"measure-intraday error: unknown signal {args.signal!r}; "
+                    f"known: {', '.join(sorted(BUILDERS))}"
+                )
+                return 1
+            try:
+                repo = open_observe_store(settings.observe_database_url, settings.database_url)
+            except SameDatabaseError as e:
+                print(f"measure-intraday error: {e}")
+                return 1
+            bars = load_bars(repo, observation_universe(settings.watchlist_symbols))
+            stocks = int(np.isfinite(bars.close).any(axis=(0, 1)).sum())
+            if stocks < MIN_UNIVERSE:
+                print(
+                    f"measure-intraday error: only {stocks} stocks have 15-minute bars "
+                    f"(need {MIN_UNIVERSE}); run `fetch-observe` first"
+                )
+                return 1
+            print(intraday_note())
+            print(f"{stocks} stocks, {bars.days[0].date()} to {bars.days[-1].date()}")
+            m = measure_intraday(
+                bars, args.signal, cost=ROUND_TRIP_COST if args.cost is None else args.cost
+            )
+            print()
+            print(format_intraday(m))
+            audit = AuditRepository(get_session_factory(get_engine(settings.database_url)))
+            if args.signal not in CONTROLS:
+                record_intraday_trial(audit, m, universe_size=stocks)
+            runs, distinct = trial_counts(audit)
+            print()
+            print(
+                "Control, not counted as a variant."
+                if args.signal in CONTROLS
+                else f"Variants tried so far: {distinct} ({runs} runs)."
+            )
+            return 0
+        except Exception as e:
+            print(f"measure-intraday error: {e}")
+            return 1
+
     elif args.command in ("forward-record", "forward-report"):
         try:
             from datetime import datetime, timezone
@@ -699,6 +834,22 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"Run error: {e}")
+            return 1
+
+    elif args.command == "observe":
+        print("Starting the Oracle observer (no orders)...")
+        try:
+            from trading_system.runtime.orchestrator import Orchestrator
+
+            Orchestrator(Settings()).run_observation()
+            return 0
+        except ValidationError as e:
+            print(f"Configuration validation failed: {e}")
+            return 1
+        except KeyboardInterrupt:
+            return 0
+        except Exception as e:
+            print(f"Observe error: {type(e).__name__}: {e}")
             return 1
 
     elif args.command == "pause-entries":

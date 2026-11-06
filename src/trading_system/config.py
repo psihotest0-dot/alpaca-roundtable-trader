@@ -36,6 +36,11 @@ class Settings(BaseSettings):
     # The news kept for the Oracle and for judging it later (data/news.py): a cache that
     # `fetch-news` fills from Alpaca every few minutes, not a record, so also its own file.
     news_database_url: str = "sqlite:///./var/news.db"
+    # The 15-minute and 1-hour bars of the whole observation universe (the research universe and the
+    # watchlist, ~155 symbols), kept for the Oracle observer and for the hours research
+    # (runtime/observe.py, research/intraday.py): a cache `fetch-observe` rebuilds, in a file of its own
+    # so that ~1 million rows never weigh on trading.db or its backups.
+    observe_database_url: str = "sqlite:///./var/observe.db"
     # Where the trading loop writes its pulse (see runtime/heartbeat.py); `health` reads it.
     heartbeat_path: str = "./var/heartbeat.json"
     metrics_enabled: bool = False

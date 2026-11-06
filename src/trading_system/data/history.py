@@ -130,7 +130,9 @@ def _update_timeframe(
             extend[symbol] = span[1] - OVERLAP
 
     if extend:
-        fresh = _download(data, list(extend), spec, min(extend.values()), now)
+        fresh: dict[str, pd.DataFrame] = {}
+        for chunk in _chunks(list(extend)):
+            fresh.update(_download(data, chunk, spec, min(extend[s] for s in chunk), now))
         for symbol in extend:
             new = fresh.get(symbol)
             if new is None or new.empty:
@@ -144,9 +146,11 @@ def _update_timeframe(
                     symbol, name, new, adjustment=ADJUSTMENT, fetched_at=now
                 )
 
-    if from_start:
-        full = _download(data, from_start, spec, start, now)
-        for symbol in from_start:
+    # In chunks, each one written as soon as it has arrived: one request for ~150 symbols of 15-minute
+    # bars paged for a quarter of an hour at a few KB/s and all of it was lost if it failed late.
+    for chunk in _chunks(from_start):
+        full = _download(data, chunk, spec, start, now)
+        for symbol in chunk:
             bars = full.get(symbol)
             if bars is None or bars.empty:
                 report.no_data.append((symbol, name))
@@ -156,6 +160,14 @@ def _update_timeframe(
             )
             if symbol in had_history:
                 report.downloaded_again.append((symbol, name))
+
+
+# Symbols per request. The watchlist (22) is one request, the daily universe (145) a few.
+DOWNLOAD_CHUNK = 25
+
+
+def _chunks(symbols: Sequence[str]) -> list[list[str]]:
+    return [list(symbols[i : i + DOWNLOAD_CHUNK]) for i in range(0, len(symbols), DOWNLOAD_CHUNK)]
 
 
 def _download(

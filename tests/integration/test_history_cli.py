@@ -189,7 +189,7 @@ def test_fetch_daily_fills_the_research_file_and_leaves_the_trading_database_alo
     assert MarketBarRepository(session_factory).load(["AAPL", "SPY"], "1d") == {}
 
 
-def test_fetch_daily_without_symbols_asks_for_the_whole_research_universe_in_one_request(
+def test_fetch_daily_without_symbols_asks_for_the_whole_research_universe_in_chunks(
     alpaca: Any, make_settings: Any, research_url: str, capsys: pytest.CaptureFixture[str]
 ) -> None:
     client = _daily_client(AAPL=2)
@@ -201,8 +201,9 @@ def test_fetch_daily_without_symbols_asks_for_the_whole_research_universe_in_one
     ):
         assert main(["fetch-daily"]) == 0
 
-    (request,) = client.requests
-    assert request.symbol_or_symbols == research_universe()
+    asked_for = [symbol for r in client.requests for symbol in r.symbol_or_symbols]
+    assert asked_for == research_universe()  # all of them, in order, in requests of 25 or fewer
+    assert all(len(r.symbol_or_symbols) <= 25 for r in client.requests)
     assert "No data from Alpaca for:" in capsys.readouterr().out  # the fake knows only AAPL
 
 

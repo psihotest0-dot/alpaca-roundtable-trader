@@ -75,6 +75,64 @@ class Orchestrator:
             news=self._open_news(),
         )
 
+    def build_observation_cycle(self) -> Any:
+        """The Oracle observer (runtime/observe.py): a cycle that can ask the Oracle about signals
+        and can place no order. It reads the bars from the observation store."""
+        from trading_system.broker.alpaca_broker import AlpacaBroker
+        from trading_system.data.alpaca_data import AlpacaData
+        from trading_system.data.universe import observation_universe, observed_symbols
+        from trading_system.oracle import create_oracle
+        from trading_system.runtime.observe import ObservationCycle
+        from trading_system.storage.repositories import (
+            AuditRepository,
+            OracleDecisionRepository,
+            SignalRepository,
+        )
+        from trading_system.storage.research import open_observe_store
+
+        watchlist = self.settings.watchlist_symbols
+        return ObservationCycle(
+            settings=self.settings,
+            broker=AlpacaBroker(self.settings),
+            data=AlpacaData(self.settings),
+            store=open_observe_store(
+                self.settings.observe_database_url, self.settings.database_url
+            ),
+            universe=observation_universe(watchlist),
+            observed=observed_symbols(watchlist),
+            signal_repo=SignalRepository(self.session_factory),
+            state_repo=self.state_repo,
+            audit_repo=AuditRepository(self.session_factory),
+            strategy_config=RUNTIME_STRATEGY,
+            oracle=create_oracle(self.settings, OracleDecisionRepository(self.session_factory)),
+            news=self._open_news(),
+        )
+
+    def run_observation(self, handle_signals: bool = True) -> None:
+        """Runs the observer until SIGINT or SIGTERM. Nothing is paused on the way out: it holds
+        no orders and no positions."""
+        if not (self.settings.oracle_enabled and self.settings.oracle_provider == "backend"):
+            raise RuntimeError(
+                "the observer has nobody to ask: set ORACLE_ENABLED=true and "
+                "ORACLE_PROVIDER=backend"
+            )
+        logger.info(
+            "Running the Oracle OBSERVER: signals are put to the Oracle, no order is placed."
+        )
+        cycle = self.build_observation_cycle()
+        runner = Runner(
+            cycle, cycle.broker, heartbeat=Heartbeat(Path(self.settings.heartbeat_path))
+        )
+        restore = self._stop_on_signals(runner) if handle_signals else None
+        try:
+            runner.run()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if restore:
+                restore()
+        logger.info("Observer shutting down.")
+
     def _open_news(self) -> Any:
         """The news cache for the Oracle, or None if the Oracle is off or the cache cannot be
         opened (then the Oracle is asked without news; the cache is filled by `fetch-news`)."""

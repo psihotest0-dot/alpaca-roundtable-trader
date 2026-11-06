@@ -19,6 +19,8 @@ name with a history that stops, while the new name carries all of it. Use the cu
 let `fetch-daily` say which symbols have stopped (`data.history.stale_symbols`).
 """
 
+from typing import Sequence
+
 MARKET_SYMBOL = "SPY"
 
 SECTORS: dict[str, tuple[str, ...]] = {
@@ -56,3 +58,16 @@ def research_universe() -> list[str]:
         for symbol in symbols:
             seen.setdefault(symbol)
     return list(seen)
+
+
+def observation_universe(watchlist: Sequence[str]) -> list[str]:
+    """Every symbol whose 15-minute and 1-hour bars are kept for observation: the research
+    universe (with SPY, the market) and the watchlist, sorted."""
+    return sorted(set(research_universe()) | set(watchlist))
+
+
+def observed_symbols(watchlist: Sequence[str]) -> list[str]:
+    """The symbols the Oracle observer asks about: the observation universe less the watchlist (the
+    live loop already asks about those) and less the market ETF."""
+    skip = set(watchlist) | {MARKET_SYMBOL}
+    return [s for s in observation_universe(watchlist) if s not in skip]

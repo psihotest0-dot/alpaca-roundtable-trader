@@ -40,3 +40,9 @@ def open_research_store(research_url: str, trading_url: str) -> MarketBarReposit
     engine = get_engine(research_url)
     MarketBarModel.__table__.create(engine, checkfirst=True)  # type: ignore[attr-defined]
     return MarketBarRepository(get_session_factory(engine))
+
+
+def open_observe_store(observe_url: str, trading_url: str) -> MarketBarRepository:
+    """The candle repository on the observation file (15-minute and 1-hour bars of ~155 symbols).
+    Same shape and the same rule as the research file: never trading.db."""
+    return open_research_store(observe_url, trading_url)
