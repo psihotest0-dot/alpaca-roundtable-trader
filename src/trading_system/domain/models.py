@@ -50,7 +50,9 @@ class OracleDecision(BaseModel):
     The last four fields describe a call to the Go backend and are empty for other providers:
     `mode` is what the bot does with the verdict (shadow: nothing, active: it counts),
     `error_kind` says why there was no answer (see oracle/backend.py), `request_id` and `model`
-    find the call in the backend's journal."""
+    find the call in the backend's journal, and `prompt_version` is the backend's label of the
+    prompt and settings that produced the answer (absent on answers from before it existed): an
+    answer under another model or another label belongs to another period of the evaluation."""
 
     signal_id: str
     verdict: OracleVerdict
@@ -63,6 +65,7 @@ class OracleDecision(BaseModel):
     error_kind: Optional[str] = None
     request_id: Optional[str] = None
     model: Optional[str] = None
+    prompt_version: Optional[str] = None
 
     @field_validator("reason")
     @classmethod

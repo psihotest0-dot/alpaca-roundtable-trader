@@ -22,6 +22,7 @@ The rules of this client, in the order they matter:
 
 import json
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -86,6 +87,21 @@ def _one_line(text: str, limit: int = 200) -> str:
 
 def _without_none(values: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value is not None}
+
+
+_PROMPT_VERSION = re.compile(r"[0-9a-f]{6,64}")
+
+
+def _prompt_version(value: Any) -> Optional[str]:
+    """The backend's label of the prompt behind a reply (12 lowercase hex, since 2026-11-06 22:11
+    German time). It is an extra field, not one of the six of the contract, so a reply without it,
+    or with something else in it, is still a good reply: the label is then absent (None)."""
+    if value is None:
+        return None
+    if isinstance(value, str) and _PROMPT_VERSION.fullmatch(value):
+        return value
+    logger.warning("Oracle backend: the prompt_version of a reply is not a hex label; ignored")
+    return None
 
 
 def _token_is_usable(token: str) -> bool:
@@ -260,6 +276,7 @@ class BackendOracle:
             mode=self.mode,
             request_id=_one_line(reply["request_id"], 128) or None,
             model=_one_line(reply["model"], 128) or None,
+            prompt_version=_prompt_version(reply.get("prompt_version")),
         )
 
     def _refused(self, signal_id: str, status: int, content: bytes) -> OracleDecision:

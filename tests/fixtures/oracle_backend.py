@@ -31,18 +31,19 @@ def answer(
     request_id: str = "req-1",
     model: str = "test-model",
     latency_ms: int = 1500,
+    prompt_version: Any = None,
 ) -> Reply:
-    return Reply(
-        200,
-        {
-            "verdict": verdict,
-            "reason": reason,
-            "request_id": request_id,
-            "model": model,
-            "cached": cached,
-            "latency_ms": latency_ms,
-        },
-    )
+    body: dict[str, Any] = {
+        "verdict": verdict,
+        "reason": reason,
+        "request_id": request_id,
+        "model": model,
+        "cached": cached,
+        "latency_ms": latency_ms,
+    }
+    if prompt_version is not None:  # the extra field of the backend since 2026-11-06 22:11
+        body["prompt_version"] = prompt_version
+    return Reply(200, body)
 
 
 def error(status: int, code: str, **more: Any) -> Reply:

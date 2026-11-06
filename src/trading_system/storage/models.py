@@ -43,6 +43,9 @@ class OracleDecisionModel(Base):
     error_kind = Column(String, nullable=True)  # why there was no answer; NULL if it answered
     request_id = Column(String, nullable=True)  # the backend's id of the call, for its journal
     model = Column(String, nullable=True)
+    # The backend's label of the prompt and settings behind the answer (12 hex). NULL: the answer
+    # came before the label existed (2026-11-06 22:11 German time) or there was no reply.
+    prompt_version = Column(String, nullable=True)
 
 
 class MarketBarModel(Base):

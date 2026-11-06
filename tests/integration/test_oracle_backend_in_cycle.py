@@ -389,3 +389,30 @@ def test_a_final_answer_is_not_asked_of_the_backend_twice_and_shadow_still_says_
     assert first.verdict is again.verdict is OracleVerdict.APPROVE  # what the loop is told
     (row,) = _rows(session_factory)
     assert row.verdict is OracleVerdict.VETO  # what was recorded
+
+
+# --------------------------------------------------------------- the backend's label of the prompt
+
+
+def test_the_label_of_the_prompt_is_recorded_with_the_answer_and_goes_into_the_export(
+    run_with: Callable[..., SimpleNamespace], session_factory: Any
+) -> None:
+    with FakeOracleBackend(answer("VETO", prompt_version="8a4f4388a9c7", model="gemma")) as backend:
+        run_with(backend, "shadow")
+
+    (row,) = _rows(session_factory)
+    assert (row.model, row.prompt_version) == ("gemma", "8a4f4388a9c7")
+    (entry,) = OracleDecisionRepository(session_factory).replay_export().values()
+    assert entry["prompt_version"] == "8a4f4388a9c7" and entry["model"] == "gemma"
+
+
+def test_an_answer_without_a_label_is_recorded_without_one(
+    run_with: Callable[..., SimpleNamespace], session_factory: Any
+) -> None:
+    with FakeOracleBackend(answer("APPROVE")) as backend:
+        run_with(backend, "shadow")
+
+    (row,) = _rows(session_factory)
+    assert row.prompt_version is None
+    (entry,) = OracleDecisionRepository(session_factory).replay_export().values()
+    assert entry["prompt_version"] is None

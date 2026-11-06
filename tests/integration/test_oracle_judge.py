@@ -49,6 +49,9 @@ class World:
         self.audit = AuditRepository(session_factory)
         self.names = iter(stock_names(140) * 3)
         self.count = 0
+        # the model and the backend's prompt label of the answers added next (None: unlabelled)
+        self.model: str | None = None
+        self.label: str | None = None
 
     def add(
         self,
@@ -81,6 +84,8 @@ class World:
                 failed=failed,
                 provider="backend",
                 mode=mode,
+                model=None if failed else self.model,
+                prompt_version=None if failed else self.label,
                 decision_timestamp=answered_at or (closed + timedelta(minutes=1)),
             )
         )
@@ -339,4 +344,110 @@ def test_the_command_prints_the_counts(
 
     out = capsys.readouterr().out
     assert "asked about 9 signals; answered 9 (5 approve, 4 veto)" in out
-    assert "looks taken so far: 0 of 2" in out and "verdict: no verdict" in out
+    assert "looks taken in this period: 0 of 2" in out and "verdict: no verdict" in out
+
+
+# ------------------------------------------------------------------------------------ periods
+
+A, B = "a" * 12, "b" * 12
+
+
+def _journal(world: World) -> list[dict[str, Any]]:
+    return [
+        details
+        for _, details in world.audit.events(
+            JUDGEMENT_EVENT, datetime(2000, 1, 1, tzinfo=UTC), NOW + timedelta(days=1)
+        )
+    ]
+
+
+def test_answers_under_another_prompt_label_are_another_period_and_only_the_newest_is_judged(
+    world: World,
+) -> None:
+    world.label = A
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)  # a full sample, all under the old label
+    world.label = B
+    world.add("APPROVE", growth=0.006)  # the prompt changed; one answer under the new label
+
+    j = world.judge()
+
+    assert j.verdict == "no verdict" and j.detail is None  # the old sample is NOT pooled in
+    assert j.counts.period == ("", B) and (j.counts.approve, j.counts.veto) == (1, 0)
+    (old,) = j.other_periods
+    assert old.period == ("", A) and (old.approve, old.veto) == (30, 30)
+    text = format_judgement(j)
+    assert f"unknown model|{B}" in text and f"other period unknown model|{A}" in text
+    assert "counts only, not judged" in text
+    assert _journal(world) == []  # no look was used on the old sample either
+
+
+def test_a_changed_model_is_another_period_even_under_the_same_label(world: World) -> None:
+    world.model, world.label = "gemma", A
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)
+    world.model = "qwen"
+    world.add("VETO", growth=-0.006)
+
+    j = world.judge()
+
+    assert j.counts.period == ("qwen", A) and j.counts.veto == 1 and j.verdict == "no verdict"
+    assert [p.period for p in j.other_periods] == [("gemma", A)]
+
+
+def test_answers_from_before_the_label_existed_are_their_own_period(world: World) -> None:
+    world.label = None  # made before 22:11 on 2026-11-06
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)
+    world.label = A
+    world.add("APPROVE", growth=0.006)
+
+    j = world.judge()
+
+    assert j.counts.period == ("", A) and j.counts.answered == 1
+    assert [p.period for p in j.other_periods] == [("", "")]
+    assert "unlabelled" in format_judgement(j)
+
+
+def test_an_outage_counts_against_the_period_that_was_running_when_it_happened(
+    world: World,
+) -> None:
+    world.label = A
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)
+    world.label = B
+    world.add("APPROVE", growth=0.006)
+    for _ in range(9):  # nine asked after the new label began, none answered
+        world.add("HOLD", failed=True)
+
+    j = world.judge()
+
+    assert j.counts.period == ("", B) and j.counts.asked == 10 and j.counts.answered == 1
+    assert j.counts.availability == pytest.approx(0.1)
+    (old,) = j.other_periods
+    assert old.asked == 60 and old.availability == 1.0  # the old period is not charged for them
+
+
+def test_looks_are_counted_per_period_and_each_is_written_with_its_period(world: World) -> None:
+    world.label = A
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)
+    first = world.judge()
+    assert first.verdict == "helps" and first.looks_before == 0
+
+    world.label = B  # a new prompt: a new sample, its own first look
+    world.fill(MIN_PER_GROUP, MIN_PER_GROUP)
+    second = world.judge()
+
+    assert second.counts.period == ("", B)
+    assert second.looks_before == 0 and second.verdict == "helps"
+    journal = _journal(world)
+    assert [e["period"] for e in journal] == [f"unknown model|{A}", f"unknown model|{B}"]
+    assert [e["periods_so_far"] for e in journal] == [
+        1,
+        2,
+    ]  # how many periods were judged is on record
+    again = world.judge()
+    assert again.looks_before == 1 and again.verdict == "no verdict"  # B's own second look needs 60
+
+
+def test_before_any_answer_there_is_no_period(world: World) -> None:
+    j = world.judge()
+
+    assert j.counts.period is None and j.other_periods == ()
+    assert "period judged (model | prompt label): none" in format_judgement(j)

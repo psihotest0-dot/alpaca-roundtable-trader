@@ -505,3 +505,46 @@ def test_the_oracle_is_built_from_the_settings() -> None:
         7,
     )
     assert oracle.name == "backend"
+
+
+# --- the backend's label of the prompt (since 2026-11-06 22:11 German time) -----------------
+
+
+def test_the_prompt_label_is_read_when_it_comes_and_is_none_when_it_does_not() -> None:
+    with FakeOracleBackend(
+        answer("APPROVE", prompt_version="8a4f4388a9c7"), answer("VETO")
+    ) as backend:
+        with_label = _oracle(backend).evaluate(_request())
+        without = _oracle(backend).evaluate(_request())
+
+    assert (
+        with_label.prompt_version == "8a4f4388a9c7" and with_label.verdict is OracleVerdict.APPROVE
+    )
+    assert without.prompt_version is None and without.verdict is OracleVerdict.VETO
+
+
+@pytest.mark.parametrize(
+    "odd", ["", "NOT-A-LABEL!", "ABCDEF123456", 8, ["8a4f4388a9c7"], "abc", "a" * 65]
+)
+def test_a_label_that_is_not_a_hex_string_is_ignored_and_the_verdict_still_stands(odd: Any) -> None:
+    """It is an extra field, not one of the six of the contract: a strange value must not turn a good
+    verdict into a failure, and must not become a period of the evaluation."""
+    with FakeOracleBackend(answer("APPROVE", prompt_version=odd)) as backend:
+        decision = _oracle(backend).evaluate(_request())
+
+    assert decision.verdict is OracleVerdict.APPROVE and decision.failed is False
+    assert decision.prompt_version is None
+
+
+def test_a_cached_reply_keeps_the_label_the_backend_gives_it() -> None:
+    with FakeOracleBackend(answer("VETO", cached=True, prompt_version="0123456789ab")) as backend:
+        decision = _oracle(backend).evaluate(_request())
+
+    assert decision.verdict is OracleVerdict.VETO and decision.prompt_version == "0123456789ab"
+
+
+def test_a_failed_call_has_no_label() -> None:
+    with FakeOracleBackend(error(504, "model_timeout")) as backend:
+        decision = _oracle(backend).evaluate(_request())
+
+    assert decision.failed and decision.prompt_version is None

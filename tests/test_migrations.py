@@ -337,7 +337,8 @@ def test_oracle_decisions_gain_the_backend_columns_and_old_rows_stay_readable(
         indexes = [r[1] for r in conn.execute(text("PRAGMA index_list(oracle_decisions)"))]
         assert "ix_oracle_decisions_signal_id" in indexes  # the table rebuild kept the index
 
-    # a new row made through the application's own repository
+    # a new row made through the application's own repository (it writes every column of today)
+    command.upgrade(cfg, "head")
     from trading_system.domain.enums import OracleVerdict
     from trading_system.domain.models import OracleDecision
     from trading_system.storage.repositories import OracleDecisionRepository
@@ -381,3 +382,63 @@ def test_the_backend_columns_go_away_on_downgrade_without_losing_the_rows(
         assert conn.execute(text("SELECT count(*) FROM oracle_decisions")).scalar() == 2
         indexes = [r[1] for r in conn.execute(text("PRAGMA index_list(oracle_decisions)"))]
         assert "ix_oracle_decisions_signal_id" in indexes
+
+
+PROMPT_VERSION = "c9d4e2a7f815"
+
+
+def test_the_backends_prompt_label_is_added_and_older_answers_have_none(
+    db: tuple[Any, Config],
+) -> None:
+    """The label exists since 2026-11-06 22:11 German time; answers made before it carry NULL."""
+    from trading_system.domain.enums import OracleVerdict
+    from trading_system.domain.models import OracleDecision
+    from trading_system.storage.repositories import OracleDecisionRepository
+
+    engine, cfg = db
+    command.upgrade(cfg, BACKEND_CALL)
+    with engine.begin() as conn:
+        _insert_oracle_rows_with_verdicts(conn)
+
+    command.upgrade(cfg, PROMPT_VERSION)
+
+    with engine.connect() as conn:
+        rows = conn.execute(
+            text("SELECT verdict, mode, model, prompt_version FROM oracle_decisions ORDER BY id")
+        ).all()
+        assert [tuple(r) for r in rows] == [("APPROVE", "", None, None), ("VETO", "", None, None)]
+        indexes = [r[1] for r in conn.execute(text("PRAGMA index_list(oracle_decisions)"))]
+        assert "ix_oracle_decisions_signal_id" in indexes
+    repository = OracleDecisionRepository(get_session_factory(get_engine(str(engine.url))))
+    repository.save(
+        OracleDecision(
+            signal_id="sig",
+            verdict=OracleVerdict.VETO,
+            mode="shadow",
+            model="gemma",
+            prompt_version="8a4f4388a9c7",
+            provider="backend",
+        )
+    )
+    with engine.connect() as conn:
+        newest = conn.execute(
+            text("SELECT model, prompt_version FROM oracle_decisions ORDER BY id DESC")
+        ).first()
+        assert tuple(newest) == ("gemma", "8a4f4388a9c7")
+
+
+def test_the_prompt_label_goes_away_on_downgrade_without_losing_the_rows(
+    db: tuple[Any, Config],
+) -> None:
+    engine, cfg = db
+    command.upgrade(cfg, BACKEND_CALL)
+    with engine.begin() as conn:
+        _insert_oracle_rows_with_verdicts(conn)
+    command.upgrade(cfg, PROMPT_VERSION)
+
+    command.downgrade(cfg, BACKEND_CALL)
+
+    with engine.connect() as conn:
+        columns = [r[1] for r in conn.execute(text("PRAGMA table_info(oracle_decisions)"))]
+        assert "prompt_version" not in columns and "model" in columns  # only the newest went
+        assert conn.execute(text("SELECT count(*) FROM oracle_decisions")).scalar() == 2

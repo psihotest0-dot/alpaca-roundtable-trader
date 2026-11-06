@@ -12,8 +12,14 @@ live loop's.
   final answers (APPROVE or VETO) that did not fail: an outage is not a veto.
 * Below MIN_PER_GROUP approvals AND vetoes, or below MIN_AVAILABILITY of the asked signals answered,
   the judge prints COUNTS ONLY. It does not compute a return, so nobody can peek.
+* One PERIOD at a time: a period is a model and the backend's `prompt_version` (docs section 5). An answer
+  under another model or label is another period and is never pooled with it; answers from before the label
+  existed form their own "unlabelled" period. The period judged is that of the newest answer; the others
+  are listed with counts only.
 * One look, taken when the minimum is reached; the second only at double the minimum and with a higher
-  bar (t 2.5); then no more. Every look taken is written to the journal.
+  bar (t 2.5); then no more. Looks are counted per period (every new period is a new sample), and every
+  look taken is written to the journal with its period: a new prompt after a bad result is a new try, and
+  the journal shows how many periods were judged.
 * A random relabelling of the same signals (the control) must stay under t 2, or the verdict is "control
   suspect" and the instrument is to blame.
 * "helps" needs t >= the bar in favour of the approved, the same sign in both halves of the period (by
@@ -56,12 +62,23 @@ MAX_LOOKS = 2
 BAR = timedelta(minutes=15)
 
 
+Period = tuple[str, str]  # (model, prompt_version); "" where the answer carries none
+
+
+def period_key(period: Optional[Period]) -> str:
+    """The period as the journal writes it: "model|label", "unlabelled" for no label."""
+    if period is None:
+        return "none"
+    return f"{period[0] or 'unknown model'}|{period[1] or 'unlabelled'}"
+
+
 @dataclass(frozen=True)
 class Counts:
     asked: int  # signals the model was put to (shadow mode, after START, not a probe)
     approve: int
     veto: int
     availability: float  # (approve + veto) / asked
+    period: Optional[Period] = None  # the period these counts are of
 
     @property
     def answered(self) -> int:
@@ -86,10 +103,11 @@ class Detail:
 @dataclass(frozen=True)
 class Judgement:
     counts: Counts
-    looks_before: int
+    looks_before: int  # looks taken in THIS period
     verdict: str
     reason: str
     detail: Optional[Detail] = None
+    other_periods: tuple[Counts, ...] = ()  # counts only, never judged here
 
 
 def collect(
@@ -126,12 +144,49 @@ def collect(
     return {k: v for k, v in sample.items() if "symbol" in v}
 
 
-def count(sample: dict[str, dict[str, Any]]) -> Counts:
-    answered = [e for e in sample.values() if e["final"] and not e["failed"]]
+def is_answered(entry: dict[str, Any]) -> bool:
+    return bool(entry["final"] and not entry["failed"])
+
+
+def period_of(entry: dict[str, Any]) -> Period:
+    return (str(entry.get("model") or ""), str(entry.get("prompt_version") or ""))
+
+
+def assign_periods(
+    sample: dict[str, dict[str, Any]],
+) -> tuple[dict[str, Period], Optional[Period], list[Period]]:
+    """(the period of each signal, the current period, the periods oldest first).
+
+    An answered signal belongs to the period of its answer. One that got no answer (an outage, a HOLD)
+    has no label of its own: it belongs to the period that was running when it was asked, that is the
+    latest period whose first answer is not later. The current period is that of the newest answer."""
+    answered = {k: e for k, e in sample.items() if is_answered(e)}
+    if not answered:
+        return {}, None, []
+    starts: dict[Period, datetime] = {}
+    for entry in answered.values():
+        when = datetime.fromisoformat(entry["decided_at"])
+        period = period_of(entry)
+        starts[period] = min(starts.get(period, when), when)
+    ordered = sorted(starts, key=lambda p: starts[p])
+    current = period_of(max(answered.values(), key=lambda e: e["decided_at"]))
+    mapping: dict[str, Period] = {}
+    for signal_id, entry in sample.items():
+        if is_answered(entry):
+            mapping[signal_id] = period_of(entry)
+            continue
+        when = datetime.fromisoformat(entry["decided_at"])
+        running = [p for p in ordered if starts[p] <= when]
+        mapping[signal_id] = running[-1] if running else ordered[0]
+    return mapping, current, ordered
+
+
+def count(sample: dict[str, dict[str, Any]], period: Optional[Period] = None) -> Counts:
+    answered = [e for e in sample.values() if is_answered(e)]
     approve = sum(1 for e in answered if e["verdict"] == "APPROVE")
     veto = sum(1 for e in answered if e["verdict"] == "VETO")
     asked = len(sample)
-    return Counts(asked, approve, veto, (approve + veto) / asked if asked else 0.0)
+    return Counts(asked, approve, veto, (approve + veto) / asked if asked else 0.0, period)
 
 
 def _shadow_pnl(
@@ -199,52 +254,66 @@ def judge(
     settings: Any,
     now: datetime,
 ) -> Judgement:
-    """The judgement, or only the counts when it is not time. A look is journalled when taken."""
-    sample = collect(session_factory, oracle_repo)
-    counts = count(sample)
-    looks = len(
-        audit.events(
+    """The judgement of the current period, or only the counts when it is not time. A look is
+    journalled (with its period) when taken."""
+    everything = collect(session_factory, oracle_repo)
+    mapping, current, ordered = assign_periods(everything)
+    if current is None:
+        sample = everything
+    else:
+        sample = {k: v for k, v in everything.items() if mapping[k] == current}
+    counts = count(sample, current)
+    others = tuple(
+        count({k: v for k, v in everything.items() if mapping[k] == p}, p)
+        for p in ordered
+        if p != current
+    )
+    key = period_key(current)
+    looks = sum(
+        1
+        for _, details in audit.events(
             JUDGEMENT_EVENT, datetime(2000, 1, 1, tzinfo=timezone.utc), now + timedelta(days=1)
         )
+        if details.get("period") == key
     )
+
+    def said(verdict: str, reason: str, detail: Optional[Detail] = None) -> Judgement:
+        return Judgement(counts, looks, verdict, reason, detail, others)
+
     if looks >= MAX_LOOKS:
-        return Judgement(
-            counts, looks, "no more looks", f"{looks} looks were taken; the rules allow {MAX_LOOKS}"
+        return said(
+            "no more looks",
+            f"{looks} looks were taken in this period; the rules allow {MAX_LOOKS}",
         )
     need = MIN_PER_GROUP * (looks + 1)
     bar = PASS_T if looks == 0 else SECOND_LOOK_T
     if counts.approve < need or counts.veto < need:
-        return Judgement(
-            counts,
-            looks,
+        return said(
             "no verdict",
-            f"not enough answers yet: {counts.approve} approvals and {counts.veto} vetoes, need {need} of each",
+            f"not enough answers yet in this period: {counts.approve} approvals and {counts.veto} "
+            f"vetoes, need {need} of each",
         )
     if counts.availability < MIN_AVAILABILITY:
-        return Judgement(
-            counts,
-            looks,
+        return said(
             "no verdict",
-            f"availability {counts.availability:.0%} is under {MIN_AVAILABILITY:.0%}: the backend or the "
-            "model fails too often to judge",
+            f"availability {counts.availability:.0%} is under {MIN_AVAILABILITY:.0%}: the backend or "
+            "the model fails too often to judge",
         )
 
     trades, unresolved, no_bars = _shadow_pnl(sample, bars, settings)
     approved = [p for v, p, _ in trades if v == "APPROVE"]
     vetoed = [p for v, p, _ in trades if v == "VETO"]
     if len(approved) < need or len(vetoed) < need:
-        return Judgement(
-            counts,
-            looks,
+        return said(
             "no verdict",
-            f"not enough resolved shadow trades yet: {len(approved)} approved and {len(vetoed)} vetoed "
-            f"({unresolved} still open, {no_bars} without a bar); need {need} of each. "
+            f"not enough resolved shadow trades yet: {len(approved)} approved and {len(vetoed)} "
+            f"vetoed ({unresolved} still open, {no_bars} without a bar); need {need} of each. "
             "No look was used.",
         )
 
-    ordered = sorted(trades, key=lambda x: x[2])
-    middle = len(ordered) // 2
-    first_edge, second_edge = _edge(ordered[:middle]), _edge(ordered[middle:])
+    ordered_trades = sorted(trades, key=lambda x: x[2])
+    middle = len(ordered_trades) // 2
+    first_edge, second_edge = _edge(ordered_trades[:middle]), _edge(ordered_trades[middle:])
     t = welch_t(approved, vetoed)
     rng = np.random.default_rng(CONTROL_SEED)
     labels = np.array([v for v, _, _ in trades])
@@ -290,6 +359,8 @@ def judge(
         JUDGEMENT_EVENT,
         {
             "look": looks + 1,
+            "period": key,
+            "periods_so_far": len(ordered),
             "verdict": verdict,
             "approve": counts.approve,
             "veto": counts.veto,
@@ -299,7 +370,7 @@ def judge(
         },
         when=now,
     )
-    return Judgement(counts, looks, verdict, reason, detail)
+    return said(verdict, reason, detail)
 
 
 def _pct(value: float) -> str:
@@ -310,12 +381,18 @@ def format_judgement(j: Judgement) -> str:
     c = j.counts
     lines = [
         f"The Oracle's answers since {START:%Y-%m-%d %H:%M} UTC (shadow mode, probes left out):",
+        "  period judged (model | prompt label): " + period_key(c.period),
         f"  asked about {c.asked} signals; answered {c.answered} "
         f"({c.approve} approve, {c.veto} veto), availability {c.availability:.0%}",
-        f"  looks taken so far: {j.looks_before} of {MAX_LOOKS}",
+        f"  looks taken in this period: {j.looks_before} of {MAX_LOOKS}",
         f"  verdict: {j.verdict}",
         f"  {j.reason}",
     ]
+    for other in j.other_periods:
+        lines.append(
+            f"  other period {period_key(other.period)}: {other.asked} asked, {other.answered} "
+            f"answered ({other.approve} approve, {other.veto} veto); counts only, not judged"
+        )
     d = j.detail
     if d is not None:
         lines += [

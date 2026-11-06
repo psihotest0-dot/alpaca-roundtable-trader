@@ -249,6 +249,7 @@ class OracleDecisionRepository:
             error_kind=decision.error_kind,
             request_id=decision.request_id,
             model=decision.model,
+            prompt_version=decision.prompt_version,
         )
         with self._session_factory.begin() as session:
             session.add(model)
@@ -301,6 +302,7 @@ class OracleDecisionRepository:
                 "mode": d.mode,
                 "failed": d.failed,
                 "model": d.model,
+                "prompt_version": d.prompt_version,
             }
             for signal_id, d in latest.items()
         }
@@ -322,6 +324,7 @@ class OracleDecisionRepository:
             error_kind=cast(Optional[str], row.error_kind),
             request_id=cast(Optional[str], row.request_id),
             model=cast(Optional[str], row.model),
+            prompt_version=cast(Optional[str], row.prompt_version),
         )
 
 
