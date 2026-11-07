@@ -120,6 +120,38 @@ ORACLE_BACKEND_TOKEN=<the token>
 
 **Judging the model** is a separate, written-down procedure: `oracle-provider-task.md`, section 5 (minimum numbers, one look, no peeking). Do not run `--replay-oracle` on the recorded decisions before the minimum is reached.
 
+## Metrics: Prometheus and Grafana through the Go backend's stack (2026-11-07)
+
+**What runs.** The two loops, `alpaca-trader` (the trading loop) and `alpaca-trader-observe` (the Oracle observer), serve their numbers as a web page in the Prometheus text format (`METRICS_ENABLED=true` in `compose.yaml`; `data`, `news`, `forward` and `backup` have no loop and no metrics page). Inside the container the page is on `0.0.0.0:9100` (the host cannot reach a container's `127.0.0.1`); on the PC it is at `http://127.0.0.1:9101/metrics` (trader) and `http://127.0.0.1:9102/metrics` (observer). **Loopback only, because the page has no password**: the mapping in `compose.yaml` is `127.0.0.1:9101:9100`, never `9101:9100` (which Docker would publish on every interface; `tests/unit/test_ops_artifacts.py` fails on that). A port that cannot be taken is one `ERROR` line in the log and nothing more: the metrics are an addition and cannot stop the trading.
+
+**Who reads them.** The backend's `go-prometheus-1` (job `alpaca-trader`, targets `host.docker.internal:9101` and `:9102`, 15 s; in the backend's `prometheus/prometheus.yml`) and its Grafana `go-grafana-1` (http://127.0.0.1:3000, dashboard "Trading bot (alpaca)"; Prometheus itself is at http://127.0.0.1:9090). Our compose does **not** join the backend's network, so the bot starts and trades with the backend's stack stopped; the targets are then simply DOWN over there. The backend's session edits its own files; we send it text. Its Prometheus keeps the series 15 days in the named volume `go_prometheus_data`. Series of the bot all start with `alpaca_`, so none can collide with the backend's own. **The two targets carry a label `service`** (`trader` for `:9101`, `observer` for `:9102`), set with `labels:` in the backend's `prometheus/prometheus.yml`. It is not decoration: an unlabelled gauge is exported as `0` from the first scrape, before anything sets it, so the observer exports the trader-only gauges (account, positions, `alpaca_unprotected_positions`, the protection-check and reconcile timestamps) as `0` for good, and a timestamp of `0` looks infinitely stale. The rules and panels that read those series carry `{service="trader"}` (a pytest fails without it). **If the label is missing from the target, they match nothing and never fire**: after any change of the backend's `prometheus.yml` check that `up{job="alpaca-trader"}` still shows `service`.
+
+**The files are in `ops/`** and are the source of what the backend's repository holds: `ops/prometheus/alpaca_alerts.yml` (the rule group `alpaca-trader`), `ops/prometheus/alpaca_alerts_test.yml` (promtool cases: each rule has one that fires and one that stays quiet) and `ops/grafana/alpaca-trader.json` (the dashboard). Test the rules with promtool from the repository root:
+
+```bash
+docker run --rm --entrypoint promtool -v "$PWD/ops/prometheus:/etc/prometheus:ro" prom/prometheus:v3.15.0 test rules /etc/prometheus/alpaca_alerts_test.yml
+```
+
+(On Git Bash for Windows put `MSYS_NO_PATHCONV=1` in front and use `$(cygpath -m "$PWD/ops/prometheus")`.) The pytest `tests/unit/test_ops_artifacts.py` holds every `expr` of the rules and the dashboard against the metrics the process really publishes, so a renamed metric breaks the build instead of blanking a panel. **Nothing is sent anywhere** when a rule fires (no Alertmanager): it is a row at http://127.0.0.1:9090/alerts and in Grafana under Alerting. The backend has its own Oracle alerts (`OracleGivesNoVerdict`, `OracleCallsRefused`, `OracleSlow`, from the calls it sees); the bot has none of its own for the Oracle, only the panels, for comparison.
+
+**What is published** (in `observability/metrics.py`; counters carry `_total` on the wire):
+
+| series | where | meaning |
+|---|---|---|
+| `alpaca_heartbeat_timestamp_seconds`, `alpaca_market_open`, `alpaca_last_entries_timestamp_seconds` | both loops | the loop ticks (every minute with the market open, every 5 minutes closed); what the broker's clock says; the last look for entries that completed (stale on purpose while the market is closed) |
+| `alpaca_entries_passes_total{outcome}`, `alpaca_signals_total`, `alpaca_entries_errors_total` | both | looks for entries by outcome (`ok`, `skipped`, `retry_later`, `crashed`), signals found, signals that broke before they became orders plus crashed looks |
+| `alpaca_oracle_answers_total{verdict,kind}`, `alpaca_oracle_errors_total`, `alpaca_oracle_latency_seconds` | both | the bot's view of its Oracle calls (kind: `answer`, `cached`, or the cause when there was no answer) |
+| `alpaca_rejected_signals_total{reason}` | trader | risk said no (the reason is cut at its first colon, so numbers cannot make new series) |
+| `alpaca_account_equity`, `alpaca_active_positions`, `alpaca_gross_exposure` | trader | the account, read after each look for entries |
+| `alpaca_unprotected_positions`, `alpaca_protection_check_timestamp_seconds`, `alpaca_reconcile_timestamp_seconds` | trader | positions without a stop; when the protection check and the order reconciliation last succeeded. **A `0` in `alpaca_unprotected_positions` means "all protected" only while the timestamp is fresh**: a check that cannot read the broker changes neither |
+| `alpaca_candidate_signals_total{strategy}`, `alpaca_candidate_errors_total` | observer | the strategy candidates run forward in time (research plan 12.1 and 13.1) |
+
+**Not published on purpose.** Some metrics were defined long ago and are set by nothing (`runtime_health`, `market_data_age_seconds`, `reconciliation_age_seconds`, `reserved_entries`, `planned_open_risk`, `daily_loss`, `order_failures`, `unresolved_intents`). A gauge nobody sets reads `0`, which on a dashboard looks like "all is well". They sit in a private registry (`metrics.NOT_WIRED`) that no server exposes, and move into the published block only together with the code that sets them and a test. **Write no rule on them.**
+
+**Adding a metric.** Set it from the code through one of the small never-raising helpers at the end of `metrics.py`, put it in the published block, test it, and only then use it in a rule or a panel (the pytest above fails on a name the process does not publish). Keep labels few and bounded (a reason, a verdict, a strategy; never a symbol, an order id or a signal id).
+
+**Check by hand.** `curl -s http://127.0.0.1:9101/metrics | grep ^alpaca_` (and `:9102`); the targets are UP at http://127.0.0.1:9090/targets; a query in Grafana's Explore: `time() - alpaca_heartbeat_timestamp_seconds` is a few seconds to 5 minutes for a living loop.
+
 ## Docker image
 
 The image is built from `Dockerfile` on Python 3.11, the version the project is tested on (the

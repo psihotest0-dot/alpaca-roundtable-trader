@@ -44,6 +44,16 @@ x-oracle-env: &oracle-env
   ORACLE_BACKEND_TOKEN: ${ORACLE_BACKEND_TOKEN:-${ORACLE_TOKEN:-}}
   ORACLE_TIMEOUT_SECONDS: ${ORACLE_TIMEOUT_SECONDS:-10}
 
+# The metrics page (Prometheus text format) of the two loops, trader and observe: the Go backend's
+# Prometheus reads it, and its Grafana shows it (docs/operations.md, "Metrics"; the rules and the
+# dashboard are in ops/). Inside the container the server must listen on all interfaces (the host
+# cannot reach a container's 127.0.0.1); what keeps it off the network is that the port is published
+# on 127.0.0.1 of the PC only. Both containers use 9100 inside, the PC sees 9101 and 9102.
+x-metrics-env: &metrics-env
+  METRICS_ENABLED: "true"
+  METRICS_HOST: 0.0.0.0
+  METRICS_PORT: "9100"
+
 services:
   # The trading loop in dry-run mode: real data from Alpaca, simulated orders (nothing is sent
   # to the broker; `run --paper` would send paper orders and is not used here on purpose).
@@ -61,7 +71,11 @@ services:
     # and Docker Desktop forwards host.docker.internal to it (no extra_hosts needed there; on
     # plain Linux Docker add `extra_hosts: ["host.docker.internal:host-gateway"]`).
     environment:
-      <<: [*alpaca-env, *oracle-env]
+      <<: [*alpaca-env, *oracle-env, *metrics-env]
+    # /metrics for the Go backend's Prometheus (job alpaca-trader, scraped as host.docker.internal:9101).
+    # Published on the PC's loopback only: the page has no password.
+    ports:
+      - "127.0.0.1:9101:9100"
     volumes:
       - trading_var:/app/var
     command:
@@ -151,8 +165,11 @@ services:
     logging: *logging
     stop_grace_period: 30s
     environment:
-      <<: [*alpaca-env, *oracle-env]
+      <<: [*alpaca-env, *oracle-env, *metrics-env]
       HEARTBEAT_PATH: ./var/observe_heartbeat.json
+    # Its /metrics, scraped as host.docker.internal:9102 (the trader's is 9101); loopback only.
+    ports:
+      - "127.0.0.1:9102:9100"
     volumes:
       - trading_var:/app/var
     command:
