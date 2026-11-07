@@ -605,3 +605,39 @@ def test_the_engine_does_not_halt_for_a_filled_bracket(engine, mock_broker, mock
 
     mock_state_repo.save_state.assert_not_called()
     mock_broker.get_recent_orders_for_symbol.assert_called_once_with("INTC")
+
+
+# --- the protection check, for Grafana ----------------------------------------------------
+
+
+def test_the_protection_check_publishes_the_count_and_when_it_completed(
+    engine, mock_broker, mock_state_repo
+):
+    from trading_system.observability import metrics
+
+    metrics.PROTECTION_CHECK_TIMESTAMP.set(0)
+    mock_broker.get_positions.return_value = []
+    mock_broker.get_open_orders.return_value = []
+
+    engine.emergency_check_unprotected_positions()
+
+    assert metrics.UNPROTECTED_POSITIONS._value.get() == 0
+    assert metrics.PROTECTION_CHECK_TIMESTAMP._value.get() > 0
+
+    _account_with_unprotected_positions(mock_broker)
+    engine.emergency_check_unprotected_positions()
+
+    assert metrics.UNPROTECTED_POSITIONS._value.get() == 2  # AAPL and COIN
+    mock_state_repo.save_state.assert_called_once()  # the alarm and the halt are as they were
+
+
+def test_a_check_that_cannot_read_the_broker_does_not_look_like_a_clean_one(engine, mock_broker):
+    """A 0 is only worth something while the timestamp is fresh: a failed check stamps nothing."""
+    from trading_system.observability import metrics
+
+    metrics.PROTECTION_CHECK_TIMESTAMP.set(0)
+    mock_broker.get_positions.side_effect = ConnectionError("alpaca is down")
+
+    engine.emergency_check_unprotected_positions()  # logs the error, as before
+
+    assert metrics.PROTECTION_CHECK_TIMESTAMP._value.get() == 0

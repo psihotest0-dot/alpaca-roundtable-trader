@@ -123,6 +123,7 @@ class Orchestrator:
             "Running the Oracle OBSERVER: signals are put to the Oracle, no order is placed."
         )
         cycle = self.build_observation_cycle()
+        self._start_metrics()
         runner = Runner(
             cycle, cycle.broker, heartbeat=Heartbeat(Path(self.settings.heartbeat_path))
         )
@@ -135,6 +136,25 @@ class Orchestrator:
             if restore:
                 restore()
         logger.info("Observer shutting down.")
+
+    def _start_metrics(self) -> None:
+        """Serves /metrics when METRICS_ENABLED is on (docs: the backend's Prometheus scrapes it). A
+        port that cannot be taken is an error in the log and nothing more: the metrics are an
+        addition, they must not stop the trading."""
+        if not self.settings.metrics_enabled:
+            return
+        try:
+            from trading_system.observability.metrics import start_metrics_server
+
+            start_metrics_server(self.settings.metrics_port, self.settings.metrics_host)
+            logger.info(
+                f"Metrics on {self.settings.metrics_host}:{self.settings.metrics_port}/metrics."
+            )
+        except Exception as e:
+            logger.error(
+                f"Could not start the metrics server on {self.settings.metrics_host}:"
+                f"{self.settings.metrics_port}: {e}. The trading goes on without it."
+            )
 
     def _open_news(self) -> Any:
         """The news cache for the Oracle, or None if the Oracle is off or the cache cannot be
@@ -171,6 +191,7 @@ class Orchestrator:
             logger.info("Running in DRY-RUN mode. (No live broker orders will be sent)")
 
         cycle = self.build_cycle(is_paper)
+        self._start_metrics()
         runner = Runner(
             cycle, cycle.broker, heartbeat=Heartbeat(Path(self.settings.heartbeat_path))
         )

@@ -142,7 +142,8 @@ def test_losing_the_record_does_not_lose_the_decision(saved_signal: StrategySign
 
 def _count(verdict: str, kind: str) -> float:
     return (
-        REGISTRY.get_sample_value("oracle_answers_total", {"verdict": verdict, "kind": kind}) or 0
+        REGISTRY.get_sample_value("alpaca_oracle_answers_total", {"verdict": verdict, "kind": kind})
+        or 0
     )
 
 
@@ -150,7 +151,7 @@ def test_metrics_tell_an_unreachable_oracle_from_one_that_says_no(
     repo: OracleDecisionRepository, saved_signal: StrategySignal
 ) -> None:
     before = {k: _count(*k) for k in (("VETO", "answer"), ("VETO", "cached"), ("HOLD", "failed"))}
-    errors = REGISTRY.get_sample_value("oracle_errors_total") or 0
+    errors = REGISTRY.get_sample_value("alpaca_oracle_errors_total") or 0
 
     down = RecordingOracle(ScriptedOracle(OSError("x")), repo)
     down.evaluate(OracleRequest(signal=_signal(minute=0)))  # no answer
@@ -161,7 +162,7 @@ def test_metrics_tell_an_unreachable_oracle_from_one_that_says_no(
     assert _count("HOLD", "failed") == before[("HOLD", "failed")] + 1
     assert _count("VETO", "answer") == before[("VETO", "answer")] + 1
     assert _count("VETO", "cached") == before[("VETO", "cached")] + 1
-    assert (REGISTRY.get_sample_value("oracle_errors_total") or 0) == errors + 1
+    assert (REGISTRY.get_sample_value("alpaca_oracle_errors_total") or 0) == errors + 1
 
 
 def test_the_factory_records_only_when_given_a_repository(

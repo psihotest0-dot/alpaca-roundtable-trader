@@ -63,7 +63,8 @@ def _rows(session_factory: Any) -> list[OracleDecisionModel]:
 
 def _answers(verdict: str, kind: str) -> float:
     return (
-        REGISTRY.get_sample_value("oracle_answers_total", {"verdict": verdict, "kind": kind}) or 0.0
+        REGISTRY.get_sample_value("alpaca_oracle_answers_total", {"verdict": verdict, "kind": kind})
+        or 0.0
     )
 
 

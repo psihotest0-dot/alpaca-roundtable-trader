@@ -16,6 +16,7 @@ from trading_system.storage.repositories import OrderRepository, StateRepository
 from trading_system.domain.models import OrderIntent, BrokerOrder
 from trading_system.domain.enums import OrderSide, OrderType, OrderStatus
 from trading_system.config import Settings
+from trading_system.observability import metrics
 
 logger = logging.getLogger(__name__)
 
@@ -316,6 +317,8 @@ class ExecutionEngine:
         tools) and a forced close is not something to do on a guess."""
         try:
             unprotected = self.unprotected_positions()
+            # Never raises; the alarm and the halt below are as they were.
+            metrics.protection_checked(len(unprotected))
             if not unprotected:
                 return
 

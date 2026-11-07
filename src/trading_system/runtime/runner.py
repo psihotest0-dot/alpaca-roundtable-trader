@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Optional
 
+from trading_system.observability import metrics
 from trading_system.runtime.cycle import TradingCycle
 from trading_system.runtime.heartbeat import Heartbeat
 from trading_system.runtime.schedule import BAR, bar_boundary, expected_bar_start
@@ -122,6 +123,8 @@ class Runner:
         self._wait(seconds)
 
     def _beat(self, next_within: float, market_open: Optional[bool], clock_error: bool) -> None:
+        # Never raises. The heartbeat file below is the healthcheck's; this is Grafana's.
+        metrics.beat(market_open)
         if self.heartbeat is None:
             return
         try:
@@ -157,6 +160,11 @@ class Runner:
         try:
             report = self.cycle.run_entries(now, expected_bar_start(now))
             bar_ready = not report.retry_later
+            metrics.entries_pass(
+                "retry_later" if report.retry_later else ("skipped" if report.skipped else "ok"),
+                signals=report.signals,
+                errors=report.errors,
+            )
             if bar_ready:
                 self._last_entries_at = now
                 self._last_entries_errors = report.errors
@@ -166,6 +174,7 @@ class Runner:
             bar_ready = False
             self._last_entries_errors = 1
             self._last_entries_skipped = "crashed"
+            metrics.entries_pass("crashed", errors=1)
         if bar_ready:
             self._last_bar = boundary
         elif now >= boundary + ENTRY_DELAY + BARS_GIVE_UP:

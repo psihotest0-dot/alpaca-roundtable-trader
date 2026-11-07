@@ -36,6 +36,7 @@ import pandas as pd
 from trading_system.backtest.analysis import t_statistic, welch_t
 from trading_system.backtest.shadow import BAR, SignalToPlay, play_out
 from trading_system.domain.models import StrategySignal
+from trading_system.observability import metrics
 from trading_system.storage.repositories import AuditRepository, MarketBarRepository
 from trading_system.strategy.base import BaseStrategy
 from trading_system.strategy.trend import filter_signals
@@ -119,6 +120,7 @@ def record_pass(
         {"bar_start": bar_start.isoformat(), "errors": errors, **counts},
         when=now,
     )
+    metrics.candidate_pass(counts, errors)  # for Grafana; never raises
     counts["candidate_errors"] = errors
     return counts
 

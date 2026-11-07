@@ -549,3 +549,24 @@ def test_the_orchestrator_gives_the_observer_the_two_candidates(
     cycle = Orchestrator(settings).build_observation_cycle()
 
     assert [c.name for c in cycle.candidates] == list(CANDIDATES)
+
+
+def test_the_candidates_are_counted_for_grafana(make_cycle: Any) -> None:
+    from prometheus_client import REGISTRY
+
+    def count(strategy: str) -> float:
+        return (
+            REGISTRY.get_sample_value("alpaca_candidate_signals_total", {"strategy": strategy})
+            or 0.0
+        )
+
+    name = "trend_cross_session"
+    candidate_before, control_before = count(name), count("trend_cross")
+    setup = make_cycle(
+        oracle=ScriptedOracle(OracleVerdict.APPROVE),
+        candidates=(StubCandidate(name, [_stub_signal(name)]),),
+    )
+
+    _run(setup)
+
+    assert count(name) == candidate_before + 1 and count("trend_cross") == control_before + 1

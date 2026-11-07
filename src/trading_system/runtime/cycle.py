@@ -28,6 +28,7 @@ from trading_system.domain.models import (
 )
 from trading_system.oracle.contract import OracleNews
 from trading_system.oracle.inputs import build_oracle_request
+from trading_system.observability import metrics
 from trading_system.oracle.news_input import select_news
 from trading_system.risk.daily_equity import with_daily_start_equity
 from trading_system.runtime.reconciliation import reconcile_orders, record_fills
@@ -162,6 +163,7 @@ class TradingCycle:
             self._alert("Entry look-up crashed", f"{type(e).__name__}: {e}")
             raise
         self._journal(now, expected_bar_start, report)
+        self._publish_account()
         if report.errors:
             self._alert(
                 "Signals broke before they became orders",
@@ -170,6 +172,18 @@ class TradingCycle:
                 "See the error lines in the log.",
             )
         return report
+
+    def _publish_account(self) -> None:
+        """The account's numbers for the metrics (equity, open positions, gross exposure), once per
+        look for entries. Two reads from the broker; whatever goes wrong is a missing number and
+        nothing else: the metrics must not be able to stop the trading."""
+        try:
+            equity = float(_amount(self.broker.get_account().equity, "the account's equity"))
+            positions = self.broker.get_positions()
+            gross = sum(abs(float(p.market_value)) for p in positions)
+            metrics.account(equity, len(positions), gross / equity if equity else 0.0)
+        except Exception as e:
+            logger.debug(f"Could not publish the account's metrics: {e}")
 
     def _journal(self, now: datetime, bar_start: datetime, report: EntriesReport) -> None:
         if self.audit_repo is None:
@@ -382,6 +396,7 @@ class TradingCycle:
         logger.info(f"Risk decision: {decision.approved} ({decision.reasoning})")
         self._save_risk_decision(decision)
         if not (decision.approved and intent):
+            metrics.rejected(decision.reasoning)
             return Outcome.DROPPED
 
         logger.info(f"Executing order intent for {intent.symbol}...")
@@ -530,6 +545,8 @@ class TradingCycle:
         report = reconcile_orders(self.broker, self.execution, self.order_repo, now)
         if report.failed:
             logger.warning(f"Could not refresh {len(report.failed)} order(s): {report.failed}")
+        else:
+            metrics.reconciled()
 
     def _record_fills(self, now: datetime) -> None:
         after = self._fills_after or now - FILLS_LOOKBACK
