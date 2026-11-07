@@ -124,7 +124,9 @@ class Runner:
 
     def _beat(self, next_within: float, market_open: Optional[bool], clock_error: bool) -> None:
         # Never raises. The heartbeat file below is the healthcheck's; this is Grafana's.
-        metrics.beat(market_open)
+        metrics.beat(
+            market_open, self._open_since.timestamp() if self._open_since is not None else None
+        )
         if self.heartbeat is None:
             return
         try:

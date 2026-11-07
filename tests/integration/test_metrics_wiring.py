@@ -62,6 +62,14 @@ def test_a_tick_stamps_the_heartbeat_and_the_market_state_for_grafana() -> None:
     assert _value("alpaca_market_open") == 0
 
 
+def test_the_runner_publishes_when_the_open_market_began() -> None:
+    _runner(EntriesReport()).tick()
+    assert _value("alpaca_market_open_since_timestamp_seconds") == LATER.timestamp()
+
+    _runner(EntriesReport(), market_open=False).tick()
+    assert _value("alpaca_market_open_since_timestamp_seconds") == 0.0
+
+
 def test_a_look_for_entries_is_counted_with_its_signals_and_errors() -> None:
     ok = _value("alpaca_entries_passes_total", {"outcome": "ok"})
     signals, errors = _value("alpaca_signals_total"), _value("alpaca_entries_errors_total")
@@ -112,6 +120,22 @@ def test_the_account_is_published_after_a_look_for_entries(run_cycle: RunCycle) 
 
     assert _value("alpaca_account_equity") == 123456.0
     assert _value("alpaca_active_positions") == 0 and _value("alpaca_gross_exposure") == 0.0
+
+
+def test_the_housekeeping_publishes_the_account_at_most_once_a_minute(
+    run_cycle: RunCycle,
+) -> None:
+    from trading_system.observability import metrics
+
+    ran = run_cycle(equity="123456")
+    metrics.ACCOUNT_EQUITY.set(0)
+
+    ran.cycle.run_housekeeping(datetime.now(UTC))  # the look for entries published a moment ago
+    assert _value("alpaca_account_equity") == 0
+
+    ran.cycle._account_published = float("-inf")  # a minute later
+    ran.cycle.run_housekeeping(datetime.now(UTC))
+    assert _value("alpaca_account_equity") == 123456.0  # real also while the market is closed
 
 
 def test_an_account_that_cannot_be_read_is_a_missing_number_and_nothing_more(

@@ -36,6 +36,13 @@ HEARTBEAT_TIMESTAMP = Gauge(
     "alpaca_heartbeat_timestamp_seconds", "Unix time of the loop's last heartbeat"
 )
 MARKET_OPEN = Gauge("alpaca_market_open", "1 while the market is open, 0 while it is closed")
+# When this stretch of open market began (0 while it is closed). The first look for entries of a day
+# comes 15 minutes after the open, so "no look for 20 minutes" must be counted from the later of the
+# last look and this time, as the healthcheck does; otherwise it would fire every morning.
+MARKET_OPEN_SINCE = Gauge(
+    "alpaca_market_open_since_timestamp_seconds",
+    "Unix time at which the current stretch of open market began, 0 while the market is closed",
+)
 LAST_ENTRIES_TIMESTAMP = Gauge(
     "alpaca_last_entries_timestamp_seconds",
     "Unix time of the last completed look for entries on a new bar",
@@ -163,11 +170,18 @@ def _safely(function: F) -> F:
 
 
 @_safely
-def beat(market_open: Optional[bool], when: Optional[float] = None) -> None:
-    """The loop ticked. `market_open` None (the clock could not be read) leaves the gauge alone."""
+def beat(
+    market_open: Optional[bool], open_since: Optional[float] = None, when: Optional[float] = None
+) -> None:
+    """The loop ticked. `market_open` None (the clock could not be read) leaves the gauges alone.
+    `open_since`: when the current stretch of open market began."""
     HEARTBEAT_TIMESTAMP.set(time.time() if when is None else when)
     if market_open is not None:
         MARKET_OPEN.set(1 if market_open else 0)
+        if not market_open:
+            MARKET_OPEN_SINCE.set(0)
+        elif open_since is not None:
+            MARKET_OPEN_SINCE.set(open_since)
 
 
 @_safely

@@ -92,6 +92,17 @@ def test_beat_stamps_the_heartbeat_and_the_market_state() -> None:
     )
 
 
+def test_the_start_of_the_open_market_is_published_and_zeroed_when_it_closes() -> None:
+    metrics.beat(True, open_since=1000.0)
+    assert _value("alpaca_market_open_since_timestamp_seconds") == 1000.0
+
+    metrics.beat(True)  # no start known (the clock was read, the stretch is not): left as it was
+    assert _value("alpaca_market_open_since_timestamp_seconds") == 1000.0
+
+    metrics.beat(False)
+    assert _value("alpaca_market_open_since_timestamp_seconds") == 0.0
+
+
 def test_a_clock_that_could_not_be_read_leaves_the_market_state_alone() -> None:
     metrics.beat(True)
 

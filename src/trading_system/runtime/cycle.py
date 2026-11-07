@@ -7,6 +7,7 @@ test can run a step against fakes without a loop, a thread or a sleep.
 """
 
 import logging
+import time
 from dataclasses import dataclass
 from enum import Enum
 from datetime import datetime, timedelta, timezone
@@ -39,6 +40,8 @@ logger = logging.getLogger(__name__)
 
 # How far back the first look for fills goes when the system starts.
 FILLS_LOOKBACK = timedelta(days=2)
+# How often the housekeeping publishes the account's numbers for the metrics (two broker reads).
+ACCOUNT_EVERY_SECONDS = 60.0
 
 
 @dataclass
@@ -141,6 +144,7 @@ class TradingCycle:
         self.strategy_config = strategy_config
         self.oracle = oracle
         self.risk_repo = risk_repo
+        self._account_published = float("-inf")  # time.monotonic() of the last publish
         self.audit_repo = audit_repo
         self.alerts = alerts
         self.news = news  # the news cache (storage/news.py); None: the Oracle is given no news
@@ -173,10 +177,14 @@ class TradingCycle:
             )
         return report
 
-    def _publish_account(self) -> None:
-        """The account's numbers for the metrics (equity, open positions, gross exposure), once per
-        look for entries. Two reads from the broker; whatever goes wrong is a missing number and
-        nothing else: the metrics must not be able to stop the trading."""
+    def _publish_account(self, *, force: bool = True) -> None:
+        """The account's numbers for the metrics (equity, open positions, gross exposure): after each
+        look for entries, and from the housekeeping at most once a minute (`force=False`) so that
+        they are real also while the market is closed. Two reads from the broker; whatever goes wrong
+        is a missing number and nothing else: the metrics must not be able to stop the trading."""
+        if not force and time.monotonic() - self._account_published < ACCOUNT_EVERY_SECONDS:
+            return
+        self._account_published = time.monotonic()
         try:
             equity = float(_amount(self.broker.get_account().equity, "the account's equity"))
             positions = self.broker.get_positions()
@@ -530,6 +538,7 @@ class TradingCycle:
         without a stop found, fills recorded. A halt stops new entries; it must not stop
         anyone from watching the ones that exist."""
         steps = (
+            ("publish account", lambda: self._publish_account(force=False)),
             ("reconcile orders", lambda: self._reconcile(now)),
             ("cancel stale entries", self.execution.check_bounded_entry_expiry),
             ("check protection", self.execution.emergency_check_unprotected_positions),
