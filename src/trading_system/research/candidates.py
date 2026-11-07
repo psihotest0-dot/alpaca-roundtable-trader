@@ -258,18 +258,22 @@ def _verdict(detail: Detail, bar: float) -> tuple[str, str]:
     )
 
 
+def mature_signals(audit: AuditRepository, now: datetime) -> dict[str, list[SignalToPlay]]:
+    """The journalled signals old enough to count (their entry is MATURITY old), per strategy."""
+    cutoff = now - MATURITY
+    return {
+        strategy: [s for s in signals if (s.closed_bar + BAR).to_pydatetime() <= cutoff]
+        for strategy, signals in journalled_signals(audit, now).items()
+    }
+
+
 def judge_candidates(
     audit: AuditRepository, bars: MarketBarRepository, settings: Any, now: datetime
 ) -> Judgement:
     """The judgement of each candidate, or only the counts when it is not time. A look is journalled
     when taken."""
-    cutoff = now - MATURITY
     days, broken = run_days(audit, now)
-    found = journalled_signals(audit, now)
-    mature = {
-        strategy: [s for s in signals if (s.closed_bar + BAR).to_pydatetime() <= cutoff]
-        for strategy, signals in found.items()
-    }
+    mature = mature_signals(audit, now)
     control_trades: list[Trade] = []
     results: list[CandidateResult] = []
     played: dict[str, tuple[list[Trade], int]] = {}

@@ -20,6 +20,7 @@ from trading_system.backtest.engine import BacktestEngine
 from trading_system.backtest.models import BacktestConfig, BacktestResult, BacktestTrade
 from trading_system.config import Settings
 from trading_system.risk.daily_equity import trading_day
+from trading_system.risk.entry_plan import AtrExit
 from trading_system.strategy.base import BaseStrategy
 
 TRADING_DAYS_PER_YEAR = 252
@@ -193,6 +194,7 @@ def cost_sweep(
     df_1h: Dict[str, pd.DataFrame],
     strategy: BaseStrategy,
     slippage_levels: Sequence[float] = (0.0, 0.0005, 0.001, 0.002),
+    atr_exit: Optional[AtrExit] = None,
 ) -> List[CostRow]:
     """The same replay at several levels of slippage per side. Costs are the most certain
     thing a backtest knows about the future, so a result that disappears at twice the
@@ -200,7 +202,9 @@ def cost_sweep(
     rows = []
     for level in slippage_levels:
         config = bt_config.model_copy(update={"slippage_pct": level})
-        run = BacktestEngine(settings, config, df_15m, df_1h, strategy=strategy).run()
+        run = BacktestEngine(
+            settings, config, df_15m, df_1h, strategy=strategy, atr_exit=atr_exit
+        ).run()
         rows.append(CostRow(level, run.trade_count, run.total_return_pct, run.profit_factor))
     return rows
 

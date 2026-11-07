@@ -66,6 +66,17 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also replay at higher slippage (0 to 0.2 % a side) to see how fragile the result is.",
     )
+    backtest_parser.add_argument(
+        "--atr-stop",
+        type=float,
+        help="A CANDIDATE (research plan, section 13.1): stop at this many ATRs instead of the live "
+        "percentage. Needs --atr-target. The live loop does not read it.",
+    )
+    backtest_parser.add_argument(
+        "--atr-target",
+        type=float,
+        help="The target at this many ATRs instead of the live percentage. Needs --atr-stop.",
+    )
 
     # compare-strategies command
     compare_parser = subparsers.add_parser(
@@ -436,8 +447,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             from trading_system.backtest.models import BacktestConfig
             from trading_system.backtest.engine import BacktestEngine
             from trading_system.backtest.loader import NoStoredCandles, load_candles
+            from decimal import Decimal
+
+            from trading_system.risk.entry_plan import AtrExit
             from trading_system.strategy.registry import get_strategy
 
+            if (args.atr_stop is None) != (args.atr_target is None):
+                print("--atr-stop and --atr-target go together.")
+                return 1
+            atr_exit = (
+                None
+                if args.atr_stop is None
+                else AtrExit(Decimal(str(args.atr_stop)), Decimal(str(args.atr_target)))
+            )
             try:
                 strategy = get_strategy(args.strategy)
                 df_15m, df_1h = load_candles(settings, args.days)
@@ -450,8 +472,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"Replaying {len(symbols)} symbols, {first:%Y-%m-%d} to {last:%Y-%m-%d}.")
 
             config = BacktestConfig(replay_oracle_path=args.replay_oracle)
-            engine = BacktestEngine(settings, config, df_15m, df_1h, strategy=strategy)
+            engine = BacktestEngine(
+                settings, config, df_15m, df_1h, strategy=strategy, atr_exit=atr_exit
+            )
             print(f"Strategy: {strategy.name} ({strategy.version})")
+            if atr_exit is not None:
+                print(
+                    f"ATR exit (a candidate): stop {atr_exit.stop_atr} ATR, target "
+                    f"{atr_exit.target_atr} ATR instead of the live percentages."
+                )
 
             result = engine.run()
 
@@ -497,7 +526,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             if args.cost_sweep:
                 print("\nRunning the replay again at higher costs...")
                 print(
-                    "\n" + format_cost_sweep(cost_sweep(settings, config, df_15m, df_1h, strategy))
+                    "\n"
+                    + format_cost_sweep(
+                        cost_sweep(settings, config, df_15m, df_1h, strategy, atr_exit=atr_exit)
+                    )
                 )
 
             print("\n=== Assumptions & Limitations ===")
@@ -827,6 +859,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             from datetime import datetime, timezone
 
+            from trading_system.research.atr_candidate import format_atr_exit, judge_atr_exit
             from trading_system.research.candidates import (
                 format_candidates,
                 judge_candidates,
@@ -844,16 +877,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             except SameDatabaseError as e:
                 print(f"judge-candidates error: {e}")
                 return 1
-            print(
-                format_candidates(
-                    judge_candidates(
-                        AuditRepository(factory),
-                        candle_store,
-                        settings,
-                        datetime.now(timezone.utc),
-                    )
-                )
-            )
+            audit = AuditRepository(factory)
+            now = datetime.now(timezone.utc)
+            print(format_candidates(judge_candidates(audit, candle_store, settings, now)))
+            print()
+            print(format_atr_exit(judge_atr_exit(audit, candle_store, settings, now)))
             return 0
         except Exception as e:
             print(f"judge-candidates error: {type(e).__name__}: {e}")

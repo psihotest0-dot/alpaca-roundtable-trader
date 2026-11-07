@@ -4,7 +4,7 @@ from collections import Counter
 from typing import Dict, List, Optional
 from decimal import Decimal
 import logging
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import json
 
 from trading_system.config import Settings
@@ -19,9 +19,15 @@ from trading_system.domain.models import (
 )
 from trading_system.risk.daily_equity import day_marker, trading_day
 from trading_system.risk.engine import RiskEngine
-from trading_system.risk.entry_plan import InvalidEntryPlan, build_entry_plan
+from trading_system.risk.entry_plan import (
+    AtrExit,
+    InvalidEntryPlan,
+    atr_exit_percentages,
+    build_entry_plan,
+)
 from trading_system.runtime.runner import ENTRY_DELAY
 from trading_system.runtime.schedule import BAR, is_regular_session
+from trading_system.strategy.atr import atr_and_close
 from trading_system.strategy.base import BaseStrategy
 from trading_system.strategy.config import RUNTIME_STRATEGY
 from trading_system.strategy.trend import filter_signals
@@ -50,8 +56,13 @@ class BacktestEngine:
         df_1h: Dict[str, pd.DataFrame],
         prefilter: bool = True,
         strategy: Optional[BaseStrategy] = None,
+        atr_exit: Optional[AtrExit] = None,
     ):
         """`strategy`: what produces the signals; by default the one the live loop runs.
+
+        `atr_exit`: a CANDIDATE (research plan, section 13.1). The stop and the target of each entry
+        are multiples of the ATR at the signal bar instead of the live percentages; nothing else
+        changes (not the size either). The live loop never sets it.
 
         `prefilter`: ask the strategy only about symbols whose last closed bar could be a
         signal, according to the strategy's own hint (`candidate_bars`, read off indicators
@@ -72,6 +83,7 @@ class BacktestEngine:
         # being replayed (see _clock), so a signal from last month is judged by the same rules.
         self._decision_time: datetime = _EPOCH
         self.risk_engine = RiskEngine(settings, clock=self._clock)
+        self.atr_exit = atr_exit
 
         self.cash = bt_config.initial_capital
         self.positions: Dict[str, BacktestPosition] = {}
@@ -318,6 +330,30 @@ class BacktestEngine:
             return None, "No usable price"
         return price, ""
 
+    def _exit_settings(self, symbol: str, current_time: datetime) -> tuple[Optional[Settings], str]:
+        """The settings an entry's plan is built from: the live ones, or, with an ATR exit, a copy
+        whose stop and target percentages are the ATR ones of this signal (the ATR of the live window
+        of bars up to the signal bar). (None, why) when there is no ATR."""
+        if self.atr_exit is None:
+            return self.settings, ""
+        closed = self._bars_before(symbol, current_time)
+        if closed is None:
+            return None, "No ATR"
+        since = current_time - timedelta(days=self.settings.lookback_days)
+        pair = atr_and_close(closed[closed["timestamp"] > since])
+        if pair is None:
+            return None, "No ATR"
+        try:
+            stop, target = atr_exit_percentages(*pair, self.atr_exit)
+        except InvalidEntryPlan:
+            return None, "ATR exit is not valid"
+        return (
+            self.settings.model_copy(
+                update={"stop_loss_pct": float(stop), "take_profit_pct": float(target)}
+            ),
+            "",
+        )
+
     def _shadow(self, sig: StrategySignal, current_time: datetime) -> None:
         """Plays out a signal the Oracle did not approve, as if it had been traded (Phase 3.5)."""
         busy = self._shadow_busy_until.get(sig.symbol)
@@ -325,15 +361,16 @@ class BacktestEngine:
             return  # an earlier shadow position in this symbol is still open
         price, _ = self._entry_price(sig.symbol, current_time)
         bars = self._bars_15m.get(sig.symbol)
-        if price is None or bars is None or bars.empty:
+        exit_settings, _ = self._exit_settings(sig.symbol, current_time)
+        if price is None or bars is None or bars.empty or exit_settings is None:
             self.shadow_skipped += 1
             return
         try:
             plan = build_entry_plan(
                 price,
-                limit_buffer_pct=Decimal(str(self.settings.entry_limit_buffer_pct)),
-                stop_loss_pct=Decimal(str(self.settings.stop_loss_pct)),
-                take_profit_pct=Decimal(str(self.settings.take_profit_pct)),
+                limit_buffer_pct=Decimal(str(exit_settings.entry_limit_buffer_pct)),
+                stop_loss_pct=Decimal(str(exit_settings.stop_loss_pct)),
+                take_profit_pct=Decimal(str(exit_settings.take_profit_pct)),
             )
         except InvalidEntryPlan:
             self.shadow_skipped += 1
@@ -367,12 +404,23 @@ class BacktestEngine:
             self.not_traded[why_not] += 1
             return
 
+        exit_settings, why_not = self._exit_settings(sig.symbol, current_time)
+        if exit_settings is None:
+            self.not_traded[why_not] += 1
+            return
+        # The real risk engine; with an ATR exit, one built on the settings of this signal's exit.
+        risk_engine = (
+            self.risk_engine
+            if exit_settings is self.settings
+            else RiskEngine(exit_settings, clock=self._clock)
+        )
+
         account, positions = self._account_at(current_time)
         state = TradingState(
             daily_start_equity=self._day_start_equity,
             daily_equity_date=day_marker(trading_day(current_time)),
         )
-        decision, intent = self.risk_engine.evaluate_signal(
+        decision, intent = risk_engine.evaluate_signal(
             signal=sig,
             account=account,
             positions=positions,

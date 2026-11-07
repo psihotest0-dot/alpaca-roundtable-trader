@@ -5,6 +5,7 @@ prices and execution sends them unchanged, so the risk that was planned is the r
 placed. Before, risk emitted a MARKET intent without prices and execution refused it.
 """
 
+import math
 from dataclasses import dataclass
 from decimal import ROUND_FLOOR, ROUND_HALF_UP, Decimal
 
@@ -26,6 +27,28 @@ class EntryPlan:
     limit_price: Decimal
     stop_price: Decimal
     take_profit_price: Decimal
+
+
+@dataclass(frozen=True)
+class AtrExit:
+    """Stop and target as multiples of the ATR (a CANDIDATE, docs/strategy-research-plan.md, section
+    13.1). The live path does not read it: it plans with `stop_loss_pct` and `take_profit_pct`."""
+
+    stop_atr: Decimal
+    target_atr: Decimal
+
+
+def atr_exit_percentages(atr: float, close: float, rule: AtrExit) -> tuple[Decimal, Decimal]:
+    """(stop %, target %) as fractions of the price for an ATR exit: the multiples of the ATR as a
+    share of the signal bar's close, ready for `build_entry_plan`. Raises InvalidEntryPlan for an ATR
+    or a close that is not a usable positive number, or a stop of 100 % or more."""
+    if not (math.isfinite(atr) and math.isfinite(close)) or atr <= 0 or close <= 0:
+        raise InvalidEntryPlan(f"ATR {atr} and close {close} must be positive numbers.")
+    fraction = Decimal(str(atr)) / Decimal(str(close))
+    stop, target = rule.stop_atr * fraction, rule.target_atr * fraction
+    if stop >= 1:
+        raise InvalidEntryPlan(f"An ATR stop of {stop:.0%} of the price is not a stop.")
+    return stop, target
 
 
 def price_tick(price: Decimal) -> Decimal:
