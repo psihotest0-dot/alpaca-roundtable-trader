@@ -403,6 +403,27 @@ def test_two_looks_at_most_and_the_second_wants_double_and_a_higher_bar(
     assert [look["look"] for look in world.looks()] == [1, 2]
 
 
+def test_the_second_look_wants_twice_what_the_first_look_had(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # at the real signal rate the first look has far more than the minimum; the second must not be
+    # available at once on the same sample just because the minimum doubled is already there
+    monkeypatch.setattr(module, "MIN_TRADES", 10)
+    monkeypatch.setattr(module, "MIN_RUN_DAYS", 5)
+    world.fill(trades=25, control_extra=25)
+    world.run_days()
+    assert _result(world.judge()).detail is not None  # the first look, with 25 trades
+
+    with patch.object(module, "_detail", side_effect=AssertionError("computed a return")):
+        again = _result(world.judge())  # 25 is more than twice the minimum, but not twice 25
+
+    assert again.verdict == "no verdict" and "need 50" in again.reason
+
+    world.fill(trades=25, control_extra=25)
+    assert _result(world.judge()).detail is not None  # 50 trades: the second look
+    assert [look["look"] for look in world.looks()] == [1, 2]
+
+
 def test_between_the_looks_there_are_only_counts(
     world: World, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -16,7 +16,7 @@ the fast ones would be left otherwise). Only signals old enough (MATURITY) are u
 **The rules are in the code, because the discipline is the point.** Per candidate: below MIN_TRADES
 mature trades (times the look number) or MIN_RUN_DAYS days run, the judge prints COUNTS ONLY and returns
 no return; the first look needs t >= FIRST_LOOK_T, the second (at double the trades) SECOND_LOOK_T, and
-there is no third; every look is journalled. "helps" needs ALL FOUR of: (1) a mean net trade above zero
+there is no third (the second wants twice the trades of the first); every look is journalled. "helps" needs ALL FOUR of: (1) a mean net trade above zero
 with t against zero at the bar, (2) a mean above the control's, Welch t >= DIFFERENCE_T, (3) the same
 sign in both halves of the sample, in time, for both the mean and the difference, (4) a t of the
 per-day means against zero of at least DAILY_T (trades of one day are not independent). Anything else
@@ -281,11 +281,12 @@ def judge_candidates(
 
     for name in CANDIDATES:
         trades, signals = play(name)
-        looks = sum(
-            1
+        taken = [
+            d
             for _, d in audit.events(JUDGEMENT_EVENT, EPOCH, now + timedelta(days=1))
             if d.get("candidate") == name
-        )
+        ]
+        looks = len(taken)
 
         def said(verdict: str, reason: str, detail: Optional[Detail] = None) -> CandidateResult:
             return CandidateResult(name, signals, len(trades), looks, verdict, reason, detail)
@@ -295,7 +296,10 @@ def judge_candidates(
                 said("no more looks", f"{looks} looks were taken; the rules allow {MAX_LOOKS}")
             )
             continue
-        need = MIN_TRADES * (looks + 1)
+        # The second look wants twice the trades the FIRST look had (at least twice the minimum): at the
+        # real signal rate the first look already has several hundred, and without this the second look
+        # could be taken at once on the same sample.
+        need = MIN_TRADES if looks == 0 else 2 * max(MIN_TRADES, *(int(d["trades"]) for d in taken))
         if len(trades) < need or days < MIN_RUN_DAYS:
             results.append(
                 said(
