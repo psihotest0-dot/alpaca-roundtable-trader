@@ -168,6 +168,14 @@ def create_parser() -> argparse.ArgumentParser:
         "double the minimum.",
     )
 
+    # judge-candidates command
+    subparsers.add_parser(
+        "judge-candidates",
+        help="Judges the two strategy candidates the observer runs forward in time "
+        "(docs/strategy-research-plan.md, section 12.1). Shows counts only until the minimum is "
+        "reached; at most two looks.",
+    )
+
     # measure-intraday command (the research modules are imported only when it runs)
     intraday_parser = subparsers.add_parser(
         "measure-intraday",
@@ -813,6 +821,42 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"judge-oracle error: {type(e).__name__}: {e}")
+            return 1
+
+    elif args.command == "judge-candidates":
+        try:
+            from datetime import datetime, timezone
+
+            from trading_system.research.candidates import (
+                format_candidates,
+                judge_candidates,
+            )
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import AuditRepository
+            from trading_system.storage.research import SameDatabaseError, open_observe_store
+
+            settings = Settings()
+            factory = get_session_factory(get_engine(settings.database_url))
+            try:
+                candle_store = open_observe_store(
+                    settings.observe_database_url, settings.database_url
+                )
+            except SameDatabaseError as e:
+                print(f"judge-candidates error: {e}")
+                return 1
+            print(
+                format_candidates(
+                    judge_candidates(
+                        AuditRepository(factory),
+                        candle_store,
+                        settings,
+                        datetime.now(timezone.utc),
+                    )
+                )
+            )
+            return 0
+        except Exception as e:
+            print(f"judge-candidates error: {type(e).__name__}: {e}")
             return 1
 
     elif args.command == "measure-intraday":

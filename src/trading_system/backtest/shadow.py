@@ -7,13 +7,20 @@ the same measure as a real trade's `pnl_pct`, and it does not depend on the acco
 position limit, no cash): the question is whether the signal was good, not whether there was
 room for it."""
 
-from datetime import datetime
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from decimal import Decimal
+from typing import Any
 
 import pandas as pd
 
 from trading_system.backtest.exits import resolve_exit
-from trading_system.backtest.models import ShadowTrade
+from trading_system.backtest.models import BacktestConfig, ShadowTrade
+from trading_system.risk.entry_plan import InvalidEntryPlan, build_entry_plan
+from trading_system.storage.repositories import MarketBarRepository
+
+BAR = timedelta(minutes=15)
 
 
 def simulate_shadow_trade(
@@ -69,3 +76,88 @@ def simulate_shadow_trade(
         exit_reason=reason,
         pnl_pct=float(proceeds / cost - Decimal("1")),
     )
+
+
+@dataclass(frozen=True)
+class SignalToPlay:
+    """A signal to be played out. `label` is carried to the trade's `verdict` field: what the Oracle
+    said for `judge-oracle`, the strategy's name for the candidates' judge."""
+
+    signal_id: str
+    symbol: str
+    closed_bar: pd.Timestamp  # the start of the bar that closed and gave the signal (UTC)
+    label: str
+
+
+@dataclass
+class PlayedOut:
+    trades: list[ShadowTrade] = field(
+        default_factory=list
+    )  # OPEN ones are marked at the last close
+    no_bars: int = 0  # signals with no bar to enter on (or no valid plan)
+    skipped_busy: int = 0  # signals dropped because the symbol's earlier trade was still open
+
+
+def play_out(
+    signals: Sequence[SignalToPlay],
+    bars: MarketBarRepository,
+    settings: Any,
+    *,
+    one_at_a_time: bool = False,
+) -> PlayedOut:
+    """Plays each signal out as the backtest would trade it: entry at the open of the bar after the
+    signal's bar, the entry plan of the live settings (limit buffer, stop, target), the backtest's
+    slippage and fee, and the first of stop and target the stored bars reach.
+
+    One definition for every judge (the Oracle's and the candidates'). A trade that neither level has
+    reached by the end of the data comes back with exit_reason "OPEN", valued at the last close: the
+    caller decides whether to drop it (the Oracle judge does) or to count it (the candidates' judge).
+
+    `one_at_a_time`: a signal on a symbol whose earlier trade (of the SAME call) is still open on the
+    entry bar is skipped, the way the live loop holds one position per symbol. Give one strategy's
+    signals per call."""
+    costs = BacktestConfig()
+    by_symbol: dict[str, list[SignalToPlay]] = {}
+    for signal in signals:
+        by_symbol.setdefault(signal.symbol, []).append(signal)
+    out = PlayedOut()
+    for symbol, group in by_symbol.items():
+        group = sorted(group, key=lambda s: s.closed_bar)
+        first = group[0].closed_bar - timedelta(hours=2)
+        frame = bars.load([symbol], "15m", start=first.to_pydatetime()).get(symbol)
+        last: ShadowTrade | None = None
+        for signal in group:
+            entry_time = signal.closed_bar + BAR
+            if frame is None or entry_time not in frame.index:
+                out.no_bars += 1
+                continue
+            if one_at_a_time and last is not None:
+                if last.exit_reason == "OPEN" or entry_time.to_pydatetime() <= last.exit_time:
+                    out.skipped_busy += 1
+                    continue
+            price = Decimal(str(frame.loc[entry_time, "open"]))
+            try:
+                plan = build_entry_plan(
+                    price,
+                    limit_buffer_pct=Decimal(str(settings.entry_limit_buffer_pct)),
+                    stop_loss_pct=Decimal(str(settings.stop_loss_pct)),
+                    take_profit_pct=Decimal(str(settings.take_profit_pct)),
+                )
+            except InvalidEntryPlan:
+                out.no_bars += 1
+                continue
+            fill = min(plan.limit_price, price * (Decimal("1") + Decimal(str(costs.slippage_pct))))
+            last = simulate_shadow_trade(
+                symbol=symbol,
+                signal_id=signal.signal_id,
+                verdict=signal.label,
+                bars=frame,
+                entry_time=entry_time.to_pydatetime(),
+                entry_price=fill,
+                stop_loss=plan.stop_price,
+                take_profit=plan.take_profit_price,
+                slippage_pct=costs.slippage_pct,
+                fee_pct=costs.fee_pct_per_trade,
+            )
+            out.trades.append(last)
+    return out

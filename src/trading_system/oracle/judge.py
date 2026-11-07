@@ -29,17 +29,14 @@ live loop's.
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from decimal import Decimal
 from typing import Any, Optional
 
 import numpy as np
 import pandas as pd
 
 from trading_system.backtest.analysis import welch_t
-from trading_system.backtest.models import BacktestConfig
-from trading_system.backtest.shadow import simulate_shadow_trade
+from trading_system.backtest.shadow import SignalToPlay, play_out
 from trading_system.research.signals import CONTROL_SEED
-from trading_system.risk.entry_plan import InvalidEntryPlan, build_entry_plan
 from trading_system.storage.models import StrategySignalModel
 from trading_system.storage.repositories import (
     AuditRepository,
@@ -59,7 +56,6 @@ PASS_T = 2.0
 SECOND_LOOK_T = 2.5
 CONTROL_MAX_T = 2.0
 MAX_LOOKS = 2
-BAR = timedelta(minutes=15)
 
 
 Period = tuple[str, str]  # (model, prompt_version); "" where the answer carries none
@@ -204,50 +200,23 @@ def _shadow_pnl(
 ) -> tuple[list[tuple[str, float, pd.Timestamp]], int, int]:
     """(verdict, pnl, entry time) for each answered signal that has resolved; and how many have not,
     and how many had no bar to enter on."""
-    costs = BacktestConfig()
     answered = {k: e for k, e in sample.items() if e["final"] and not e["failed"]}
-    by_symbol: dict[str, list[str]] = {}
-    for signal_id, entry in answered.items():
-        by_symbol.setdefault(entry["symbol"], []).append(signal_id)
+    played = play_out(
+        [
+            SignalToPlay(signal_id, entry["symbol"], entry["closed_bar"], entry["verdict"])
+            for signal_id, entry in answered.items()
+        ],
+        bars,
+        settings,
+    )
     out: list[tuple[str, float, pd.Timestamp]] = []
-    unresolved = no_bars = 0
-    for symbol, ids in by_symbol.items():
-        first = min(answered[i]["closed_bar"] for i in ids) - timedelta(hours=2)
-        frame = bars.load([symbol], "15m", start=first.to_pydatetime()).get(symbol)
-        for signal_id in ids:
-            entry_time = answered[signal_id]["closed_bar"] + BAR
-            if frame is None or entry_time not in frame.index:
-                no_bars += 1
-                continue
-            price = Decimal(str(frame.loc[entry_time, "open"]))
-            try:
-                plan = build_entry_plan(
-                    price,
-                    limit_buffer_pct=Decimal(str(settings.entry_limit_buffer_pct)),
-                    stop_loss_pct=Decimal(str(settings.stop_loss_pct)),
-                    take_profit_pct=Decimal(str(settings.take_profit_pct)),
-                )
-            except InvalidEntryPlan:
-                no_bars += 1
-                continue
-            fill = min(plan.limit_price, price * (Decimal("1") + Decimal(str(costs.slippage_pct))))
-            shadow = simulate_shadow_trade(
-                symbol=symbol,
-                signal_id=signal_id,
-                verdict=answered[signal_id]["verdict"],
-                bars=frame,
-                entry_time=entry_time.to_pydatetime(),
-                entry_price=fill,
-                stop_loss=plan.stop_price,
-                take_profit=plan.take_profit_price,
-                slippage_pct=costs.slippage_pct,
-                fee_pct=costs.fee_pct_per_trade,
-            )
-            if shadow.exit_reason == "OPEN":
-                unresolved += 1
-                continue
-            out.append((answered[signal_id]["verdict"], shadow.pnl_pct, entry_time))
-    return out, unresolved, no_bars
+    unresolved = 0
+    for shadow in played.trades:
+        if shadow.exit_reason == "OPEN":  # this judge counts only trades that reached a level
+            unresolved += 1
+            continue
+        out.append((shadow.verdict, shadow.pnl_pct, pd.Timestamp(shadow.entry_time)))
+    return out, unresolved, played.no_bars
 
 
 def _edge(trades: list[tuple[str, float, pd.Timestamp]]) -> float:

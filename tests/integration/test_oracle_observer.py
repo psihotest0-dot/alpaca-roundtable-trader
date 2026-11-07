@@ -2,7 +2,7 @@
 the Oracle, and no order ever. Real cycle code, real SQLite, a fake Alpaca; the observation store is
 filled with bars that end on a cross-up, so the strategy really signals."""
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -20,11 +20,14 @@ from trading_system.data.universe import (
     observed_symbols,
     research_universe,
 )
-from trading_system.domain.enums import OracleVerdict
+from trading_system.domain.enums import OracleVerdict, SignalDirection
+from trading_system.domain.models import StrategySignal
+from trading_system.research.candidates import CANDIDATE_EVENT, CYCLE_EVENT
+from trading_system.strategy.base import BaseStrategy
 from trading_system.runtime.observe import OBSERVE_EVENT, ObservationCycle
 from trading_system.runtime.orchestrator import Orchestrator
 from trading_system.runtime.runner import Runner
-from trading_system.runtime.schedule import expected_bar_start
+from trading_system.runtime.schedule import bar_boundary, expected_bar_start
 from trading_system.storage.models import (
     BrokerOrderModel,
     OracleDecisionModel,
@@ -73,6 +76,7 @@ def make_cycle(make_settings: Any, observe_url: str, db_url: str, session_factor
         live_age_seconds: float = 0.0,
         settings: Settings | None = None,
         fill: bool = True,
+        candidates: tuple[Any, ...] = (),
     ) -> Setup:
         settings = settings or make_settings(watchlist="AAPL")
         store = open_observe_store(observe_url, db_url)
@@ -108,6 +112,7 @@ def make_cycle(make_settings: Any, observe_url: str, db_url: str, session_factor
             ).RUNTIME_STRATEGY,
             oracle=oracle,
             updater=updater,
+            candidates=candidates,
         )
         return Setup(cycle, broker, updates)
 
@@ -285,7 +290,10 @@ def test_the_runner_drives_it_like_the_live_loop(make_cycle: Any) -> None:
     oracle = ScriptedOracle(OracleVerdict.VETO)
     setup = make_cycle(oracle=oracle)
     waits: list[float] = []
-    runner = Runner(setup.cycle, setup.broker, now=lambda: NOW, wait=waits.append)
+    # The Runner looks for entries only 30 s after a quarter hour; NOW is the clock at import, which
+    # can fall in those 30 s (the test then failed about one run in thirty). Same quarter, safely later.
+    later = bar_boundary(NOW) + timedelta(seconds=45)
+    runner = Runner(setup.cycle, setup.broker, now=lambda: later, wait=waits.append)
 
     runner.tick()
 
@@ -381,3 +389,163 @@ def test_the_observer_refuses_to_start_when_there_is_nobody_to_ask(
         with patch("trading_system.cli.Settings", return_value=settings):
             assert main(["observe"]) == 1
         assert "nobody to ask" in capsys.readouterr().out
+
+
+# ------------------------------------------------- the strategy candidates, forward in time
+# (docs/strategy-research-plan.md, section 12.1; judged by research/candidates.py)
+
+
+class StubCandidate(BaseStrategy):
+    """A candidate that says what it is told to, or breaks."""
+
+    def __init__(self, name: str, signals: list[StrategySignal], error: Exception | None = None):
+        self.name, self._signals, self._error = name, signals, error
+
+    @property
+    def version(self) -> str:
+        return f"{self.name}-stub"
+
+    def generate_signals(self, data_15m: Any, data_1h: Any, eval_time: Any) -> list[StrategySignal]:
+        if self._error is not None:
+            raise self._error
+        return list(self._signals)
+
+
+def _stub_signal(strategy: str, symbol: str = "MSFT") -> StrategySignal:
+    return StrategySignal(
+        version=f"{strategy}-stub",
+        symbol=symbol,
+        timeframe="15m",
+        closed_bar_timestamp=expected_bar_start(NOW),
+        direction=SignalDirection.LONG,
+    )
+
+
+def _events(session_factory: Any, event: str) -> list[dict[str, Any]]:
+    return [
+        d
+        for _, d in AuditRepository(session_factory).events(
+            event,
+            datetime(2000, 1, 1, tzinfo=timezone.utc),
+            datetime(2100, 1, 1, tzinfo=timezone.utc),
+        )
+    ]
+
+
+def test_the_candidates_and_the_control_are_journalled_and_only_the_control_is_asked(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    oracle = ScriptedOracle(OracleVerdict.APPROVE)
+    name = "trend_cross_session"
+    setup = make_cycle(oracle=oracle, candidates=(StubCandidate(name, [_stub_signal(name)]),))
+
+    _run(setup)
+
+    assert (
+        len(oracle.requests) == 1
+    )  # the live strategy's signal; the candidate is not put to the model
+    journal = _events(session_factory, CANDIDATE_EVENT)
+    assert sorted((d["strategy"], d["symbol"]) for d in journal) == [
+        ("trend_cross", "MSFT"),  # the control: the live strategy over the same symbols and bars
+        (name, "MSFT"),
+    ]
+    assert {d["strategy"]: d["version"] for d in journal}[name] == f"{name}-stub"
+    ((_, cycle),) = [(0, d) for d in _events(session_factory, CYCLE_EVENT)]
+    assert cycle["errors"] == 0 and cycle["trend_cross"] == 1 and cycle[name] == 1
+    # the candidate's signal is not in the signals table the model's answers point at
+    assert _count(session_factory, StrategySignalModel) == 1
+    assert setup.broker.submitted == [] and _events(session_factory, "entries_cycle") == []
+
+
+def test_a_candidate_that_breaks_stops_neither_the_others_nor_the_oracle(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    oracle = ScriptedOracle(OracleVerdict.APPROVE)
+    broken = StubCandidate("trend_cross_session", [], error=RuntimeError("a bug"))
+    fine = StubCandidate("trend_cross_session_late", [_stub_signal("trend_cross_session_late")])
+    setup = make_cycle(oracle=oracle, candidates=(broken, fine))
+
+    report = _run(setup)
+
+    assert report.errors == 0 and len(oracle.requests) == 1
+    assert {d["strategy"] for d in _events(session_factory, CANDIDATE_EVENT)} == {
+        "trend_cross",
+        "trend_cross_session_late",
+    }
+    ((cycle),) = _events(session_factory, CYCLE_EVENT)
+    assert cycle["errors"] == 1 and cycle["trend_cross_session"] == -1
+
+
+def test_a_broken_journal_leaves_the_oracles_work_alone(make_cycle: Any) -> None:
+    oracle = ScriptedOracle(OracleVerdict.APPROVE)
+    setup = make_cycle(oracle=oracle, candidates=(StubCandidate("trend_cross_session", []),))
+    setup.cycle.audit_repo.record = lambda *a, **k: (_ for _ in ()).throw(  # type: ignore[union-attr,method-assign]
+        RuntimeError("the database is locked")
+    )
+
+    report = _run(setup)
+
+    assert report.errors == 0 and len(oracle.requests) == 1
+
+
+def test_without_candidates_nothing_is_journalled_for_them(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    setup = make_cycle(oracle=ScriptedOracle(OracleVerdict.APPROVE))
+
+    _run(setup)
+
+    assert _events(session_factory, CANDIDATE_EVENT) == []
+    assert _events(session_factory, CYCLE_EVENT) == []
+
+
+def test_a_bar_that_has_not_arrived_runs_no_candidate(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    setup = make_cycle(
+        oracle=ScriptedOracle(OracleVerdict.APPROVE),
+        candidates=(StubCandidate("trend_cross_session", [_stub_signal("trend_cross_session")]),),
+    )
+    later = expected_bar_start(NOW).replace(minute=0) + timedelta(hours=2)
+
+    report = setup.cycle.run_entries(NOW, later)
+
+    assert report.retry_later
+    assert _events(session_factory, CANDIDATE_EVENT) == []
+    assert _events(session_factory, CYCLE_EVENT) == []  # a pass that did not run is not a day run
+
+
+def test_the_real_candidates_run_on_the_observers_bars_without_an_error(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    from trading_system.research.candidates import CANDIDATES
+    from trading_system.strategy.registry import get_strategy
+
+    setup = make_cycle(
+        oracle=ScriptedOracle(OracleVerdict.APPROVE),
+        candidates=tuple(get_strategy(name) for name in CANDIDATES),
+    )
+
+    _run(setup)
+
+    ((cycle),) = _events(session_factory, CYCLE_EVENT)
+    assert cycle["errors"] == 0 and all(cycle[name] >= 0 for name in CANDIDATES)
+
+
+def test_the_orchestrator_gives_the_observer_the_two_candidates(
+    make_settings: Any, observe_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trading_system.research.candidates import CANDIDATES
+
+    settings = make_settings(
+        watchlist="AAPL,MSFT",
+        observe_database_url=observe_url,
+        oracle_enabled=True,
+        oracle_provider="backend",
+        oracle_backend_token="t" * 48,
+    )
+    monkeypatch.setattr("trading_system.broker.alpaca_broker.AlpacaBroker", lambda _s: object())
+
+    cycle = Orchestrator(settings).build_observation_cycle()
+
+    assert [c.name for c in cycle.candidates] == list(CANDIDATES)

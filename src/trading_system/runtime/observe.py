@@ -18,6 +18,11 @@ the observation store `var/observe.db`, brought up to date at the start of every
 the strategy sees what it would see live. The same store feeds the hours research.
 
 A signal's outcome is not looked at here; the judgement is a separate, written procedure.
+
+**The strategy candidates (docs/strategy-research-plan.md, section 12.1).** When given `candidates`, a
+pass also journals their signals over the same bars (and the live strategy's own, as the control)
+through `research/candidates.py`: they are NOT put to the Oracle (that would change the sample the
+model is judged on) and no order is possible. This step runs first and cannot stop the Oracle's work.
 """
 
 import logging
@@ -32,7 +37,9 @@ from trading_system.data.history import TIMEFRAMES, update_history
 from trading_system.data.live_price import UnusableLivePrice, check_live_price
 from trading_system.domain.models import StrategySignal, TradingState
 from trading_system.runtime.cycle import EntriesReport, TradingCycle
+from trading_system.research.candidates import record_pass
 from trading_system.storage.repositories import MarketBarRepository
+from trading_system.strategy.base import BaseStrategy
 from trading_system.strategy.config import StrategyConfig
 from trading_system.strategy.trend import filter_signals, generate_signals
 
@@ -60,6 +67,7 @@ class ObservationCycle(TradingCycle):
         oracle: Any,
         news: Any = None,
         updater: Callable[..., Any] = update_history,
+        candidates: Sequence[BaseStrategy] = (),
     ) -> None:
         super().__init__(
             settings=settings,
@@ -81,6 +89,7 @@ class ObservationCycle(TradingCycle):
         self.universe = list(universe)  # the bars kept up to date
         self.observed = list(observed)  # the symbols the Oracle is asked about
         self._updater = updater
+        self.candidates = list(candidates)  # run forward in time, never asked about, never traded
 
     # -- what the Runner calls ----------------------------------------------------------
 
@@ -133,6 +142,7 @@ class ObservationCycle(TradingCycle):
         logger.info(f"Observing {len(self.observed)} symbols: {len(signals)} signal(s).")
         report = EntriesReport(signals=len(signals))
         detail: dict[str, int] = {"symbols": len(bars_15m), "asked": 0, "no_price": 0}
+        detail.update(self._journal_candidates(signals, bars_15m, bars_1h, now, expected_bar_start))
         state = self.state_repo.get_state() or TradingState()
         for signal in signals:
             try:
@@ -143,6 +153,26 @@ class ObservationCycle(TradingCycle):
                 continue
             detail["asked" if asked else "no_price"] += 1
         return report, detail
+
+    def _journal_candidates(
+        self,
+        control: list[StrategySignal],
+        bars_15m: dict[str, pd.DataFrame],
+        bars_1h: dict[str, pd.DataFrame],
+        now: datetime,
+        bar_start: datetime,
+    ) -> dict[str, int]:
+        """The candidates' signals (and the control's) into the journal. Whatever goes wrong here is
+        logged and leaves the Oracle's work untouched."""
+        if not self.candidates or self.audit_repo is None:
+            return {}
+        try:
+            return record_pass(
+                self.audit_repo, self.candidates, control, bars_15m, bars_1h, now, bar_start
+            )
+        except Exception as e:
+            logger.error(f"Could not journal the candidates' signals: {e}")
+            return {"candidate_errors": 1}
 
     def _load(self, now: datetime) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
         """The stored bars of the observed symbols, cut and aligned as the live loop does."""
