@@ -10,7 +10,9 @@
 # which see every call, also those that never came back). The bot's view of the same calls is on the
 # dashboard (alpaca_oracle_answers_total) for comparison, with no alert of its own.
 #
-# Like the backend's rules these only show state at http://127.0.0.1:9090/alerts; nothing is sent.
+# Like the backend's rules these are DELIVERED since 2026-11-08: the backend's Alertmanager sends `critical` and
+# `warning` alerts to the owner's Telegram chat (`info` never), and the state is a row at
+# http://127.0.0.1:9090/alerts. Critical here: AlpacaLoopStalled, AlpacaUnprotectedPositions.
 # Tests: alpaca_alerts_test.yml (run with promtool, see the header of that file).
 groups:
   - name: alpaca-trader
