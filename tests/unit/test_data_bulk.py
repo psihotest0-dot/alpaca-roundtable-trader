@@ -107,6 +107,19 @@ def test_load_universe_makes_two_requests_whatever_the_number_of_symbols(data: A
     assert [str(r.timeframe) for r in client.requests] == ["15Min", "1Hour"]
 
 
+def test_load_universe_logs_where_the_time_of_a_pass_goes(
+    data: AlpacaData, caplog: pytest.LogCaptureFixture
+) -> None:
+    data.client = _client(["AAPL", "MSFT"])
+
+    with caplog.at_level("INFO", logger="trading_system.data.alpaca_data"):
+        data.load_universe(["AAPL", "MSFT"], datetime.now(timezone.utc), 30, 90)
+
+    (line,) = [r.getMessage() for r in caplog.records if r.getMessage().startswith("Market data")]
+    assert line.startswith("Market data fetched: 15m ") and ", 1h " in line
+    assert line.endswith("(2 symbols).") and " rows in " in line and " s, " in line
+
+
 def test_load_universe_skips_a_symbol_that_lacks_one_timeframe(data: AlpacaData) -> None:
     bars_15m, bars_1h = make_bars()
     data.client = FakeStockClient({"AAPL": bars_15m, "MSFT": bars_15m}, {"AAPL": bars_1h})

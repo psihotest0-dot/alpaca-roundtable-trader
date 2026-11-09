@@ -1,4 +1,5 @@
 import logging
+import time
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional, Sequence
@@ -141,11 +142,23 @@ class AlpacaData:
         aligned, ready for strategy.trend.generate_signals. Two requests in total.
 
         Symbols that lack bars on either timeframe are skipped (logged, not fatal)."""
+        started = time.perf_counter()
         bars_15m = self.fetch_bars_bulk(
             symbols, FIFTEEN_MINUTES, now - timedelta(days=lookback_days), now
         )
+        between = time.perf_counter()
         bars_1h = self.fetch_bars_bulk(
             symbols, ONE_HOUR, now - timedelta(days=htf_lookback_days), now
+        )
+        # Where the time of a pass goes (2026-11-10: a pass spent 44 to 123 s here in market hours and
+        # 21 s at night, 78 % of it on the hourly request): one line per pass, so it can be read later.
+        logger.info(
+            "Market data fetched: 15m %d rows in %.1f s, 1h %d rows in %.1f s (%d symbols).",
+            sum(len(df) for df in bars_15m.values()),
+            between - started,
+            sum(len(df) for df in bars_1h.values()),
+            time.perf_counter() - between,
+            len(symbols),
         )
 
         out_15m: dict[str, pd.DataFrame] = {}
