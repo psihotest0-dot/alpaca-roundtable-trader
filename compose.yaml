@@ -63,6 +63,12 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader
     restart: unless-stopped
+    # Memory ceilings on every service (measured 2026-11-08; the Docker VM is capped at 6 GB in
+    # .wslconfig). A runaway container is killed and restarted by `restart: unless-stopped`
+    # instead of starving the others. memswap_limit = mem_limit: no swap, no thrashing.
+    # If one is OOM-killed (`docker inspect -f '{{.State.OOMKilled}}' <name>`), raise its limit.
+    mem_limit: 1g          # steady ~100 MB
+    memswap_limit: 1g
     logging: *logging
     stop_grace_period: 30s
     # The Oracle settings (and the backend's token) reach THIS service only: data, news and
@@ -101,6 +107,8 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-data
     restart: unless-stopped
+    mem_limit: 512m        # idle ~5 MB; spikes briefly while fetching bars
+    memswap_limit: 512m
     logging: *logging
     environment: *alpaca-env
     volumes:
@@ -131,6 +139,8 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-news
     restart: unless-stopped
+    mem_limit: 512m        # idle ~20 MB
+    memswap_limit: 512m
     logging: *logging
     environment: *alpaca-env
     volumes:
@@ -162,6 +172,8 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-observe
     restart: unless-stopped
+    mem_limit: 1g          # steady ~190 MB, peak 340 MB
+    memswap_limit: 1g
     logging: *logging
     stop_grace_period: 30s
     environment:
@@ -194,6 +206,8 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-forward
     restart: unless-stopped
+    mem_limit: 512m        # steady ~90 MB
+    memswap_limit: 512m
     logging: *logging
     environment: *alpaca-env
     volumes:
@@ -223,6 +237,8 @@ services:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-backup
     restart: unless-stopped
+    mem_limit: 512m        # steady ~20 MB
+    memswap_limit: 512m
     logging: *logging
     environment:
       DATABASE_URL: sqlite:///./var/trading.db
