@@ -82,7 +82,7 @@ class Orchestrator:
         from trading_system.data.alpaca_data import AlpacaData
         from trading_system.data.universe import observation_universe, observed_symbols
         from trading_system.oracle import create_oracle
-        from trading_system.research.candidates import CANDIDATES
+        from trading_system.research.candidates import RECORDED
         from trading_system.runtime.observe import ObservationCycle
         from trading_system.storage.repositories import (
             AuditRepository,
@@ -108,7 +108,7 @@ class Orchestrator:
             strategy_config=RUNTIME_STRATEGY,
             oracle=create_oracle(self.settings, OracleDecisionRepository(self.session_factory)),
             news=self._open_news(),
-            candidates=[get_strategy(name) for name in CANDIDATES],
+            candidates=[get_strategy(name) for name in RECORDED],
         )
 
     def run_observation(self, handle_signals: bool = True) -> None:

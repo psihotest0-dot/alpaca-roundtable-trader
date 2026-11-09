@@ -376,4 +376,5 @@ def test_the_command_prints_both_judges(
     assert "The candidates run forward in time" in out
     assert "The ATR exit candidate (trend_cross_atr_exit: stop 6 ATR, target 7.5 ATR)" in out
     assert "3 mature control signals, 3 paired trades" in out
-    assert out.count("Nothing is computed below the minimum") == 3
+    # three candidates of 12.1 and section 14, and the ATR block
+    assert out.count("Nothing is computed below the minimum") == 4

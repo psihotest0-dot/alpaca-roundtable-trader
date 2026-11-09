@@ -25,6 +25,7 @@ DECILE = 0.10
 MOMENTUM_WINDOW = 231  # 252 trading days back to 21 back: a year without the last month
 MOMENTUM_SKIP = 21
 REVERSAL_WINDOW = 5  # one week
+HIGH_WINDOW = 252  # a year of trading days, today's close included (variant 20, plan section 14)
 CONTROL_SEED = 20261105
 
 
@@ -37,10 +38,10 @@ class Signal:
     control: bool = False  # a placebo that must show nothing; not counted as a trial
 
 
-def _rank(values: pd.DataFrame) -> pd.DataFrame:
+def _rank(values: pd.DataFrame, method: str = "average") -> pd.DataFrame:
     """Each stock's place among the stocks of its day, 0 to 1, missing where it has no value or
     the day has too few stocks."""
-    ranks = values.rank(axis=1, pct=True)
+    ranks = values.rank(axis=1, pct=True, method=method)
     thin = values.notna().sum(axis=1) < MIN_RANKED
     return ranks.where(~thin, np.nan, axis=0)
 
@@ -59,6 +60,20 @@ def reversal_1w(panel: Panel) -> pd.DataFrame:
     """The tenth of the stocks that fell most over the last five trading days."""
     week = panel.log_return.rolling(REVERSAL_WINDOW, min_periods=REVERSAL_WINDOW).sum()
     return _rank(week) <= DECILE
+
+
+def high_52w(panel: Panel) -> pd.DataFrame:
+    """The tenth of the stocks whose close is nearest to their highest close of the last 252 trading
+    days (today included): close / highest close, 1.0 at a new high. Variant 20 of the research plan
+    (section 14), run forward in time only, and therefore NOT in `SIGNALS` below: nothing here offers
+    it to `measure-signals`, which would look at it on the past. A stock needs all 252 days. Ties
+    (several stocks at a new high on a broad rally) are broken by symbol, so the pick is always the
+    same tenth, never a larger group."""
+    high = panel.close.rolling(HIGH_WINDOW, min_periods=HIGH_WINDOW).max()
+    nearness = panel.close / high
+    ordered = nearness[sorted(nearness.columns)]
+    on = _rank(ordered, method="first") > 1 - DECILE
+    return on[list(nearness.columns)]
 
 
 def random_tenth(panel: Panel) -> pd.DataFrame:

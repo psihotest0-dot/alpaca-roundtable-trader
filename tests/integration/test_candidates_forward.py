@@ -167,6 +167,14 @@ def test_the_numbers_in_the_code_are_the_ones_registered_before_the_first_signal
     assert (module.DIFFERENCE_T, module.DAILY_T, module.MAX_LOOKS) == (1.0, 1.5, 2)
     assert CANDIDATES == ("trend_cross_session", "trend_cross_session_late")
     assert CONTROL == "trend_cross"
+    # Section 14 (variant 19): one candidate more, with its own bar (three are looked at in all).
+    assert module.NEW_CANDIDATES == ("dip_in_uptrend",)
+    assert module.RECORDED == CANDIDATES + module.NEW_CANDIDATES
+    assert module.LOOK_T == {
+        "trend_cross_session": (2.2, 2.5),
+        "trend_cross_session_late": (2.2, 2.5),
+        "dip_in_uptrend": (2.4, 2.7),
+    }
 
 
 # --------------------------------------------------------------------------- no peeking
@@ -206,6 +214,54 @@ def test_each_candidate_is_judged_on_its_own_count(world: World) -> None:
 
     assert _result(j, LATE).detail is not None
     assert _result(j, SESSION).verdict == "no verdict" and _result(j, SESSION).trades == 20
+
+
+def test_the_added_candidate_counts_its_trading_days_from_its_own_first_pass(world: World) -> None:
+    DIP = "dip_in_uptrend"
+    world.fill(DIP)  # enough trades
+    world.run_days()  # forty days of passes that did not run it (the marker has no name of it)
+    for day in range(10):  # ...and ten days of passes that did
+        world.audit.record(
+            CYCLE_EVENT,
+            {"bar_start": "x", "errors": 0, DIP: 1},
+            when=BASE + timedelta(days=DAYS + day),
+        )
+
+    r = _result(world.judge(), DIP)
+
+    assert r.verdict == "no verdict" and r.detail is None
+    assert "over 10 trading days" in r.reason  # not 50: the days before it was run do not count
+    assert world.looks() == []
+    # the pair of 12.1 keeps counting every day of passes, as registered
+    assert _result(world.judge(), LATE).verdict == "no verdict"
+    assert f"over {DAYS + 10} trading days" in _result(world.judge(), LATE).reason
+
+
+def test_the_added_candidate_is_held_to_t_2_4_and_the_pair_to_2_2(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    DIP = "dip_in_uptrend"
+    for candidate in (LATE, DIP):
+        world.fill(candidate)
+    for day in range(DAYS):  # passes that ran the added candidate on all forty-five days
+        world.audit.record(
+            CYCLE_EVENT, {"bar_start": "x", "errors": 0, DIP: 1}, when=BASE + timedelta(days=day)
+        )
+    bars: list[float] = []
+    real = module._verdict
+
+    def spy(detail: Any, bar: float) -> tuple[str, str]:
+        bars.append(bar)
+        return real(detail, bar)
+
+    monkeypatch.setattr(module, "_verdict", spy)
+
+    j = world.judge()
+
+    assert _result(j, LATE).detail is not None and _result(j, DIP).detail is not None
+    # one look each, first look: the pair at 2.2 (section 12.1), the added one at 2.4 (section 14)
+    assert sorted(bars) == [2.2, 2.4]
+    assert {d["candidate"]: d["look"] for d in world.looks()} == {LATE: 1, DIP: 1}
 
 
 # ------------------------------------------------------------------------------ the verdict

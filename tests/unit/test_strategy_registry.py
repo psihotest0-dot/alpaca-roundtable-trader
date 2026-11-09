@@ -22,6 +22,7 @@ def test_the_live_one_the_two_candidates_the_two_originals_and_their_variants_ar
         "trend_cross",
         "trend_cross_session",
         "trend_cross_session_late",
+        "dip_in_uptrend",
         "ema_crossover",
         "strict_ema_crossover",
         "ema_crossover_5pct",

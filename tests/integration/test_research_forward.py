@@ -20,6 +20,7 @@ from trading_system.research.forward import (
     EVENT_TYPE,
     FORWARD_START,
     MIN_ELAPSED_DAYS,
+    SIGNAL_START,
     SIGNALS,
     close_time,
     evaluate,
@@ -135,15 +136,73 @@ def test_one_evening_one_record_per_signal_and_a_second_call_adds_nothing(
     first = record_picks(audit, store, _evening(friday))
     again = record_picks(audit, store, _evening(friday, 120))
 
-    assert first.day == friday and first.recorded == list(SIGNALS) and not first.skipped
-    assert again.recorded == [] and again.already == list(SIGNALS)
+    # Friday 2026-11-06 is before the start of high_52w (2026-11-09): it is not recorded for it.
+    older = [s for s in SIGNALS if SIGNAL_START[s] <= friday]
+    assert older == ["momentum_12_1", "random_tenth"]
+    assert first.day == friday and first.recorded == older and not first.skipped
+    assert again.recorded == [] and again.already == older
     events = audit.events(
         EVENT_TYPE, datetime(2026, 11, 1, tzinfo=UTC), datetime(2026, 12, 1, tzinfo=UTC)
     )
-    assert len(events) == len(SIGNALS)
+    assert len(events) == len(older)
     details = {d["signal"]: d for _, d in events}["momentum_12_1"]
     assert details["day"] == "2026-11-06" and len(details["symbols"]) == 6
     assert details["market_known"] is True and details["stocks"] == 60
+
+
+def test_high_52w_is_recorded_from_its_own_start_and_the_report_shows_what_it_shares(
+    store: MarketBarRepository, audit: AuditRepository
+) -> None:
+    returns = _returns("2026-11-10", planted=0.003)
+    others = [c for c in returns.columns[6:] if c != "SPY"]
+    returns[others] -= 0.0005  # none of the rest is near its high
+    _fill(store, returns)
+    monday, tuesday = date(2026, 11, 9), date(2026, 11, 10)
+
+    first = record_picks(audit, store, _evening(monday))
+    second = record_picks(audit, store, _evening(tuesday))
+
+    assert SIGNAL_START["high_52w"] == monday
+    assert first.recorded == list(SIGNALS) and second.recorded == list(SIGNALS)
+    events = audit.events(
+        EVENT_TYPE, datetime(2026, 11, 1, tzinfo=UTC), datetime(2026, 12, 1, tzinfo=UTC)
+    )
+    picks = {(d["signal"], d["day"]): d["symbols"] for _, d in events}
+    assert picks[("high_52w", "2026-11-09")] == sorted(returns.columns[:6])
+    assert picks[("high_52w", "2026-11-10")] == sorted(returns.columns[:6])
+
+    report = evaluate(audit, store, _evening(tuesday, 60))
+
+    assert report.recorded_days["high_52w"] == 2
+    # one variant only: 20 days, no filter
+    assert [(v.regime_filter, v.horizon) for v in report.variants if v.signal == "high_52w"] == [
+        (None, 20)
+    ]
+    assert report.overlap == (2, 1.0)  # the six planted risers are also the weekly signal's six
+    assert "high_52w picks that momentum_12_1 also picked: 100%" in format_report(report)
+
+
+def test_the_clock_of_high_52w_counts_from_its_own_start_not_from_the_older_two(
+    store: MarketBarRepository, audit: AuditRepository, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from trading_system.research import forward as forward_module
+
+    # The matured-days rule is set aside so that only the elapsed-days rule decides: sixty trading
+    # days since 2026-11-06 is the older signals' minimum, and one day less for high_52w, which
+    # started on 2026-11-09 (the next trading day).
+    monkeypatch.setattr(forward_module, "MIN_MATURED_DAYS", 1)
+    days = list(pd.bdate_range("2026-11-06", periods=MIN_ELAPSED_DAYS))
+    _fill(store, _returns(str(days[-1].date()), planted=0.003))
+    for day in days:
+        record_picks(audit, store, _evening(day.date()))
+
+    report = evaluate(audit, store, _evening(days[-1].date(), 60))
+
+    verdict = {(v.signal, v.horizon): v.verdict for v in report.variants if v.regime_filter is None}
+    assert report.elapsed_days == MIN_ELAPSED_DAYS
+    assert verdict[("momentum_12_1", 10)] in ("pass", "no pass")  # its sixty days are there
+    assert verdict[("high_52w", 20)] == "too early"  # its own are fifty-nine
+    assert report.recorded_days["high_52w"] == report.recorded_days["momentum_12_1"] - 1
 
 
 def test_nothing_is_recorded_before_the_days_bar_is_final(

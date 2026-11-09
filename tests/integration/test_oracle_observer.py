@@ -532,10 +532,10 @@ def test_the_real_candidates_run_on_the_observers_bars_without_an_error(
     assert cycle["errors"] == 0 and all(cycle[name] >= 0 for name in CANDIDATES)
 
 
-def test_the_orchestrator_gives_the_observer_the_two_candidates(
+def test_the_orchestrator_gives_the_observer_every_recorded_candidate(
     make_settings: Any, observe_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from trading_system.research.candidates import CANDIDATES
+    from trading_system.research.candidates import RECORDED
 
     settings = make_settings(
         watchlist="AAPL,MSFT",
@@ -548,7 +548,9 @@ def test_the_orchestrator_gives_the_observer_the_two_candidates(
 
     cycle = Orchestrator(settings).build_observation_cycle()
 
-    assert [c.name for c in cycle.candidates] == list(CANDIDATES)
+    assert [c.name for c in cycle.candidates] == list(RECORDED)
+    # The pair of section 12.1 and the one added by section 14, in this order.
+    assert list(RECORDED) == ["trend_cross_session", "trend_cross_session_late", "dip_in_uptrend"]
 
 
 def test_the_candidates_are_counted_for_grafana(make_cycle: Any) -> None:

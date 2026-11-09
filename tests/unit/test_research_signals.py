@@ -7,8 +7,10 @@ import pytest
 from tests.fixtures.research import frames_from_returns, noise_returns
 from trading_system.research.panel import Panel, build_panel
 from trading_system.research.signals import (
+    HIGH_WINDOW,
     MIN_RANKED,
     SIGNALS,
+    high_52w,
     momentum_12_1,
     random_tenth,
     reversal_1w,
@@ -62,6 +64,76 @@ def test_a_day_with_too_few_stocks_gives_no_signal_at_all() -> None:
 
     assert not momentum_12_1(panel).to_numpy().any()
     assert not reversal_1w(panel).to_numpy().any()
+
+
+def test_high_52w_picks_the_tenth_nearest_to_their_yearly_high() -> None:
+    returns = noise_returns(days=400, stocks=60, seed=2, vol=0.002)
+    leaders = list(returns.columns[:6])
+    others = [c for c in returns.columns[6:] if c != "SPY"]
+    returns.loc[returns.index[-100:], leaders] += 0.004  # at a new high on the last day
+    returns.loc[returns.index[-200:], others] -= 0.001  # none of the rest is near a high
+
+    on = high_52w(_panel(returns))
+
+    last = on.iloc[-1]
+    assert set(last[last].index) == set(leaders)
+
+
+def test_high_52w_takes_exactly_a_tenth_even_when_everybody_is_at_a_new_high() -> None:
+    """A broad rally puts many stocks at a close/high of exactly 1.0; ties go by symbol, so the pick
+    stays the same tenth and never becomes a larger group."""
+    returns = noise_returns(days=400, stocks=60, seed=2, vol=0.0)
+    returns += 0.001  # every stock rises every day: all at a new high on every day
+
+    on = high_52w(_panel(returns))
+
+    last = on.iloc[-1]
+    picked = sorted(last[last].index)
+    assert len(picked) == 6
+    assert picked == sorted(c for c in returns.columns if c != "SPY")[-6:]
+    assert high_52w(_panel(returns)).equals(on)  # and the same again
+
+
+def test_high_52w_looks_only_at_the_past() -> None:
+    returns = noise_returns(days=400, stocks=60, seed=5, vol=0.01)
+    cut = returns.index[-30]
+    known = high_52w(_panel(returns)).loc[:cut]
+
+    changed = returns.copy()
+    changed.loc[changed.index > cut] = np.random.default_rng(1).normal(
+        0.1, 0.2, changed.loc[changed.index > cut].shape
+    )
+
+    assert high_52w(_panel(changed)).loc[:cut].equals(known)
+
+
+def test_high_52w_measures_against_the_highest_close_not_the_average_one() -> None:
+    """A stock that doubled and has since fallen back is far from its high even though it is still
+    above its yearly average; the ones that stood still are nearer to theirs."""
+    returns = noise_returns(days=400, stocks=60, seed=2, vol=0.001)
+    fallen = list(returns.columns[:6])
+    returns.loc[returns.index[-252:-52], fallen] += 0.005  # up about 2.1 times
+    returns.loc[returns.index[-52:], fallen] -= 0.003  # and back down about 14 %
+
+    on = high_52w(_panel(returns))
+
+    last = on.iloc[-1]
+    assert last.sum() == 6
+    assert not set(last[last].index) & set(fallen)
+
+
+def test_high_52w_needs_a_whole_year_of_days_for_a_stock() -> None:
+    assert HIGH_WINDOW == 252  # a year of trading days, as registered
+    short = _panel(noise_returns(days=251, stocks=60, seed=8))
+    enough = _panel(noise_returns(days=252, stocks=60, seed=8))
+
+    assert not high_52w(short).to_numpy().any()
+    assert high_52w(enough).iloc[-1].sum() == 6
+
+
+def test_high_52w_runs_forward_only_so_the_past_measurement_does_not_offer_it() -> None:
+    # Variant 20 is not looked at on history (plan section 14): `measure-signals` lists SIGNALS.
+    assert "high_52w" not in SIGNALS
 
 
 def test_the_control_takes_about_a_tenth_and_is_the_same_every_time() -> None:

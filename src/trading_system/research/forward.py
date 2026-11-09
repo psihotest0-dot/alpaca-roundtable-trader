@@ -39,6 +39,7 @@ from trading_system.research.panel import Panel, build_panel, frames_from_stored
 from trading_system.research.signals import (
     CONTROL_SEED,
     DECILE,
+    high_52w,
     momentum_12_1,
 )
 from trading_system.storage.repositories import AuditRepository, MarketBarRepository
@@ -54,9 +55,23 @@ FORWARD_START = date(2026, 11, 6)
 # with and without "SPY above its 200-day average" (read from the day's own record). These are the
 # six variants of section 9 that showed something on the development part, so no new variant is added
 # to the count; the placebo does not count.
-SIGNALS = ("momentum_12_1", "random_tenth")
+SIGNALS = ("momentum_12_1", "random_tenth", "high_52w")
 REGIME_FILTERS: tuple[Optional[str], ...] = (None, "spy200")
 HORIZONS = (10, 15, 20)
+
+# Variant 20 (plan section 14, registered 2026-11-09 before any code): the 52-week-high signal, ONE
+# variant: 20 days, no filter. It has its own start (the first close it could be recorded at after it
+# was built); the clock of its minimum counts from there, and a day it missed stays missed.
+SIGNAL_START: dict[str, date] = {
+    "momentum_12_1": FORWARD_START,
+    "random_tenth": FORWARD_START,
+    "high_52w": date(2026, 11, 9),
+}
+SIGNAL_VARIANTS: dict[str, tuple[tuple[Optional[str], ...], tuple[int, ...]]] = {
+    "momentum_12_1": (REGIME_FILTERS, HORIZONS),
+    "random_tenth": (REGIME_FILTERS, HORIZONS),
+    "high_52w": ((None,), (20,)),
+}
 
 # Before this much time there is no verdict, whatever the numbers say.
 MIN_ELAPSED_DAYS = (
@@ -125,6 +140,9 @@ def picks_on(panel: Panel, signal: str, day: date) -> list[str]:
     if signal == "momentum_12_1":
         row = momentum_12_1(panel).loc[stamp]
         return sorted(str(s) for s in row.index[row.to_numpy(dtype=bool)])
+    if signal == "high_52w":
+        row = high_52w(panel).loc[stamp]
+        return sorted(str(s) for s in row.index[row.to_numpy(dtype=bool)])
     if signal == "random_tenth":
         return sorted(random_tenth_on(day, [str(s) for s in has_price.index[has_price]]))
     raise ValueError(f"unknown forward signal {signal!r}")
@@ -181,6 +199,8 @@ def record_picks(audit: AuditRepository, repo: MarketBarRepository, now: datetim
     market_up = bool(panel.market_up.loc[stamp])
     market_known = bool(panel.market_known.loc[stamp])
     for signal in SIGNALS:
+        if day < SIGNAL_START[signal]:
+            continue
         if (signal, day.isoformat()) in done:
             result.already.append(signal)
             continue
@@ -226,6 +246,9 @@ class ForwardReport:
     late: int  # records that came after the entry open (kept, not counted)
     missed_days: int  # trading days since the start with no record at all
     variants: tuple[Variant, ...]
+    # Descriptive only: on the days both were validly recorded, the days and the mean share of
+    # `high_52w`'s picks that `momentum_12_1` also picked (how much new information the second brings).
+    overlap: Optional[tuple[int, float]] = None
 
 
 def _valid_picks(
@@ -240,7 +263,7 @@ def _valid_picks(
         if signal not in chosen:
             continue
         day = date.fromisoformat(day_text)
-        if day < FORWARD_START or day in chosen[signal]:
+        if day < SIGNAL_START[signal] or day in chosen[signal]:
             continue
         following = next((d for d in dates if d > day), None)
         deadline = open_time(following if following is not None else next_weekday(day))
@@ -271,16 +294,26 @@ def evaluate(audit: AuditRepository, repo: MarketBarRepository, now: datetime) -
     since = [t for t in panel.dates if t.date() >= FORWARD_START]
     complete = [t for t in since if close_time(t.date()) + SETTLE <= now]
     elapsed = len(complete)
+    # Each signal's clock starts at its own start (the older two share FORWARD_START).
+    elapsed_of = {s: len([t for t in complete if t.date() >= SIGNAL_START[s]]) for s in SIGNALS}
     any_record = {day for per_signal in picks.values() for day in per_signal}
     missed = len([t for t in complete if t.date() not in any_record])
 
     variants: list[Variant] = []
     for signal in SIGNALS:
-        for regime in REGIME_FILTERS:
+        regimes, horizons = SIGNAL_VARIANTS[signal]
+        for regime in regimes:
             on = _on_frame(panel, picks[signal], regime)
-            for horizon in HORIZONS:
+            for horizon in horizons:
                 m = measure(panel, on, signal=signal, horizon=horizon)
-                variants.append(Variant(signal, regime, horizon, m, _verdict(signal, m, elapsed)))
+                variants.append(
+                    Variant(signal, regime, horizon, m, _verdict(signal, m, elapsed_of[signal]))
+                )
+    shared = [
+        len(set(new["symbols"]) & set(picks["momentum_12_1"][day]["symbols"])) / len(new["symbols"])
+        for day, new in picks["high_52w"].items()
+        if day in picks["momentum_12_1"] and new["symbols"]
+    ]
     return ForwardReport(
         start=FORWARD_START,
         through=panel.dates[-1].date() if len(panel.dates) else None,
@@ -289,6 +322,7 @@ def evaluate(audit: AuditRepository, repo: MarketBarRepository, now: datetime) -
         late=late,
         missed_days=missed,
         variants=tuple(variants),
+        overlap=(len(shared), float(np.mean(shared))) if shared else None,
     )
 
 
@@ -333,6 +367,12 @@ def format_report(report: ForwardReport) -> str:
             f"  {v.label}: {m.vs_universe.dates} matured day(s), vs all stocks "
             f"{_pct(m.vs_universe.mean)} (t {_t(m.vs_universe.t)}), net {_pct(m.net.mean)} "
             f"(t {_t(m.net.t)}), vs SPY {_pct(m.vs_market.mean)}  [{v.verdict}]"
+        )
+    if report.overlap is not None:
+        days, share = report.overlap
+        lines.append(
+            f"  high_52w picks that momentum_12_1 also picked: {share * 100:.0f}% on average over "
+            f"{days} day(s) (descriptive; the more they share, the less new the second one is)"
         )
     lines.append(
         "  A pass means the same direction (net above zero, net t >= "

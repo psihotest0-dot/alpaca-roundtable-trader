@@ -182,9 +182,9 @@ def create_parser() -> argparse.ArgumentParser:
     # judge-candidates command
     subparsers.add_parser(
         "judge-candidates",
-        help="Judges the two strategy candidates the observer runs forward in time "
-        "(docs/strategy-research-plan.md, section 12.1). Shows counts only until the minimum is "
-        "reached; at most two looks.",
+        help="Judges the strategy candidates the observer runs forward in time "
+        "(docs/strategy-research-plan.md, sections 12.1 and 14). Shows counts only until the "
+        "minimum is reached; at most two looks.",
     )
 
     # measure-intraday command (the research modules are imported only when it runs)

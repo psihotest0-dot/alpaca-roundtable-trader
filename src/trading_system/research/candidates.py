@@ -48,13 +48,24 @@ CYCLE_EVENT = "candidate_cycle"
 JUDGEMENT_EVENT = "candidate_judgement"
 
 CONTROL = "trend_cross"  # the live strategy, over the same symbols and bars
-CANDIDATES = ("trend_cross_session", "trend_cross_session_late")
+CANDIDATES = ("trend_cross_session", "trend_cross_session_late")  # section 12.1
+# Added on 2026-11-09 (section 14, variant 19), registered before any code: its own bar, because the
+# family of candidates the observer looks at is three, and its own count of trading days, from the
+# first pass that ran it. The pair above keeps its rules unchanged.
+NEW_CANDIDATES = ("dip_in_uptrend",)
+RECORDED = CANDIDATES + NEW_CANDIDATES  # what the observer runs and the judge looks at
 
 MIN_TRADES = 150  # mature trades of the candidate for the first look; double for the second
 MIN_RUN_DAYS = 40  # trading days on which the candidates were run
 MATURITY = timedelta(days=14)  # a signal counts once its entry is this old
 FIRST_LOOK_T = 2.2  # 2.0, a little higher because two candidates are looked at
 SECOND_LOOK_T = 2.5
+# (first look, second look) per candidate: 2.4 and 2.7 for the one added in section 14, because
+# three candidates are looked at in all (the ATR exit candidate has the same bar).
+LOOK_T = {
+    **{name: (FIRST_LOOK_T, SECOND_LOOK_T) for name in CANDIDATES},
+    "dip_in_uptrend": (2.4, 2.7),
+}
 DIFFERENCE_T = 1.0  # weak on purpose: the groups overlap, which makes Welch conservative
 DAILY_T = 1.5
 MAX_LOOKS = 2
@@ -142,11 +153,17 @@ def journalled_signals(audit: AuditRepository, now: datetime) -> dict[str, list[
     return {strategy: list(found.values()) for strategy, found in out.items()}
 
 
-def run_days(audit: AuditRepository, now: datetime) -> tuple[int, int]:
-    """(trading days on which the candidates were run, passes in which a candidate broke)."""
+def run_days(
+    audit: AuditRepository, now: datetime, candidate: Optional[str] = None
+) -> tuple[int, int]:
+    """(trading days on which the candidates were run, passes in which a candidate broke). With a
+    `candidate`, only the passes that ran it count: the cycle event carries the name of every
+    strategy it ran, so a candidate added later counts its days from its own first pass."""
     days: set[Any] = set()
     broken = 0
     for when, details in audit.events(CYCLE_EVENT, EPOCH, now + timedelta(days=1)):
+        if candidate is not None and candidate not in details:
+            continue
         days.add(when.astimezone(MARKET_TZ).date())
         broken += int(details.get("errors", 0) > 0)
     return len(days), broken
@@ -285,8 +302,10 @@ def judge_candidates(
             played[name] = _trades(mature.get(name, []), bars, settings)
         return played[name]
 
-    for name in CANDIDATES:
+    for name in RECORDED:
         trades, signals = play(name)
+        own_days = days if name in CANDIDATES else run_days(audit, now, name)[0]
+        first_t, second_t = LOOK_T[name]
         taken = [
             d
             for _, d in audit.events(JUDGEMENT_EVENT, EPOCH, now + timedelta(days=1))
@@ -306,18 +325,18 @@ def judge_candidates(
         # real signal rate the first look already has several hundred, and without this the second look
         # could be taken at once on the same sample.
         need = MIN_TRADES if looks == 0 else 2 * max(MIN_TRADES, *(int(d["trades"]) for d in taken))
-        if len(trades) < need or days < MIN_RUN_DAYS:
+        if len(trades) < need or own_days < MIN_RUN_DAYS:
             results.append(
                 said(
                     "no verdict",
-                    f"not enough yet: {len(trades)} mature trades (need {need}) over {days} "
+                    f"not enough yet: {len(trades)} mature trades (need {need}) over {own_days} "
                     f"trading days (need {MIN_RUN_DAYS}). Nothing is computed below the minimum.",
                 )
             )
             continue
         control, _ = play(CONTROL)
         detail = _detail(trades, control)
-        verdict, reason = _verdict(detail, FIRST_LOOK_T if looks == 0 else SECOND_LOOK_T)
+        verdict, reason = _verdict(detail, first_t if looks == 0 else second_t)
         audit.record(
             JUDGEMENT_EVENT,
             {
