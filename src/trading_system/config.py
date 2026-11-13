@@ -50,7 +50,7 @@ class Settings(BaseSettings):
     timeframe_minutes: int = Field(15, gt=0)
     htf_timeframe_minutes: int = Field(60, gt=0)
     lookback_days: int = Field(30, gt=0)
-    htf_lookback_days: int = Field(90, gt=0)
+    htf_lookback_days: int = Field(30, gt=0)  # was 90; same signals, a third of the fetch time
 
     position_size_pct: float = Field(0.04, ge=0.0, le=1.0)
     max_open_positions: int = Field(5, gt=0)
