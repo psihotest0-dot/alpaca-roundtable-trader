@@ -131,3 +131,55 @@ def test_the_strategy_sees_the_live_window_and_nothing_from_the_future(
     late_when, late_15m, _ = seen[-1]
     assert late_15m.index.min() > frames_15m["AAA"]["timestamp"].iloc[0]
     assert late_when - late_15m.index.min() <= span_15m
+
+
+def test_a_strategy_with_a_long_hourly_indicator_is_shown_enough_hourly_history(
+    settings: Settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The live loop's hourly window is 30 days (about 150 bars), but the ported strategies need
+    200 hourly bars for their EMA 200: with the setting alone they gave no signal and no error.
+    The backtest shows the larger of the setting and `htf_history_days`."""
+    assert settings.htf_lookback_days == 30
+    seen: list[int] = []
+
+    def spy(self: Any, data_15m: dict[str, Any], data_1h: dict[str, Any], when: Any) -> list[Any]:
+        seen.extend(len(frame) for frame in data_1h.values())
+        return []
+
+    monkeypatch.setattr(EmaCrossoverStrategy, "generate_signals", spy)
+    frames_15m, frames_1h = _frames(days=150)
+
+    BacktestEngine(
+        settings,
+        BacktestConfig(),
+        frames_15m,
+        frames_1h,
+        prefilter=False,
+        strategy=EmaCrossoverStrategy(),
+    ).run()
+
+    needed = EmaCrossoverStrategy().config.htf_ema_period
+    assert max(seen) >= needed, "the hourly window never held the bars the EMA 200 needs"
+    # the live strategy is still shown only the live window
+    seen.clear()
+    monkeypatch.setattr(TrendCrossStrategy, "generate_signals", spy)
+    BacktestEngine(settings, BacktestConfig(), frames_15m, frames_1h, prefilter=False).run()
+    assert max(seen) < needed
+
+
+def test_a_too_short_hourly_history_is_said_not_silent(caplog: pytest.LogCaptureFixture) -> None:
+    frames_15m, frames_1h = _frames(days=18)  # about 120 hourly bars: fewer than the EMA 200
+    strategy = EmaCrossoverStrategy()
+    when = frames_15m["AAA"]["timestamp"].iloc[-1] + pd.Timedelta(minutes=15)
+
+    with caplog.at_level("WARNING"):
+        strategy.generate_signals(
+            {s: f.set_index("timestamp", drop=False) for s, f in frames_15m.items()},
+            {s: f.set_index("timestamp", drop=False) for s, f in frames_1h.items()},
+            when.to_pydatetime(),
+        )
+        strategy.generate_signals(frames_15m, frames_1h, when.to_pydatetime())
+
+    messages = [r.getMessage() for r in caplog.records if "hourly EMA needs" in r.getMessage()]
+    assert len(messages) == 1, "said once, not on every call"
+    assert "200" in messages[0]

@@ -29,6 +29,7 @@ the stable bot's filter `close <= NaN` is False, so it let the signal through; h
 EMA 200 means no signal, as it does for the strict bot.
 """
 
+import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -42,9 +43,11 @@ from trading_system.domain.models import StrategySignal
 from trading_system.runtime.schedule import BAR
 from trading_system.strategy.base import BaseStrategy
 
+logger = logging.getLogger(__name__)
+
 # The hint for the backtest accepts a bar whose numbers are this close (relative) to a line.
 # The hourly EMA 200 decays slowly, so the same average computed over the whole history and
-# over the live window (90 days) can differ in the fifth decimal: its margin is wider.
+# over the window it is shown (`htf_history_days`, 90 days) can differ in the fifth decimal: its margin is wider.
 _MARGIN = 1e-6
 _HTF_MARGIN = 1e-3
 
@@ -88,8 +91,16 @@ STRICT_EMA_CROSSOVER_5PCT = STRICT_EMA_CROSSOVER.model_copy(
 class EmaCrossoverStrategy(BaseStrategy):
     name = "ema_crossover"
 
+    # The hourly EMA 200 needs 200 hourly bars (`min_periods`); the stored bars hold about 5 per
+    # calendar day, so the live loop's 30 days (about 150) are not enough and the strategy would
+    # give no signal at all, without an error (found 2026-11-13, after HTF_LOOKBACK_DAYS went from
+    # 90 to 30). 90 days is the window both strategies were measured with (-1.35 % and -0.81 %
+    # over 180 days), so those baselines can still be reproduced.
+    htf_history_days = 90
+
     def __init__(self, config: EmaCrossoverConfig = EMA_CROSSOVER, name: Optional[str] = None):
         self.config = config
+        self._warned_short_history = False
         if name:
             self.name = name
 
@@ -141,6 +152,17 @@ class EmaCrossoverStrategy(BaseStrategy):
             # The original's guards (it asks the hourly frame for as many rows as the slow EMA).
             if len(bars) < config.long_window + 1 or len(hourly) < config.long_window + 1:
                 continue
+            if len(hourly) < config.htf_ema_period and not self._warned_short_history:
+                # "No signal because the hourly EMA is undefined" is not "no signal found".
+                self._warned_short_history = True
+                logger.warning(
+                    "%s: %s has %d hourly bars, fewer than the %d the hourly EMA needs; "
+                    "there can be no signal until the window is longer (HTF window too short)",
+                    self.name,
+                    symbol,
+                    len(hourly),
+                    config.htf_ema_period,
+                )
 
             closed = (bars["timestamp"] + BAR <= eval_time).to_numpy()
             if not closed.any():

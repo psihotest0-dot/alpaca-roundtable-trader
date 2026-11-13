@@ -23,6 +23,13 @@ class BaseStrategy(ABC):
     #: The name it is listed and chosen by (`backtest --strategy NAME`).
     name: str = ""
 
+    #: How many days of hourly bars the strategy needs to be shown, if more than the live loop's
+    #: `HTF_LOOKBACK_DAYS`. None = the setting is enough. The backtest shows the strategy the
+    #: larger of the two; the live loop runs `trend_cross` and reads only the setting. A strategy
+    #: whose hourly indicator needs more bars than the setting holds would otherwise be silent
+    #: (no error, no signal): `ema_crossover` needs 200 hourly bars for its EMA 200.
+    htf_history_days: Optional[int] = None
+
     @property
     @abstractmethod
     def version(self) -> str:

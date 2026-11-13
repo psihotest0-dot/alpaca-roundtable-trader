@@ -236,7 +236,10 @@ class BacktestEngine:
         loop's window (LOOKBACK_DAYS of 15-minute bars, HTF_LOOKBACK_DAYS of 1-hour bars) that
         started before now. Nothing from the future, and no more history than the live loop has."""
         span_15m = pd.Timedelta(days=self.settings.lookback_days)
-        span_1h = pd.Timedelta(days=self.settings.htf_lookback_days)
+        # The live loop's window, or more when the strategy says its hourly indicator needs it.
+        span_1h = pd.Timedelta(
+            days=max(self.settings.htf_lookback_days, self.strategy.htf_history_days or 0)
+        )
         data_15m: Dict[str, pd.DataFrame] = {}
         data_1h: Dict[str, pd.DataFrame] = {}
         for symbol, frame in self._bars_15m.items():
