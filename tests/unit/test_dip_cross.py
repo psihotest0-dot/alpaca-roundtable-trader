@@ -101,7 +101,7 @@ def test_it_is_chosen_by_name_and_is_a_different_strategy_from_the_live_one() ->
     assert isinstance(strategy, DipInUptrendStrategy)
     assert strategy.name == "dip_in_uptrend"
     # The version goes into every signal id: a different rule must not share the live one's ids.
-    assert strategy.version == RUNTIME_STRATEGY.strategy_version + "-dip"
+    assert strategy.version == RUNTIME_STRATEGY.strategy_version + "-dip-rsi30-after30"
     # ...and it reads the live strategy's own indicator settings, nothing tuned.
     assert strategy.config.fast_ema_period == RUNTIME_STRATEGY.fast_ema_period == 12
     assert strategy.config.slow_ema_period == RUNTIME_STRATEGY.slow_ema_period == 26
@@ -244,3 +244,16 @@ def test_the_backtest_hint_never_says_impossible_where_the_strategy_signals(seed
     for bar in _found(bars_15m, bars_1h):
         assert hint[starts.index(bar)], f"hint says no signal is possible on {bar}"
     assert hint.sum() >= len(_found(bars_15m, bars_1h))
+
+
+def test_changing_a_number_of_the_rule_changes_the_version(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The version is in every signal id: another RSI line or another skipped opening is another
+    variant and must not share the records of this one (research plan, section 14)."""
+    before = DipInUptrendStrategy().version
+
+    monkeypatch.setattr(dip_cross, "RSI_BELOW", 25.0)
+    assert DipInUptrendStrategy().version != before
+
+    monkeypatch.setattr(dip_cross, "RSI_BELOW", 30.0)
+    monkeypatch.setattr(dip_cross, "SKIP_OPEN_MINUTES", 45)
+    assert DipInUptrendStrategy().version != before

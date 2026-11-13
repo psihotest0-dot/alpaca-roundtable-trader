@@ -51,9 +51,11 @@ class DipInUptrendStrategy(BaseStrategy):
     name = "dip_in_uptrend"
 
     def __init__(self, config: StrategyConfig = RUNTIME_STRATEGY):
-        # A different version is a different strategy in the records (it goes into the signal id).
+        # A different version is a different strategy in the records (it goes into the signal id),
+        # so the two numbers of the rule are in it: changing either one is another variant.
+        suffix = f"-dip-rsi{RSI_BELOW:g}-after{SKIP_OPEN_MINUTES}"
         self.config = config.model_copy(
-            update={"strategy_version": config.strategy_version + "-dip"}
+            update={"strategy_version": config.strategy_version + suffix}
         )
 
     @property
