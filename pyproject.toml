@@ -9,7 +9,7 @@ packages = [{include = "trading_system", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.11"
-alpaca-py = ">=0.36,<0.45"
+alpaca-py = ">=0.36,<0.46"
 pandas = "^3.1.1"
 numpy = ">=1.26,<3.0"
 pydantic-settings = "^2.2.0"
