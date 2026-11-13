@@ -417,7 +417,7 @@ def _with_legs(orders: Iterable[Any]) -> Iterator[Any]:
 
 
 def _is_stop(order: Any, closing_side: str) -> bool:
-    return _text(order.order_type) == "stop" and _text(order.side) == closing_side
+    return _text(order.type) == "stop" and _text(order.side) == closing_side
 
 
 def _bracket_stop_quantity(orders: Iterable[Any], symbol: str, closing_side: str) -> Decimal:
@@ -450,7 +450,7 @@ def find_unprotected_positions(
         if key in seen:
             continue
         seen.add(key)
-        if _text(order.order_type) == "stop" and _text(order.status) in _ACTIVE_STATUSES:
+        if _text(order.type) == "stop" and _text(order.status) in _ACTIVE_STATUSES:
             active_stops.append(order)
 
     gaps = []

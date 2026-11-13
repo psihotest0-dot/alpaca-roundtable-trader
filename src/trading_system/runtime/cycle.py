@@ -510,9 +510,10 @@ class TradingCycle:
             equity=_amount(account.equity, "the account's equity"),
             cash=_amount(account.cash, "the account's cash"),
             buying_power=_amount(account.buying_power, "the account's buying power"),
-            day_trade_count=(
-                None if account.daytrade_count is None else int(account.daytrade_count)
-            ),
+            # Not read: Alpaca stopped sending the day-trade fields on 2026-07-06 (FINRA's
+            # intraday-margin change); alpaca-py 0.45 deprecates them and its next release removes
+            # them, so reading one would one day break every snapshot. Unknown stays None, not 0.
+            day_trade_count=None,
             updated_at=now,
         )
         positions = [
