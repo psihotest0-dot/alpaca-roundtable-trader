@@ -15,8 +15,8 @@ from pathlib import Path
 from typing import Any
 
 import pytest
-import yaml
 from prometheus_client import REGISTRY
+from ruamel.yaml import YAML
 
 from trading_system.observability import metrics  # noqa: F401 - importing it registers the metrics
 
@@ -25,6 +25,12 @@ RULES = ROOT / "ops" / "prometheus" / "alpaca_alerts.yml"
 RULE_TESTS = ROOT / "ops" / "prometheus" / "alpaca_alerts_test.yml"
 DASHBOARD = ROOT / "ops" / "grafana" / "alpaca-trader.json"
 COMPOSE = ROOT / "compose.yaml"
+
+
+def yaml_load(text: str) -> Any:
+    """Safe YAML (plain dicts and lists; anchors and `<<` merges resolved), pure Python."""
+    return YAML(typ="safe", pure=True).load(text)
+
 
 NAME = re.compile(r"\balpaca_[a-z0-9_]+")
 SELECTOR = re.compile(r"(alpaca_[a-z0-9_]+)\s*\{([^}]*)\}")
@@ -48,7 +54,7 @@ def _published() -> dict[str, tuple[str, ...]]:
 def _expressions() -> list[tuple[str, str, str]]:
     """(where, expr, legend) for every rule and every dashboard target."""
     found: list[tuple[str, str, str]] = []
-    rules = yaml.safe_load(RULES.read_text(encoding="utf-8"))
+    rules = yaml_load(RULES.read_text(encoding="utf-8"))
     for group in rules["groups"]:
         for rule in group["rules"]:
             found.append((f"rule {rule['alert']}", rule["expr"], ""))
@@ -148,11 +154,11 @@ def test_the_dashboard_is_a_well_formed_provisioned_dashboard() -> None:
 
 def test_every_rule_has_a_promtool_case_that_fires_and_one_that_does_not() -> None:
     """The backend does not accept a rule without a test. The behaviour itself is promtool's to check."""
-    rules = yaml.safe_load(RULES.read_text(encoding="utf-8"))
+    rules = yaml_load(RULES.read_text(encoding="utf-8"))
     names = {rule["alert"] for group in rules["groups"] for rule in group["rules"]}
     fires: set[str] = set()
     quiet: set[str] = set()
-    for case in yaml.safe_load(RULE_TESTS.read_text(encoding="utf-8"))["tests"]:
+    for case in yaml_load(RULE_TESTS.read_text(encoding="utf-8"))["tests"]:
         for check in case["alert_rule_test"]:
             (fires if check["exp_alerts"] else quiet).add(check["alertname"])
     assert fires == names, f"rules without a firing case: {sorted(names - fires)}"
@@ -160,7 +166,7 @@ def test_every_rule_has_a_promtool_case_that_fires_and_one_that_does_not() -> No
 
 
 def test_every_rule_has_a_severity_and_text_for_a_human() -> None:
-    rules = yaml.safe_load(RULES.read_text(encoding="utf-8"))
+    rules = yaml_load(RULES.read_text(encoding="utf-8"))
     for group in rules["groups"]:
         for rule in group["rules"]:
             assert rule["labels"]["severity"] in {"info", "warning", "critical"}, rule["alert"]
@@ -173,7 +179,7 @@ def test_every_rule_has_a_severity_and_text_for_a_human() -> None:
 
 
 def _compose() -> dict[str, Any]:
-    services: dict[str, Any] = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]
+    services: dict[str, Any] = yaml_load(COMPOSE.read_text(encoding="utf-8"))["services"]
     return services
 
 
