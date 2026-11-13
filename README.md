@@ -10,7 +10,7 @@ Under active development and **paper-only**. The trading loop runs against Alpac
 
 This project uses [Poetry](https://python-poetry.org/) for dependency management.
 
-1. Ensure you have Python 3.11+ installed.
+1. Ensure you have Python 3.15 installed (the version CI and the Docker image use; 3.11+ still installs).
 2. Install Poetry if you haven't already.
 3. Clone this repository.
 4. Run `poetry install` to install dependencies from the lock file in a fresh virtual environment.

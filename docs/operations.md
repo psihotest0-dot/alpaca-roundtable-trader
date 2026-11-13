@@ -154,8 +154,9 @@ docker run --rm --entrypoint promtool -v "$PWD/ops/prometheus:/etc/prometheus:ro
 
 ## Docker image
 
-The image is built from `Dockerfile` on Python 3.11, the version the project is tested on (the
-locked numpy has no wheels beyond 3.12, so a newer base image cannot install the dependencies).
+The image is built from `Dockerfile` on Python 3.15, the version the project is tested on (CI
+runs on 3.15 too; moved from 3.11 on 2026-11-13, see docs/decisions.md). Another minor only together
+with CI and `poetry.lock`: every locked package must have a wheel for it.
 It contains runtime dependencies only: no pytest, ruff, mypy or safety, and never `.env` or `var/`.
 
 ```bash

@@ -9,14 +9,15 @@ from pathlib import Path
 
 import pytest
 
-yaml = pytest.importorskip("yaml")
+ruamel_yaml = pytest.importorskip("ruamel.yaml")
 
 POLICY = Path(__file__).resolve().parents[2] / ".safety-policy.yml"
 LAZY_REASONS = {"test/dev", "pip ignore", "pytest ignore", "chroma ignore", "ignore", "false pos"}
 
 
 def _entries() -> dict[str, dict[str, object]]:
-    return yaml.safe_load(POLICY.read_text(encoding="utf-8"))["security"]["ignore-vulnerabilities"]
+    policy = ruamel_yaml.YAML(typ="safe", pure=True).load(POLICY.read_text(encoding="utf-8"))
+    return policy["security"]["ignore-vulnerabilities"]
 
 
 def test_every_ignored_vulnerability_names_its_cve_and_says_why_it_does_not_apply() -> None:
