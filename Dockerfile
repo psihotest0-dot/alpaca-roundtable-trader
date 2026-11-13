@@ -1,8 +1,8 @@
-# Python 3.11 is the version the project is developed and tested on (pyproject
-# `python = "^3.11"`, CI, the local venv). Do not move the tag to a newer minor
-# on its own: the locked numpy 1.26 has no wheels past Python 3.12, onnxruntime
-# none past 3.14, and pandas none for 3.15, so the dependencies would not install.
-FROM python:3.11-slim
+# Python 3.15 is the version the project is developed and tested on (CI, the image, the
+# local venv; docs/decisions.md, 2026-11-13). Move the tag to another minor only together
+# with CI and poetry.lock: every locked package must have a wheel for it (pandas 2.x and
+# pydantic-core before 2.50 had none for 3.15, which is why PR #25 failed).
+FROM python:3.15-slim
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \

@@ -23,9 +23,9 @@ updates:
       interval: "weekly"
     labels: ["dependencies"]
     # The Python version is a project decision (pyproject, CI and the image must agree),
-    # not something to bump automatically. PR #25 moved the image to 3.15, where the
-    # locked dependencies do not install. Patch updates of the 3.11 image still arrive
-    # with the base image itself.
+    # not something to bump automatically. PR #25 once moved the image to 3.15 before the
+    # locked dependencies could install there (the move was made by hand on 2026-11-13).
+    # Patch updates of the 3.15 image still arrive with the base image itself.
     ignore:
       - dependency-name: "python"
         update-types: ["version-update:semver-major", "version-update:semver-minor"]
