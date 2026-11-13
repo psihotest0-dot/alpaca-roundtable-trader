@@ -2,7 +2,9 @@
 
 The first signal on live data died on `int(account.daytrade_count)`: the paper account leaves
 that field empty, and the hand-made account in the tests had a number in it. These tests use
-the real alpaca-py model, filled the way the paper account fills it."""
+the real alpaca-py model, filled the way the paper account fills it. Since alpaca-py 0.45 the
+day-trade fields are deprecated (Alpaca stopped sending them on 2026-07-06), and the snapshot no
+longer reads them; `model_dump()` looks at a field without the deprecation warning."""
 
 import uuid
 from datetime import datetime, timezone
@@ -57,7 +59,7 @@ def _snapshot(broker: Any) -> Any:
 
 def test_the_paper_account_as_alpaca_returns_it_gives_a_snapshot() -> None:
     account = _account()
-    assert account.daytrade_count is None  # what the live paper account does
+    assert account.model_dump()["daytrade_count"] is None  # what the live account does
 
     snapshot, positions, orders = _snapshot(_Broker(account))
 
@@ -66,16 +68,16 @@ def test_the_paper_account_as_alpaca_returns_it_gives_a_snapshot() -> None:
     assert (positions, orders) == ([], [])
 
 
-def test_a_day_trade_count_that_is_there_is_kept() -> None:
+def test_the_deprecated_day_trade_count_is_not_read_even_if_a_number_is_there() -> None:
     snapshot, _, _ = _snapshot(_Broker(_account(daytrade_count=2)))
 
-    assert snapshot.day_trade_count == 2
+    assert snapshot.day_trade_count is None  # unknown, never a number from a dead field
 
 
 def test_the_fake_broker_of_the_integration_tests_has_the_real_shape() -> None:
     account = FakeBroker().get_account()
 
-    assert isinstance(account, TradeAccount) and account.daytrade_count is None
+    assert isinstance(account, TradeAccount) and account.model_dump()["daytrade_count"] is None
 
 
 @pytest.mark.parametrize(

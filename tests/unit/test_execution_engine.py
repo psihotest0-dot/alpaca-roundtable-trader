@@ -145,7 +145,7 @@ def test_timeout_reconciliation(engine, mock_broker, mock_order_repo, base_inten
     mock_reconciled_order.id = "recovered-id"
     mock_reconciled_order.symbol = "AAPL"
     mock_reconciled_order.side = "buy"
-    mock_reconciled_order.order_type = "limit"
+    mock_reconciled_order.type = "limit"
     mock_reconciled_order.status = AlpacaOrderStatus.NEW
     mock_reconciled_order.qty = "10"
     mock_reconciled_order.filled_qty = "0"
@@ -170,7 +170,7 @@ def test_partial_fill_tracking(engine, mock_broker, mock_order_repo, base_intent
     mock_alpaca_order.id = "partially-filled-id"
     mock_alpaca_order.symbol = "AAPL"
     mock_alpaca_order.side = "buy"
-    mock_alpaca_order.order_type = "limit"
+    mock_alpaca_order.type = "limit"
     mock_alpaca_order.status = AlpacaOrderStatus.PARTIALLY_FILLED
     mock_alpaca_order.qty = "10"
     mock_alpaca_order.filled_qty = "4"
@@ -291,7 +291,7 @@ def test_crash_after_submission_before_db_update(
     mock_reconciled_order.id = "test-order-id"
     mock_reconciled_order.symbol = "AAPL"
     mock_reconciled_order.side = "buy"
-    mock_reconciled_order.order_type = "limit"
+    mock_reconciled_order.type = "limit"
     mock_reconciled_order.status = (
         "unknown_status"  # Alpaca API might return some unsupported string
     )
@@ -360,7 +360,7 @@ def _order(symbol, side, order_type, status, qty, *, id=None, legs=None):
         id=id or f"{symbol}-{side.value}-{order_type.value}-{status.value}-{qty}",
         symbol=symbol,
         side=side,
-        order_type=order_type,
+        type=order_type,
         status=status,
         qty=str(qty),
         legs=legs,

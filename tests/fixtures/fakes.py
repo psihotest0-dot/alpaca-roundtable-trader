@@ -144,7 +144,7 @@ class FakeBroker:
             client_order_id=request.client_order_id,
             symbol=request.symbol,
             side="buy",
-            order_type="limit",
+            type="limit",
             status="accepted",
             qty=str(request.qty),
             filled_qty="0",
