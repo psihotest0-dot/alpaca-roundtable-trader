@@ -36,6 +36,10 @@ class Settings(BaseSettings):
     # The news kept for the Oracle and for judging it later (data/news.py): a cache that
     # `fetch-news` fills from Alpaca every few minutes, not a record, so also its own file.
     news_database_url: str = "sqlite:///./var/news.db"
+    # The daily bars of the crypto research (data/crypto.py, plan section 15): a cache that
+    # `fetch-crypto-daily` rebuilds, in a file of its own, NEVER in research.db: the stocks there
+    # are the baseline `measure-signals` compares with, and crypto must not touch them.
+    crypto_database_url: str = "sqlite:///./var/crypto.db"
     # The 15-minute and 1-hour bars of the whole observation universe (the research universe and the
     # watchlist, ~155 symbols), kept for the Oracle observer and for the hours research
     # (runtime/observe.py, research/intraday.py): a cache `fetch-observe` rebuilds, in a file of its own

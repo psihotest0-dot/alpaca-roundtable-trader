@@ -15,6 +15,12 @@ from trading_system.storage.repositories import AuditRepository
 
 EVENT_TYPE = "research_trial"
 
+# Each market has its own count of variants (plan section 15 for crypto, "counter C"): the data
+# and the market are different, so the stock variants do not raise the bar for crypto or the other
+# way round. Events written before this field existed are stock events.
+STOCKS = "stocks"
+CRYPTO = "crypto"
+
 
 def variant_key(signal: str, regime_filter: Optional[str], horizon: int) -> str:
     return f"{signal}|{regime_filter or 'no filter'}|{horizon}"
@@ -26,12 +32,14 @@ def record_trial(
     *,
     regime_filter: Optional[str],
     universe_size: int,
+    market: str = STOCKS,
     when: Optional[datetime] = None,
 ) -> None:
     net = measurement.net
     audit.record(
         EVENT_TYPE,
         {
+            "market": market,
             "variant": variant_key(measurement.signal, regime_filter, measurement.horizon),
             "signal": measurement.signal,
             "regime_filter": regime_filter,
@@ -49,11 +57,12 @@ def record_trial(
     )
 
 
-def trial_counts(audit: AuditRepository) -> tuple[int, int]:
-    """(runs, distinct variants) recorded so far."""
+def trial_counts(audit: AuditRepository, market: str = STOCKS) -> tuple[int, int]:
+    """(runs, distinct variants) recorded so far for one market."""
     events: list[tuple[datetime, dict[str, Any]]] = audit.events(
         EVENT_TYPE,
         datetime(2000, 1, 1, tzinfo=timezone.utc),
         datetime(2100, 1, 1, tzinfo=timezone.utc),
     )
-    return len(events), len({details["variant"] for _, details in events})
+    mine = [details for _, details in events if details.get("market", STOCKS) == market]
+    return len(mine), len({details["variant"] for details in mine})

@@ -171,6 +171,34 @@ def create_parser() -> argparse.ArgumentParser:
         "--symbols", type=str, help="Comma-separated symbols. Default: the research universe."
     )
 
+    # fetch-crypto-daily / measure-crypto: the crypto research (docs/strategy-research-plan.md,
+    # section 15). Their own file, their own count of variants; nothing trades.
+    crypto_fetch_parser = subparsers.add_parser(
+        "fetch-crypto-daily",
+        help="Downloads the daily bars of the crypto research coins into crypto.db (free, no key "
+        "needed; history from 2021-01-01).",
+    )
+    crypto_fetch_parser.add_argument(
+        "--symbols",
+        type=str,
+        help="Comma-separated pairs, e.g. BTC/USD. Default: the seven coins of plan section 15.2.",
+    )
+    crypto_measure_parser = subparsers.add_parser(
+        "measure-crypto",
+        help="Measures what coins do after a crypto signal (development part of the daily bars "
+        "only; needs `fetch-crypto-daily` first).",
+    )
+    crypto_measure_parser.add_argument(
+        "--signal",
+        required=True,
+        help="crypto_trend_30, or random_half (a control that must show nothing).",
+    )
+    crypto_measure_parser.add_argument(
+        "--horizons",
+        type=str,
+        help="Comma-separated days held. Default: the signal's own, 10 and 20.",
+    )
+
     # judge-oracle command
     subparsers.add_parser(
         "judge-oracle",
@@ -818,6 +846,131 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"measure-signals error: {e}")
+            return 1
+
+    elif args.command == "fetch-crypto-daily":
+        try:
+            from datetime import datetime, timezone
+
+            from trading_system.data.crypto import (
+                CRYPTO_UNIVERSE,
+                MARKET_COIN,
+                CryptoDailyFeed,
+                update_crypto_daily,
+            )
+            from trading_system.storage.research import SameDatabaseError, open_crypto_store
+
+            settings = Settings()
+            pairs = (
+                [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+                if args.symbols
+                else list(CRYPTO_UNIVERSE)
+            )
+            try:
+                repo = open_crypto_store(
+                    settings.crypto_database_url,
+                    settings.database_url,
+                    settings.research_database_url,
+                )
+            except SameDatabaseError as e:
+                print(f"fetch-crypto-daily error: {e}")
+                return 1
+            print(f"Updating {len(pairs)} pairs, daily bars from 2021-01-01 (no key needed)...")
+            crypto_report = update_crypto_daily(
+                CryptoDailyFeed(), repo, pairs, now=datetime.now(timezone.utc)
+            )
+            print(f"1d: {crypto_report.rows_written:,} rows written")
+            if crypto_report.no_data:
+                print("No data from Alpaca for: " + ", ".join(sorted(crypto_report.no_data)))
+            span = repo.span(MARKET_COIN, "1d")
+            if span is not None:
+                print(f"{MARKET_COIN}: {span[0]:%Y-%m-%d} to {span[1]:%Y-%m-%d}")
+            return 0
+        except Exception as e:
+            print(f"fetch-crypto-daily error: {e}")
+            return 1
+
+    elif args.command == "measure-crypto":
+        try:
+            from trading_system.research.crypto import (
+                CRYPTO_RULES,
+                CRYPTO_SIGNALS,
+                ROUND_TRIP_COST,
+                development_note,
+                load_crypto_panel,
+            )
+            from trading_system.research.measure import format_measurement, measure
+            from trading_system.research.trials import CRYPTO, record_trial, trial_counts
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import AuditRepository
+            from trading_system.storage.research import SameDatabaseError, open_crypto_store
+
+            settings = Settings()
+            if args.signal not in CRYPTO_SIGNALS:
+                print(
+                    f"measure-crypto error: unknown signal {args.signal!r}; "
+                    f"known: {', '.join(sorted(CRYPTO_SIGNALS))}"
+                )
+                return 1
+            signal = CRYPTO_SIGNALS[args.signal]
+            horizons = (
+                tuple(int(h) for h in args.horizons.split(",") if h.strip())
+                if args.horizons
+                else signal.horizons
+            )
+            try:
+                repo = open_crypto_store(
+                    settings.crypto_database_url,
+                    settings.database_url,
+                    settings.research_database_url,
+                )
+            except SameDatabaseError as e:
+                print(f"measure-crypto error: {e}")
+                return 1
+            panel = load_crypto_panel(repo)
+            if len(panel.symbols) < CRYPTO_RULES.min_universe:
+                print(
+                    f"measure-crypto error: only {len(panel.symbols)} coins have daily bars "
+                    f"(need {CRYPTO_RULES.min_universe}); run `fetch-crypto-daily` first"
+                )
+                return 1
+            print(development_note())
+            print(
+                f"{len(panel.symbols)} coins, {panel.dates[0].date()} to {panel.dates[-1].date()} "
+                f"(zero-volume bars are treated as missing); cost {ROUND_TRIP_COST * 100:.2f}% "
+                "a round trip"
+            )
+            on = signal.build(panel)
+            audit = AuditRepository(get_session_factory(get_engine(settings.database_url)))
+            for horizon in horizons:
+                measurement = measure(
+                    panel,
+                    on,
+                    signal=signal.name,
+                    horizon=horizon,
+                    cost=ROUND_TRIP_COST,
+                    rules=CRYPTO_RULES,
+                )
+                print()
+                print(format_measurement(measurement))
+                if not signal.control:
+                    record_trial(
+                        audit,
+                        measurement,
+                        regime_filter=None,
+                        universe_size=len(panel.symbols),
+                        market=CRYPTO,
+                    )
+            runs, distinct = trial_counts(audit, CRYPTO)
+            print()
+            print(
+                "Control, not counted as a variant."
+                if signal.control
+                else f"Crypto variants tried so far (counter C): {distinct} ({runs} runs)."
+            )
+            return 0
+        except Exception as e:
+            print(f"measure-crypto error: {e}")
             return 1
 
     elif args.command == "judge-oracle":

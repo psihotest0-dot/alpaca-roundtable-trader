@@ -40,6 +40,30 @@ MIN_UNIVERSE = 50  # fewer stocks with a forward return on a day and the day is 
 
 
 @dataclass(frozen=True)
+class MeasureRules:
+    """What differs from one market to the next; the measurement itself does not. The default is
+    the stock market of the research plan's sections 8 to 9. The crypto rules are in
+    research/crypto.py (plan section 15)."""
+
+    min_signal: int  # fewer "on" than this on a day and the day is not an observation
+    min_universe: int  # fewer with a forward return on a day and the day is not an observation
+    min_events: int  # the criterion "enough non-overlapping events"
+    need_one_off: bool  # a day on which everything is "on" compares nothing: it is left out
+    asset: str  # the word in the report: "stocks", "coins"
+    market: str  # what the market regime and "vs market" are read from: "SPY", "BTC"
+
+
+STOCK_RULES = MeasureRules(
+    min_signal=MIN_SIGNAL_STOCKS,
+    min_universe=MIN_UNIVERSE,
+    min_events=CRITERIA_MIN_INDEPENDENT_EVENTS,
+    need_one_off=False,
+    asset="stocks",
+    market="SPY",
+)
+
+
+@dataclass(frozen=True)
 class Slice:
     """The average difference per day (a fraction: 0.01 is 1 %) over some set of days."""
 
@@ -84,6 +108,8 @@ class Measurement:
     by_year: tuple[Slice, ...]
     by_regime: tuple[Slice, ...]
     criteria: Criteria
+    rules: MeasureRules = STOCK_RULES
+    panel_days: int = 0  # the days of the panel, to say how many of them were observations
 
     @property
     def usable(self) -> bool:
@@ -115,6 +141,7 @@ def measure(
     signal: str,
     horizon: int,
     cost: float = ROUND_TRIP_COST,
+    rules: MeasureRules = STOCK_RULES,
 ) -> Measurement:
     """The signal `on` (True where it is on, shaped like the panel) over the panel's days."""
     if horizon < 1:
@@ -127,11 +154,10 @@ def measure(
     events = chosen.sum(axis=1)
     universe_mean = forward.mean(axis=1)
     signal_mean = forward.where(chosen).mean(axis=1)
-    usable = (
-        (events >= MIN_SIGNAL_STOCKS)
-        & (has_forward.sum(axis=1) >= MIN_UNIVERSE)
-        & forward_market.notna()
-    )
+    covered = has_forward.sum(axis=1)
+    usable = (events >= rules.min_signal) & (covered >= rules.min_universe) & forward_market.notna()
+    if rules.need_one_off:
+        usable &= events < covered
     vs_universe = (signal_mean - universe_mean).where(usable)
     vs_market = (signal_mean - forward_market).where(usable)
 
@@ -151,8 +177,8 @@ def measure(
     known = panel.market_known.to_numpy()
     up = panel.market_up.to_numpy()
     by_regime = (
-        piece("SPY above its 200-day average", net_values, days & known & up),
-        piece("SPY below its 200-day average", net_values, days & known & ~up),
+        piece(f"{rules.market} above its 200-day average", net_values, days & known & up),
+        piece(f"{rules.market} below its 200-day average", net_values, days & known & ~up),
     )
 
     net = piece("net of cost", net_values, days)
@@ -168,12 +194,14 @@ def measure(
         independent_events=independent,
         universe_mean=float(universe_mean[usable].mean()) if days.any() else float("nan"),
         signal_mean=float(signal_mean[usable].mean()) if days.any() else float("nan"),
-        vs_universe=piece("vs all stocks", spread, days),
-        vs_market=piece("vs SPY", vs_market.to_numpy(), days),
+        vs_universe=piece(f"vs all {rules.asset}", spread, days),
+        vs_market=piece(f"vs {rules.market}", vs_market.to_numpy(), days),
         net=net,
         by_year=by_year,
         by_regime=by_regime,
-        criteria=_criteria(net, by_year, independent, net_values, days, years),
+        criteria=_criteria(net, by_year, independent, net_values, days, years, rules.min_events),
+        rules=rules,
+        panel_days=len(panel.dates),
     )
 
 
@@ -184,6 +212,7 @@ def _criteria(
     net_values: np.ndarray,
     days: np.ndarray,
     years: np.ndarray,
+    min_events: int = CRITERIA_MIN_INDEPENDENT_EVENTS,
 ) -> Criteria:
     contributions = {
         int(s.label): float(np.nansum(net_values[days & (years == int(s.label))])) for s in by_year
@@ -195,7 +224,7 @@ def _criteria(
         rest_positive = bool(np.nanmean(net_values[rest]) > 0)
     positive_years = sum(1 for s in by_year if s.mean > 0)
     return Criteria(
-        enough_events=independent_events >= CRITERIA_MIN_INDEPENDENT_EVENTS,
+        enough_events=independent_events >= min_events,
         t_high_enough=bool(net.t >= CRITERIA_MIN_T),
         not_one_year=rest_positive,
         most_years_positive=bool(by_year) and positive_years * 2 >= len(by_year),
@@ -211,26 +240,32 @@ def _t(value: float) -> str:
 
 
 def format_measurement(m: Measurement) -> str:
+    asset, market = m.rules.asset, m.rules.market
     lines = [
         f"{m.signal}, held {m.horizon} trading day{'s' if m.horizon > 1 else ''} "
         "(in at the next open, out at the close)"
     ]
     if not m.usable:
-        lines.append("  no day has enough stocks on and enough stocks to compare with")
+        lines.append(f"  no day has enough {asset} on and enough {asset} to compare with")
         return "\n".join(lines)
     v = m.vs_universe
     lines += [
-        f"  {m.first} to {m.last}: {v.dates:,} days with a signal, {v.events:,} stock-events "
-        f"(about {m.independent_events:,.0f} that do not overlap)",
-        f"  stocks that were on: {_pct(m.signal_mean)} on average; all stocks: "
+        f"  {m.first} to {m.last}: {v.dates:,} days with a signal, {v.events:,} "
+        f"{asset.rstrip('s')}-events (about {m.independent_events:,.0f} that do not overlap)",
+        f"  {asset} that were on: {_pct(m.signal_mean)} on average; all {asset}: "
         f"{_pct(m.universe_mean)}",
-        f"  vs all stocks   {_pct(v.mean)} per day  t {_t(v.t)}  "
+        f"  vs all {asset}   {_pct(v.mean)} per day  t {_t(v.t)}  "
         f"positive on {v.positive * 100:.0f}% of days",
-        f"  vs SPY          {_pct(m.vs_market.mean)} per day  t {_t(m.vs_market.t)}",
+        f"  vs {market}".ljust(18) + f"{_pct(m.vs_market.mean)} per day  t {_t(m.vs_market.t)}",
         f"  net of {m.cost * 100:.2f}% cost  {_pct(m.net.mean)} per day  t {_t(m.net.t)}",
         "  by year (net):  "
         + "  ".join(f"{s.label} {_pct(s.mean, 1)} (t {_t(s.t)})" for s in m.by_year),
     ]
+    if m.rules.need_one_off and m.panel_days:
+        lines.append(
+            f"  days used: {v.dates:,} of {m.panel_days:,} ({v.dates / m.panel_days * 100:.0f}%); "
+            f"the others had too few {asset} on, none off, or no window"
+        )
     for s in m.by_regime:
         lines.append(f"  {s.label}: {_pct(s.mean)} net, t {_t(s.t)}, {s.dates:,} days")
     c = m.criteria
@@ -239,7 +274,7 @@ def format_measurement(m: Measurement) -> str:
         return "yes" if ok else "NO"
 
     lines.append(
-        f"  criteria on the development part: {CRITERIA_MIN_INDEPENDENT_EVENTS}+ events "
+        f"  criteria on the development part: {m.rules.min_events}+ events "
         f"{mark(c.enough_events)}; net t >= {CRITERIA_MIN_T:g} {mark(c.t_high_enough)}; "
         f"without the best year still positive {mark(c.not_one_year)}; "
         f"half of the years positive {mark(c.most_years_positive)}  ->  "

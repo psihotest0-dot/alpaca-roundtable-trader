@@ -46,3 +46,17 @@ def open_observe_store(observe_url: str, trading_url: str) -> MarketBarRepositor
     """The candle repository on the observation file (15-minute and 1-hour bars of ~155 symbols).
     Same shape and the same rule as the research file: never trading.db."""
     return open_research_store(observe_url, trading_url)
+
+
+def open_crypto_store(
+    crypto_url: str, trading_url: str, research_url: str | None = None
+) -> MarketBarRepository:
+    """The candle repository on the crypto file (daily bars of a few coins, plan section 15).
+    Same shape as the research file, with one more rule: it must not be the research file either,
+    because the stocks in research.db are the baseline of `measure-signals`."""
+    if research_url is not None and same_database(make_url(crypto_url), make_url(research_url)):
+        raise SameDatabaseError(
+            "CRYPTO_DATABASE_URL is the same as RESEARCH_DATABASE_URL; the crypto candles must "
+            "not go into the file the stock measurements read"
+        )
+    return open_research_store(crypto_url, trading_url)
