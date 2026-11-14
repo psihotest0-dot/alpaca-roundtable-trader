@@ -977,7 +977,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         try:
             from datetime import datetime, timezone
 
-            from trading_system.oracle.judge import format_judgement, judge
+            from trading_system.oracle.judge import (
+                format_judgement,
+                format_not_approved,
+                judge,
+                judge_not_approved,
+            )
             from trading_system.storage.database import get_engine, get_session_factory
             from trading_system.storage.repositories import (
                 AuditRepository,
@@ -994,15 +999,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             except SameDatabaseError as e:
                 print(f"judge-oracle error: {e}")
                 return 1
-            judgement = judge(
-                factory,
-                OracleDecisionRepository(factory),
-                candle_store,
-                AuditRepository(factory),
-                settings,
-                datetime.now(timezone.utc),
-            )
+            oracle_repo = OracleDecisionRepository(factory)
+            audit_repo = AuditRepository(factory)
+            now = datetime.now(timezone.utc)
+            judgement = judge(factory, oracle_repo, candle_store, audit_repo, settings, now)
             print(format_judgement(judgement))
+            print()
+            print(
+                format_not_approved(
+                    judge_not_approved(
+                        factory, oracle_repo, candle_store, audit_repo, settings, now
+                    )
+                )
+            )
             return 0
         except Exception as e:
             print(f"judge-oracle error: {type(e).__name__}: {e}")

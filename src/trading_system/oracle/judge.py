@@ -25,11 +25,19 @@ live loop's.
 * "helps" needs t >= the bar in favour of the approved, the same sign in both halves of the period (by
   time) and an approved mean above zero after costs; "hurts" is the mirror image; anything else is
   "cannot be told from noise".
+
+A second question, B (docs section 5.1, registered 2026-11-14 before any result): would skipping
+everything the model did NOT approve (a VETO, or a signal left on HOLD) have been better than taking
+everything? It is the question of switching `active` mode on. Its groups are the approved and the not
+approved; it needs 60 + 60 signals from 20 trading days before a single return is computed; it has its
+own looks per period (journal field `question`) and a higher bar (2.4, then 2.7) and a second test on the
+per-day differences, because the signals of one day move together. Question A is not changed.
 """
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-from typing import Any, Optional
+import math
+from datetime import date, datetime, timedelta, timezone
+from typing import Any, Optional, cast
 
 import numpy as np
 import pandas as pd
@@ -56,6 +64,17 @@ PASS_T = 2.0
 SECOND_LOOK_T = 2.5
 CONTROL_MAX_T = 2.0
 MAX_LOOKS = 2
+
+# Question B (docs/oracle-provider-task.md, section 5.1).
+QUESTION_A = "A"
+QUESTION_B = "B"
+B_MIN_PER_GROUP = 60
+B_MIN_DAYS = 20  # different trading days, so that one strong day cannot decide
+B_PASS_T = 2.4
+B_SECOND_LOOK_T = 2.7
+B_DAY_T = 1.5  # the t of the per-day differences
+B_MIN_PAIRED_DAYS = 10  # days with a trade in both groups, for that t
+NOT_APPROVED = "NOT_APPROVED"
 
 
 Period = tuple[str, str]  # (model, prompt_version); "" where the answer carries none
@@ -98,6 +117,9 @@ class Detail:
     control_t: float
     unresolved: int  # signals whose shadow trade has not reached its stop or target yet
     no_bars: int  # signals with no bar to enter on
+    days: int = 0  # question B: different trading days among the resolved trades
+    day_t: float = float("nan")  # question B: t of the per-day differences (approved minus not)
+    paired_days: int = 0  # question B: days with a trade in both groups
 
 
 @dataclass(frozen=True)
@@ -108,6 +130,7 @@ class Judgement:
     reason: str
     detail: Optional[Detail] = None
     other_periods: tuple[Counts, ...] = ()  # counts only, never judged here
+    question: str = QUESTION_A
 
 
 def collect(
@@ -219,10 +242,26 @@ def _shadow_pnl(
     return out, unresolved, played.no_bars
 
 
-def _edge(trades: list[tuple[str, float, pd.Timestamp]]) -> float:
-    a = [p for v, p, _ in trades if v == "APPROVE"]
-    b = [p for v, p, _ in trades if v == "VETO"]
+def _edge(
+    trades: list[tuple[str, float, pd.Timestamp]],
+    positive: str = "APPROVE",
+    negative: str = "VETO",
+) -> float:
+    a = [p for v, p, _ in trades if v == positive]
+    b = [p for v, p, _ in trades if v == negative]
     return float(np.mean(a) - np.mean(b)) if a and b else float("nan")
+
+
+def _looks_taken(audit: AuditRepository, key: str, question: str, now: datetime) -> int:
+    """Looks already taken in this period for this question. A journal row without the field is
+    from before question B existed: it is a look at A."""
+    return sum(
+        1
+        for _, details in audit.events(
+            JUDGEMENT_EVENT, datetime(2000, 1, 1, tzinfo=timezone.utc), now + timedelta(days=1)
+        )
+        if details.get("period") == key and details.get("question", QUESTION_A) == question
+    )
 
 
 def judge(
@@ -248,13 +287,7 @@ def judge(
         if p != current
     )
     key = period_key(current)
-    looks = sum(
-        1
-        for _, details in audit.events(
-            JUDGEMENT_EVENT, datetime(2000, 1, 1, tzinfo=timezone.utc), now + timedelta(days=1)
-        )
-        if details.get("period") == key
-    )
+    looks = _looks_taken(audit, key, QUESTION_A, now)
 
     def said(verdict: str, reason: str, detail: Optional[Detail] = None) -> Judgement:
         return Judgement(counts, looks, verdict, reason, detail, others)
@@ -337,6 +370,7 @@ def judge(
     audit.record(
         JUDGEMENT_EVENT,
         {
+            "question": QUESTION_A,
             "look": looks + 1,
             "period": key,
             "periods_so_far": len(ordered),
@@ -350,6 +384,245 @@ def judge(
         when=now,
     )
     return said(verdict, reason, detail)
+
+
+# ------------------------------------------------------------------ question B (docs section 5.1)
+
+
+def _new_york_day(moment: Any) -> date:
+    stamp = pd.Timestamp(moment)
+    stamp = stamp.tz_localize("UTC") if stamp.tzinfo is None else stamp.tz_convert("UTC")
+    return cast(date, stamp.tz_convert("America/New_York").date())
+
+
+def _not_approved_trades(
+    sample: dict[str, dict[str, Any]], bars: MarketBarRepository, settings: Any
+) -> tuple[list[tuple[str, float, pd.Timestamp]], int, int]:
+    """(label, pnl, entry time) of every resolved shadow trade of a signal the model replied to:
+    "APPROVE" for a final approval, NOT_APPROVED for a VETO or a signal left on HOLD. Also how many
+    have not reached a level and how many had no bar to enter on."""
+    replied = {k: e for k, e in sample.items() if not e["failed"]}
+    played = play_out(
+        [
+            SignalToPlay(
+                signal_id,
+                entry["symbol"],
+                entry["closed_bar"],
+                "APPROVE" if entry["final"] and entry["verdict"] == "APPROVE" else NOT_APPROVED,
+            )
+            for signal_id, entry in replied.items()
+        ],
+        bars,
+        settings,
+    )
+    out: list[tuple[str, float, pd.Timestamp]] = []
+    unresolved = 0
+    for shadow in played.trades:
+        if shadow.exit_reason == "OPEN":
+            unresolved += 1
+            continue
+        out.append((shadow.verdict, shadow.pnl_pct, pd.Timestamp(shadow.entry_time)))
+    return out, unresolved, played.no_bars
+
+
+def _daily_t(trades: list[tuple[str, float, pd.Timestamp]]) -> tuple[float, int]:
+    """The t of the per-day differences (the approved's mean minus the not approved's mean, on each
+    day that has a trade in both groups), and how many such days there are. nan below the minimum:
+    the signals of one day move together, so this is the check that one strong day is not the result."""
+    by_day: dict[date, dict[str, list[float]]] = {}
+    for label, pnl, entry in trades:
+        by_day.setdefault(_new_york_day(entry), {}).setdefault(label, []).append(pnl)
+    differences = [
+        float(np.mean(groups["APPROVE"]) - np.mean(groups[NOT_APPROVED]))
+        for groups in by_day.values()
+        if groups.get("APPROVE") and groups.get(NOT_APPROVED)
+    ]
+    n = len(differences)
+    if n < B_MIN_PAIRED_DAYS:
+        return float("nan"), n
+    mean = float(np.mean(differences))
+    spread = float(np.std(differences, ddof=1))
+    if spread == 0:
+        return (0.0 if mean == 0 else math.copysign(math.inf, mean)), n
+    return mean / (spread / math.sqrt(n)), n
+
+
+def judge_not_approved(
+    session_factory: Any,
+    oracle_repo: OracleDecisionRepository,
+    bars: MarketBarRepository,
+    audit: AuditRepository,
+    settings: Any,
+    now: datetime,
+) -> Judgement:
+    """Question B for the current period: would skipping every signal the model did not approve
+    (a VETO, or a HOLD it never lifted) have been better? Counts only until the minimum of signals
+    AND of trading days is there; one look, a second at double the minimum with a higher bar; a look
+    is journalled with its period and `question: B`."""
+    everything = collect(session_factory, oracle_repo)
+    mapping, current, ordered = assign_periods(everything)
+    if current is None:
+        sample = everything
+    else:
+        sample = {k: v for k, v in everything.items() if mapping[k] == current}
+    counts = count(sample, current)
+    others = tuple(
+        count({k: v for k, v in everything.items() if mapping[k] == p}, p)
+        for p in ordered
+        if p != current
+    )
+    key = period_key(current)
+    looks = _looks_taken(audit, key, QUESTION_B, now)
+
+    def said(verdict: str, reason: str, detail: Optional[Detail] = None) -> Judgement:
+        return Judgement(counts, looks, verdict, reason, detail, others, QUESTION_B)
+
+    if looks >= MAX_LOOKS:
+        return said(
+            "no more looks",
+            f"{looks} looks were taken in this period; the rules allow {MAX_LOOKS}",
+        )
+    need = B_MIN_PER_GROUP * (looks + 1)
+    days_need = B_MIN_DAYS * (looks + 1)
+    bar = B_PASS_T if looks == 0 else B_SECOND_LOOK_T
+    not_approved = counts.veto + counts.held
+    if counts.approve < need or not_approved < need:
+        return said(
+            "no verdict",
+            f"not enough answers yet in this period: {counts.approve} approved and "
+            f"{not_approved} not approved ({counts.veto} vetoes, {counts.held} holds), need "
+            f"{need} of each",
+        )
+    days = len({_new_york_day(e["decided_at"]) for e in sample.values() if not e["failed"]})
+    if days < days_need:
+        return said(
+            "no verdict",
+            f"only {days} trading days of answers in this period, need {days_need}: the signals "
+            "of one day move together",
+        )
+    if counts.availability < MIN_AVAILABILITY:
+        return said(
+            "no verdict",
+            f"availability {counts.availability:.0%} is under {MIN_AVAILABILITY:.0%}: "
+            f"{counts.no_reply} of {counts.asked} signals got no reply, so the backend or the "
+            "model fails too often to judge",
+        )
+
+    trades, unresolved, no_bars = _not_approved_trades(sample, bars, settings)
+    approved = [p for label, p, _ in trades if label == "APPROVE"]
+    rest = [p for label, p, _ in trades if label == NOT_APPROVED]
+    resolved_days = len({_new_york_day(entry) for _, _, entry in trades})
+    if len(approved) < need or len(rest) < need or resolved_days < days_need:
+        return said(
+            "no verdict",
+            f"not enough resolved shadow trades yet: {len(approved)} approved and {len(rest)} not "
+            f"approved on {resolved_days} trading days ({unresolved} still open, {no_bars} without "
+            f"a bar); need {need} of each on {days_need} days. No look was used.",
+        )
+
+    ordered_trades = sorted(trades, key=lambda x: x[2])
+    middle = len(ordered_trades) // 2
+    first_edge = _edge(ordered_trades[:middle], "APPROVE", NOT_APPROVED)
+    second_edge = _edge(ordered_trades[middle:], "APPROVE", NOT_APPROVED)
+    t = welch_t(approved, rest)
+    rng = np.random.default_rng(CONTROL_SEED)
+    labels = np.array([label for label, _, _ in trades])
+    shuffled = rng.permutation(labels)
+    pnl = np.array([p for _, p, _ in trades])
+    control_t = welch_t(list(pnl[shuffled == "APPROVE"]), list(pnl[shuffled == NOT_APPROVED]))
+    approved_mean, rest_mean = float(np.mean(approved)), float(np.mean(rest))
+    edge = approved_mean - rest_mean
+    day_t, paired_days = _daily_t(trades)
+    same_sign = np.sign(first_edge) == np.sign(second_edge) == np.sign(edge) and edge != 0
+    detail = Detail(
+        len(approved),
+        len(rest),
+        approved_mean,
+        rest_mean,
+        edge,
+        t,
+        first_edge,
+        second_edge,
+        control_t,
+        unresolved,
+        no_bars,
+        resolved_days,
+        day_t,
+        paired_days,
+    )
+
+    if abs(control_t) >= CONTROL_MAX_T:
+        verdict, reason = (
+            "control suspect",
+            f"a random relabelling gave t {control_t:.1f}: the instrument is suspect",
+        )
+    elif t >= bar and same_sign and approved_mean > 0 and day_t >= B_DAY_T:
+        verdict, reason = (
+            "helps",
+            f"skipping what the model did not approve would have been better (t {t:.1f}, same "
+            f"sign in both halves, per-day t {day_t:.1f} on {paired_days} days)",
+        )
+    elif t <= -bar and same_sign and day_t <= -B_DAY_T:
+        verdict, reason = (
+            "hurts",
+            f"skipping what the model did not approve would have been worse (t {t:.1f}, same "
+            f"sign in both halves, per-day t {day_t:.1f} on {paired_days} days)",
+        )
+    else:
+        day_text = (
+            f"per-day t {day_t:.1f} on {paired_days} days"
+            if np.isfinite(day_t)
+            else (f"too few days with both groups ({paired_days}) for the per-day t")
+        )
+        verdict, reason = (
+            "cannot be told from noise",
+            f"t {t:.1f} against a bar of {bar:g}; {day_text}",
+        )
+
+    audit.record(
+        JUDGEMENT_EVENT,
+        {
+            "question": QUESTION_B,
+            "look": looks + 1,
+            "period": key,
+            "periods_so_far": len(ordered),
+            "verdict": verdict,
+            "approved": len(approved),
+            "not_approved": len(rest),
+            "t": t,
+            "day_t": day_t if np.isfinite(day_t) else None,
+            "edge": edge,
+            "control_t": control_t,
+        },
+        when=now,
+    )
+    return said(verdict, reason, detail)
+
+
+def format_not_approved(j: Judgement) -> str:
+    c = j.counts
+    lines = [
+        "Question B: would skipping every signal the model did not approve (a veto, or a hold it "
+        "never lifted) have been better than taking everything? (docs section 5.1)",
+        f"  not approved: {c.veto + c.held} ({c.veto} vetoes, {c.held} holds), approved: {c.approve}; "
+        f"looks taken in this period: {j.looks_before} of {MAX_LOOKS}",
+        f"  verdict: {j.verdict}",
+        f"  {j.reason}",
+    ]
+    d = j.detail
+    if d is not None:
+        lines += [
+            f"  shadow trades: {d.approved} approved, {d.vetoed} not approved, on {d.days} trading "
+            f"days ({d.unresolved} still open, {d.no_bars} without a bar)",
+            f"  approved {_pct(d.approved_mean)} per trade, not approved {_pct(d.vetoed_mean)}; "
+            f"difference {_pct(d.edge)}, Welch t {d.t:.1f}",
+            f"  first half {_pct(d.first_half_edge)}, second half {_pct(d.second_half_edge)}; "
+            f"per-day t {d.day_t:.1f} on {d.paired_days} days; random-relabelling control t "
+            f"{d.control_t:.1f}",
+            "  This was a LOOK: it is written to the journal and cannot be repeated for the same "
+            "sample.",
+        ]
+    return "\n".join(lines)
 
 
 def _pct(value: float) -> str:
