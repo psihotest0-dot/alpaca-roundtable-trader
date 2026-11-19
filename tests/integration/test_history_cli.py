@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from tests.fixtures.bars import daily_bars, make_bars
-from tests.fixtures.fakes import FakeHistoryClient
+from tests.fixtures.fakes import FakeHistoryClient, asked
 from trading_system.cli import main
 from trading_system.data.alpaca_data import AlpacaData
 from trading_system.data.universe import research_universe
@@ -51,6 +51,41 @@ def test_fetch_history_fills_the_store_and_says_what_it_did(
     assert "15m:" in out and "1h:" in out and "rows written" in out
     store = MarketBarRepository(session_factory)
     assert "AAPL" in store.load(["AAPL"], "15m") and "AAPL" in store.load(["AAPL"], "1h")
+
+
+def test_fetch_observe_keeps_the_oracles_extra_stocks_with_a_shorter_history(
+    alpaca: Any,
+    make_settings: Any,
+    tmp_path: Any,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """The extra stocks (docs/oracle-provider-task.md, section 5.2) get 45 days, the registered
+    observation universe the days asked for."""
+    from trading_system.data.universe import oracle_extra_symbols
+
+    now = datetime.now(timezone.utc)
+    extra = oracle_extra_symbols(["AAPL"])
+    bars_15m, bars_1h = make_bars(now)
+    client = FakeHistoryClient(
+        {15: {"AAPL": bars_15m, extra[0]: bars_15m}, 60: {"AAPL": bars_1h, extra[0]: bars_1h}}
+    )
+    alpaca(client)
+    url = f"sqlite:///{(tmp_path / 'observe.db').as_posix()}"
+    settings = make_settings(watchlist="AAPL", observe_database_url=url)
+
+    with patch("trading_system.cli.Settings", return_value=settings):
+        assert main(["fetch-observe", "--days", "180"]) == 0
+
+    out = capsys.readouterr().out
+    assert f"Updating {len(extra)} extra symbols, 45 days back" in out
+    ages = {}
+    for request in client.requests:
+        names = request.symbol_or_symbols
+        for name in [names] if isinstance(names, str) else names:
+            ages.setdefault(name in extra, set()).add((now - asked(request.start)).days)
+    assert max(ages[True]) <= 46 and min(ages[False]) >= 179  # extra: 45 days; the rest: 180
+    store = MarketBarRepository(get_session_factory(get_engine(url)))
+    assert extra[0] in store.load([extra[0]], "15m") and "AAPL" in store.load(["AAPL"], "1h")
 
 
 def test_fetch_history_reports_a_symbol_alpaca_does_not_know(

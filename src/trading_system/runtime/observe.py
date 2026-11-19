@@ -17,6 +17,15 @@ the observation store `var/observe.db`, brought up to date at the start of every
 `update_history` as `fetch-history`, then read back through the live loop's own `align_and_filter`:
 the strategy sees what it would see live. The same store feeds the hours research.
 
+**The extra stocks (docs/oracle-provider-task.md, section 5.2).** Besides the observed symbols the
+Oracle is asked about ~300 more liquid stocks (`data/oracle_extra.py`, picked by a written rule that
+looks at no return), to reach the minimum of vetoes in weeks instead of months. They are kept in the
+same store with a shorter history and are NOT part of the observation universe: the candidates'
+forward test and the hours research see the registered symbols only.
+
+**Expired signals are not asked about** (section 5.3): the live loop's risk refuses them before the
+Oracle, and the observer, which has no risk, keeps that rule itself.
+
 A signal's outcome is not looked at here; the judgement is a separate, written procedure.
 
 **The strategy candidates (docs/strategy-research-plan.md, section 12.1).** When given `candidates`, a
@@ -47,6 +56,11 @@ logger = logging.getLogger(__name__)
 
 # How far back the observation store is kept (the hours research reads all of it).
 HISTORY_DAYS = 180
+# The extra stocks (data/oracle_extra.py) feed only the Oracle's questions: the strategy needs
+# `lookback_days` of 15-minute and `htf_lookback_days` of hourly bars (30 and 30), and a shadow trade
+# needs the bars after its signal. 45 days cover both and make the first download about a quarter of the
+# size; nothing else reads their bars.
+EXTRA_HISTORY_DAYS = 45
 OBSERVE_EVENT = "observe_cycle"
 
 
@@ -60,6 +74,7 @@ class ObservationCycle(TradingCycle):
         store: MarketBarRepository,
         universe: Sequence[str],
         observed: Sequence[str],
+        extra: Sequence[str] = (),
         signal_repo: Any,
         state_repo: Any,
         audit_repo: Any,
@@ -87,7 +102,14 @@ class ObservationCycle(TradingCycle):
         )
         self.store = store
         self.universe = list(universe)  # the bars kept up to date
-        self.observed = list(observed)  # the symbols the Oracle is asked about
+        self.observed = list(
+            observed
+        )  # the symbols the Oracle is asked about, and the candidates run on
+        # The extra stocks (docs/oracle-provider-task.md, section 5.2): asked about like the others,
+        # but outside the observation universe, so the candidates' registered forward test (variants
+        # 18-20) and the hours research never see them.
+        known = set(self.universe) | set(self.observed)
+        self.extra = [s for s in extra if s not in known]
         self._updater = updater
         self.candidates = list(candidates)  # run forward in time, never asked about, never traded
 
@@ -125,6 +147,7 @@ class ObservationCycle(TradingCycle):
         except Exception as e:
             logger.error(f"Could not bring the observation bars up to date: {e}")
             return EntriesReport(skipped="bars could not be updated", retry_later=True), {}
+        self._update_extra(now)
 
         bars_15m, bars_1h = self._load(now)
         newest = max((df.index[-1] for df in bars_15m.values()), default=None)
@@ -138,13 +161,42 @@ class ObservationCycle(TradingCycle):
         signals = filter_signals(
             generate_signals(bars_15m, bars_1h, self.strategy_config, now), set()
         )
-        signals = [s for s in signals if s.symbol in self.observed]
-        logger.info(f"Observing {len(self.observed)} symbols: {len(signals)} signal(s).")
+        registered = set(self.observed)
+        extra = set(self.extra)
+        signals = [s for s in signals if s.symbol in registered or s.symbol in extra]
         report = EntriesReport(signals=len(signals))
-        detail: dict[str, int] = {"symbols": len(bars_15m), "asked": 0, "no_price": 0}
-        detail.update(self._journal_candidates(signals, bars_15m, bars_1h, now, expected_bar_start))
+        detail: dict[str, int] = {
+            "symbols": len(bars_15m),
+            "extra_symbols": len(extra),
+            "extra_signals": sum(1 for s in signals if s.symbol in extra),
+            "asked": 0,
+            "extra_asked": 0,
+            "no_price": 0,
+        }
+        # The candidates' forward test was registered over the observed symbols alone: the control and
+        # the bars they get are cut to that set, whatever else the Oracle is asked about.
+        detail.update(
+            self._journal_candidates(
+                [s for s in signals if s.symbol in registered],
+                {k: v for k, v in bars_15m.items() if k in registered},
+                {k: v for k, v in bars_1h.items() if k in registered},
+                now,
+                expected_bar_start,
+            )
+        )
+        # The live loop's first look at risk refuses an expired signal before the Oracle is asked
+        # (risk/engine.py); the observer has no risk, so it keeps that rule here. Without it the
+        # first pass of a session asked, twice, about a cross on the last bar of the day before
+        # (docs/oracle-provider-task.md, section 5.3). The candidates above saw every signal, as before.
+        fresh = [s for s in signals if s.expires_at is None or s.expires_at >= now]
+        detail["expired"] = len(signals) - len(fresh)
+        logger.info(
+            f"Observing {len(self.observed)} + {len(self.extra)} extra symbols: "
+            f"{len(signals)} signal(s)"
+            + (f", {detail['expired']} expired and not asked." if detail["expired"] else ".")
+        )
         state = self.state_repo.get_state() or TradingState()
-        for signal in signals:
+        for signal in fresh:
             try:
                 asked = self._ask_about(signal, state, bars_15m, bars_1h, now)
             except Exception as e:  # one broken signal must not stop the others
@@ -152,7 +204,27 @@ class ObservationCycle(TradingCycle):
                 report.errors += 1
                 continue
             detail["asked" if asked else "no_price"] += 1
+            if asked and signal.symbol in extra:
+                detail["extra_asked"] += 1
         return report, detail
+
+    def _update_extra(self, now: datetime) -> None:
+        """The extra stocks' bars, from their own, shorter window. Whatever goes wrong here is logged
+        and leaves the pass on the registered symbols alone: a stock with stale bars gives only
+        expired signals, and those are not asked about."""
+        if not self.extra:
+            return
+        try:
+            self._updater(
+                self.data,
+                self.store,
+                self.extra,
+                list(TIMEFRAMES),
+                start=now - timedelta(days=EXTRA_HISTORY_DAYS),
+                now=now,
+            )
+        except Exception as e:
+            logger.error(f"Could not bring the extra stocks' bars up to date: {e}")
 
     def _journal_candidates(
         self,
@@ -176,15 +248,16 @@ class ObservationCycle(TradingCycle):
 
     def _load(self, now: datetime) -> tuple[dict[str, pd.DataFrame], dict[str, pd.DataFrame]]:
         """The stored bars of the observed symbols, cut and aligned as the live loop does."""
+        asked = self.observed + self.extra
         stored_15m = self.store.load(
-            self.observed, "15m", start=now - timedelta(days=self.settings.lookback_days)
+            asked, "15m", start=now - timedelta(days=self.settings.lookback_days)
         )
         stored_1h = self.store.load(
-            self.observed, "1h", start=now - timedelta(days=self.settings.htf_lookback_days)
+            asked, "1h", start=now - timedelta(days=self.settings.htf_lookback_days)
         )
         out_15m: dict[str, pd.DataFrame] = {}
         out_1h: dict[str, pd.DataFrame] = {}
-        for symbol in self.observed:
+        for symbol in asked:
             if symbol not in stored_15m or symbol not in stored_1h:
                 continue
             fifteen, hourly = self.data.align_and_filter(stored_15m[symbol], stored_1h[symbol], now)

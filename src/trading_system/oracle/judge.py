@@ -57,6 +57,9 @@ from trading_system.storage.repositories import (
 START = datetime(2026, 11, 6, 16, 0, tzinfo=timezone.utc)
 PROBE_VERSION = "oracle-probe"
 JUDGEMENT_EVENT = "oracle_judgement"
+# A signal is valid from its bar's OPEN time (the stored `closed_bar_timestamp`) for 15 minutes of bar plus
+# 15 more: `expires_at` of strategy/trend.py is the bar's close plus 15 minutes.
+SIGNAL_VALID_FOR = timedelta(minutes=30)
 
 MIN_PER_GROUP = 30
 MIN_AVAILABILITY = 0.80
@@ -164,7 +167,19 @@ def collect(
                 if getattr(closed, "tzinfo", None) is None
                 else pd.Timestamp(closed).tz_convert("UTC"),
             )
-    return {k: v for k, v in sample.items() if "symbol" in v}
+    return {k: v for k, v in sample.items() if "symbol" in v and not _asked_late(v)}
+
+
+def _asked_late(entry: dict[str, Any]) -> bool:
+    """True if the signal was last put to the model after it had expired. The live loop's risk refuses
+    such a signal before the Oracle (risk/engine.py); the observer had no such look until 2026-11-19
+    and its first pass of a session asked about the cross on the last bar of the day before, 18 to 66
+    hours late (docs/oracle-provider-task.md, section 5.3). Those answers say nothing about a signal
+    that could have been traded, so they are not in the sample, whatever the model answered."""
+    asked = pd.Timestamp(entry["decided_at"])
+    if asked.tzinfo is None:
+        asked = asked.tz_localize("UTC")
+    return bool(asked > entry["closed_bar"] + SIGNAL_VALID_FOR)
 
 
 def is_answered(entry: dict[str, Any]) -> bool:

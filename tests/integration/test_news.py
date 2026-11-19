@@ -320,6 +320,24 @@ def test_the_command_fills_the_cache_and_says_what_it_did(
     assert "0 new, 0 changed, 1 already stored" in out[1]  # the second run found nothing new
 
 
+def test_the_command_without_symbols_covers_the_oracles_extra_stocks_too(
+    fake_alpaca: Any, make_settings: Any, news_url: str
+) -> None:
+    """A signal on an extra stock (docs/oracle-provider-task.md, section 5.2) must reach the model with
+    the same kind of input as any other, so the cache has to be filled for it as well."""
+    from trading_system.data.universe import news_symbols, oracle_extra_symbols
+
+    client = FakeNewsClient([])
+    fake_alpaca(client)
+    settings = make_settings(news_database_url=news_url)
+
+    assert _fetch(settings) == 0
+
+    asked = set((client.requests[0].symbols or "").split(","))
+    assert asked == set(news_symbols(settings.watchlist_symbols))
+    assert set(oracle_extra_symbols(settings.watchlist_symbols)) <= asked
+
+
 def test_the_command_says_so_when_no_news_comes_back(
     fake_alpaca: Any,
     make_settings: Any,

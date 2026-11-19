@@ -80,7 +80,11 @@ class Orchestrator:
         and can place no order. It reads the bars from the observation store."""
         from trading_system.broker.alpaca_broker import AlpacaBroker
         from trading_system.data.alpaca_data import AlpacaData
-        from trading_system.data.universe import observation_universe, observed_symbols
+        from trading_system.data.universe import (
+            observation_universe,
+            observed_symbols,
+            oracle_extra_symbols,
+        )
         from trading_system.oracle import create_oracle
         from trading_system.research.candidates import RECORDED
         from trading_system.runtime.observe import ObservationCycle
@@ -102,6 +106,7 @@ class Orchestrator:
             ),
             universe=observation_universe(watchlist),
             observed=observed_symbols(watchlist),
+            extra=oracle_extra_symbols(watchlist),
             signal_repo=SignalRepository(self.session_factory),
             state_repo=self.state_repo,
             audit_repo=AuditRepository(self.session_factory),

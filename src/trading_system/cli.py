@@ -623,11 +623,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
             from trading_system.data.alpaca_data import AlpacaData
             from trading_system.data.history import TIMEFRAMES, update_history
-            from trading_system.data.universe import observation_universe
+            from trading_system.data.universe import observation_universe, oracle_extra_symbols
+            from trading_system.runtime.observe import EXTRA_HISTORY_DAYS
             from trading_system.storage.research import SameDatabaseError, open_observe_store
 
             settings = Settings()
             symbols = observation_universe(settings.watchlist_symbols)
+            extra = oracle_extra_symbols(settings.watchlist_symbols)
             try:
                 repo = open_observe_store(settings.observe_database_url, settings.database_url)
             except SameDatabaseError as e:
@@ -635,14 +637,31 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return 1
             now = datetime.now(timezone.utc)
             print(f"Updating {len(symbols)} symbols, {args.days} days back...")
+            data = AlpacaData(settings)
             report = update_history(
-                AlpacaData(settings),
+                data,
                 repo,
                 symbols,
                 list(TIMEFRAMES),
                 start=now - timedelta(days=args.days),
                 now=now,
             )
+            if extra:
+                # The Oracle observer's extra stocks keep a shorter history of their own
+                # (docs/oracle-provider-task.md, section 5.2).
+                extra_days = min(args.days, EXTRA_HISTORY_DAYS)
+                print(f"Updating {len(extra)} extra symbols, {extra_days} days back...")
+                more = update_history(
+                    data,
+                    repo,
+                    extra,
+                    list(TIMEFRAMES),
+                    start=now - timedelta(days=extra_days),
+                    now=now,
+                )
+                report.rows.update(more.rows)
+                report.downloaded_again.extend(more.downloaded_again)
+                report.no_data.extend(more.no_data)
             for name in TIMEFRAMES:
                 written = sum(n for (_, tf), n in report.rows.items() if tf == name)
                 print(f"{name}: {written:,} rows written")
@@ -723,14 +742,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             from datetime import datetime, timezone
 
             from trading_system.data.news import NewsFeed, update_news
-            from trading_system.data.universe import research_universe
+            from trading_system.data.universe import news_symbols as all_news_symbols
             from trading_system.storage.news import SameNewsDatabaseError, open_news_store
 
             settings = Settings()
             news_symbols = (
                 [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
                 if args.symbols
-                else sorted(set(research_universe()) | set(settings.watchlist_symbols))
+                else all_news_symbols(settings.watchlist_symbols)
             )
             try:
                 store = open_news_store(

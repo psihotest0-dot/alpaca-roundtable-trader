@@ -21,6 +21,8 @@ let `fetch-daily` say which symbols have stopped (`data.history.stale_symbols`).
 
 from typing import Sequence
 
+from trading_system.data.oracle_extra import ORACLE_EXTRA
+
 MARKET_SYMBOL = "SPY"
 
 SECTORS: dict[str, tuple[str, ...]] = {
@@ -71,3 +73,18 @@ def observed_symbols(watchlist: Sequence[str]) -> list[str]:
     live loop already asks about those) and less the market ETF."""
     skip = set(watchlist) | {MARKET_SYMBOL}
     return [s for s in observation_universe(watchlist) if s not in skip]
+
+
+def oracle_extra_symbols(watchlist: Sequence[str]) -> list[str]:
+    """The extra stocks only the Oracle observer asks about (docs/oracle-provider-task.md, section
+    5.2): `ORACLE_EXTRA` less anything the observation universe already holds, sorted. They are NOT
+    part of `observation_universe`: the hours research and the candidates' forward test (variants
+    18-20) were registered over that set and must not move."""
+    followed = set(observation_universe(watchlist))
+    return sorted(s for s in set(ORACLE_EXTRA) if s not in followed)
+
+
+def news_symbols(watchlist: Sequence[str]) -> list[str]:
+    """Every symbol whose news is kept: the observation universe and the Oracle's extra stocks, so
+    that a signal on an extra stock reaches the model with the same kind of input as any other."""
+    return sorted(set(observation_universe(watchlist)) | set(oracle_extra_symbols(watchlist)))

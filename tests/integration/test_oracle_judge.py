@@ -585,13 +585,41 @@ def test_b_a_hold_that_was_lifted_counts_by_its_final_word(world: World) -> None
             verdict=OracleVerdict.APPROVE,
             provider="backend",
             mode="shadow",
-            decision_timestamp=FIRST_SIGNAL + timedelta(days=3, hours=2),
+            decision_timestamp=first.closed_bar_timestamp + timedelta(minutes=20),  # still valid
         )
     )
 
     j = _b_judge(world)
 
     assert (j.counts.approve, j.counts.veto, j.counts.held) == (61, 60, 0)
+
+
+def test_a_signal_put_to_the_model_after_it_expired_is_not_in_the_sample(world: World) -> None:
+    """Until 2026-11-19 the observer's first pass of a session asked about the cross on the last bar of
+    the day before, 18 to 66 hours late (docs section 5.3). A signal is valid for 30 minutes from its
+    bar's open time (`expires_at`: the bar's close plus 15 minutes); an answer later than that says
+    nothing about a signal that could have been traded."""
+    on_time = world.add("APPROVE", growth=0.006)  # a minute after the bar
+    at_the_limit = world.add("APPROVE", growth=0.006)
+    one_late = world.add("APPROVE", growth=0.006)
+    next_day = world.add("HOLD", growth=0.006)
+    for signal, minutes in ((at_the_limit, 30), (one_late, 31), (next_day, 18 * 60)):
+        world.answers.save(
+            OracleDecision(
+                signal_id=signal.signal_id or "",
+                verdict=OracleVerdict.APPROVE if signal is not next_day else OracleVerdict.HOLD,
+                provider="backend",
+                mode="shadow",
+                model=world.model,
+                prompt_version=world.label,
+                decision_timestamp=signal.closed_bar_timestamp + timedelta(minutes=minutes),
+            )
+        )
+
+    counts = world.judge().counts
+
+    # the latest answer of each signal decides: on time and exactly at the limit stay; the other two go
+    assert on_time.signal_id and counts.asked == 2 and counts.approve == 2 and counts.held == 0
 
 
 def test_b_skipping_what_was_not_approved_can_hurt(world: World) -> None:
@@ -666,7 +694,7 @@ def test_b_a_new_model_is_a_new_period_with_its_own_counts(world: World) -> None
 
     world.label = B
     for _ in range(5):  # answered after all the others: the newest answer decides the period
-        world.add("APPROVE", growth=0.006, answered_at=FIRST_SIGNAL + timedelta(days=60))
+        world.add("APPROVE", growth=0.006, day=60)
     j = _b_judge(world)
 
     assert j.counts.period is not None and j.counts.period[1] == B

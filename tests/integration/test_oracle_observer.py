@@ -14,17 +14,20 @@ from tests.fixtures.fakes import FakeBroker, FakeStockClient
 from tests.fixtures.oracles import ScriptedOracle
 from trading_system.config import Settings
 from trading_system.data.alpaca_data import AlpacaData
+from trading_system.data.oracle_extra import ORACLE_EXTRA
 from trading_system.data.universe import (
     MARKET_SYMBOL,
+    news_symbols,
     observation_universe,
     observed_symbols,
+    oracle_extra_symbols,
     research_universe,
 )
 from trading_system.domain.enums import OracleVerdict, SignalDirection
 from trading_system.domain.models import StrategySignal
 from trading_system.research.candidates import CANDIDATE_EVENT, CYCLE_EVENT
 from trading_system.strategy.base import BaseStrategy
-from trading_system.runtime.observe import OBSERVE_EVENT, ObservationCycle
+from trading_system.runtime.observe import EXTRA_HISTORY_DAYS, OBSERVE_EVENT, ObservationCycle
 from trading_system.runtime.orchestrator import Orchestrator
 from trading_system.runtime.runner import Runner
 from trading_system.runtime.schedule import bar_boundary, expected_bar_start
@@ -77,6 +80,9 @@ def make_cycle(make_settings: Any, observe_url: str, db_url: str, session_factor
         settings: Settings | None = None,
         fill: bool = True,
         candidates: tuple[Any, ...] = (),
+        extra: tuple[str, ...] = (),
+        universe: tuple[str, ...] | None = None,
+        extra_update_error: Exception | None = None,
     ) -> Setup:
         settings = settings or make_settings(watchlist="AAPL")
         store = open_observe_store(observe_url, db_url)
@@ -95,6 +101,8 @@ def make_cycle(make_settings: Any, observe_url: str, db_url: str, session_factor
             updates.append((args, kwargs))
             if update_error is not None:
                 raise update_error
+            if extra_update_error is not None and len(updates) > 1:
+                raise extra_update_error
 
         broker = FakeBroker()
         cycle = ObservationCycle(
@@ -102,8 +110,11 @@ def make_cycle(make_settings: Any, observe_url: str, db_url: str, session_factor
             broker=broker,
             data=data,
             store=store,
-            universe=list(stored),
+            universe=list(universe)
+            if universe is not None
+            else [s for s in stored if s not in extra],
             observed=list(observed),
+            extra=list(extra),
             signal_repo=SignalRepository(session_factory),
             state_repo=StateRepository(session_factory),
             audit_repo=AuditRepository(session_factory),
@@ -256,6 +267,56 @@ def test_a_stale_price_means_the_signal_is_not_asked_about(
     assert details["no_price"] == 1 and details["asked"] == 0
 
 
+def test_an_expired_signal_is_not_asked_about_but_is_counted(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    """The first pass of a session finds a cross on the last bar of the day before; the live loop's
+    risk would refuse it as expired before the Oracle (risk/engine.py), so the observer must not ask
+    (docs/oracle-provider-task.md, section 5.2)."""
+    oracle = ScriptedOracle(OracleVerdict.APPROVE)
+    setup = make_cycle(oracle=oracle)
+
+    report = setup.cycle.run_entries(NOW + timedelta(hours=18), expected_bar_start(NOW))
+
+    assert report.signals == 1 and report.errors == 0 and oracle.requests == []
+    assert _count(session_factory, StrategySignalModel) == 0  # not even saved: nothing points at it
+    ((details),) = _events(session_factory, OBSERVE_EVENT)
+    assert details["expired"] == 1 and details["asked"] == 0 and details["no_price"] == 0
+
+
+def test_a_signal_is_still_asked_about_until_the_last_moment_of_its_validity(
+    make_cycle: Any,
+) -> None:
+    oracle = ScriptedOracle(OracleVerdict.APPROVE)
+    setup = make_cycle(oracle=oracle)
+    expires = bar_boundary(NOW) + timedelta(minutes=15)  # the cross bar closed at the boundary
+
+    setup.cycle.run_entries(expires, expected_bar_start(NOW))  # the very moment it expires: valid
+    assert len(oracle.requests) == 1
+
+    setup.cycle.run_entries(
+        expires + timedelta(seconds=1), expected_bar_start(NOW)
+    )  # one second late
+    assert len(oracle.requests) == 1
+
+
+def test_the_candidates_still_see_the_expired_signals_the_oracle_is_not_asked_about(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    """The forward test of the candidates was registered over every signal the control finds; the
+    expiry rule belongs to the Oracle's questions only."""
+    name = "trend_cross_session"
+    setup = make_cycle(
+        oracle=ScriptedOracle(OracleVerdict.APPROVE),
+        candidates=(StubCandidate(name, [_stub_signal(name)]),),
+    )
+
+    setup.cycle.run_entries(NOW + timedelta(hours=18), expected_bar_start(NOW))
+
+    journal = _events(session_factory, CANDIDATE_EVENT)
+    assert sorted(d["strategy"] for d in journal) == ["trend_cross", name]
+
+
 def test_an_oracle_that_raises_does_not_stop_the_pass(make_cycle: Any) -> None:
     setup = make_cycle(oracle=ScriptedOracle(ConnectionError("lemonade is down")))
 
@@ -298,6 +359,131 @@ def test_the_runner_drives_it_like_the_live_loop(make_cycle: Any) -> None:
     runner.tick()
 
     assert len(oracle.requests) == 1 and waits  # asked once, then it waited for the next bar
+
+
+# ------------------------------------------------ the extra stocks (docs/oracle-provider-task.md, 5.2)
+
+
+def test_an_extra_stock_is_put_to_the_oracle_like_any_other(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    oracle = ScriptedOracle(OracleVerdict.APPROVE, OracleVerdict.APPROVE)
+    setup = make_cycle(oracle=oracle, extra=("JPM",), stored=("MSFT", "AAPL", "JPM"))
+
+    report = _run(setup)
+
+    assert sorted(r.signal.symbol for r in oracle.requests) == ["JPM", "MSFT"]
+    assert report.signals == 2 and report.errors == 0
+    assert setup.broker.submitted == [] and _count(session_factory, BrokerOrderModel) == 0
+    ((details),) = _events(session_factory, OBSERVE_EVENT)
+    assert details["extra_symbols"] == 1 and details["extra_signals"] == 1
+    assert details["asked"] == 2 and details["extra_asked"] == 1
+
+
+def test_the_candidates_and_their_control_never_see_the_extra_stocks(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    """The forward test of variants 18-20 was registered over the observed symbols: widening the
+    Oracle's questions must not move it."""
+    seen: list[set[str]] = []
+
+    class Spy(StubCandidate):
+        def generate_signals(self, data_15m: Any, data_1h: Any, eval_time: Any) -> list[Any]:
+            seen.append(set(data_15m) | set(data_1h))
+            return super().generate_signals(data_15m, data_1h, eval_time)
+
+    name = "trend_cross_session"
+    setup = make_cycle(
+        oracle=ScriptedOracle(OracleVerdict.APPROVE, OracleVerdict.APPROVE),
+        extra=("JPM",),
+        stored=("MSFT", "AAPL", "JPM"),
+        candidates=(Spy(name, []),),
+    )
+
+    _run(setup)
+
+    assert seen == [{"MSFT"}]  # AAPL (watchlist) and JPM (extra) are not there; only the observed
+    control = [
+        d for d in _events(session_factory, CANDIDATE_EVENT) if d["strategy"] == "trend_cross"
+    ]
+    assert [d["symbol"] for d in control] == ["MSFT"]  # JPM signalled and was asked, not journalled
+
+
+def test_the_extra_stocks_bars_are_updated_apart_with_a_shorter_window(make_cycle: Any) -> None:
+    setup = make_cycle(
+        oracle=ScriptedOracle(OracleVerdict.APPROVE, OracleVerdict.APPROVE),
+        extra=("JPM",),
+        stored=("MSFT", "AAPL", "JPM"),
+    )
+
+    _run(setup)
+
+    (core_args, core_kwargs), (extra_args, extra_kwargs) = setup.updates
+    assert core_args[2] == ["MSFT", "AAPL"] and (NOW - core_kwargs["start"]).days == 180
+    assert extra_args[2] == ["JPM"] and (NOW - extra_kwargs["start"]).days == EXTRA_HISTORY_DAYS
+
+
+def test_without_extra_stocks_the_bars_are_updated_once(make_cycle: Any) -> None:
+    setup = make_cycle(oracle=ScriptedOracle(OracleVerdict.APPROVE))
+
+    _run(setup)
+
+    assert len(setup.updates) == 1
+
+
+def test_a_failed_update_of_the_extra_stocks_leaves_the_registered_ones_alone(
+    make_cycle: Any,
+) -> None:
+    oracle = ScriptedOracle(OracleVerdict.APPROVE, OracleVerdict.APPROVE)
+    setup = make_cycle(
+        oracle=oracle,
+        extra=("JPM",),
+        stored=("MSFT", "AAPL", "JPM"),
+        extra_update_error=ConnectionError("alpaca is down"),
+    )
+
+    report = _run(setup)
+
+    assert not report.retry_later and report.errors == 0
+    assert "MSFT" in [r.signal.symbol for r in oracle.requests]
+
+
+def test_a_stock_that_is_already_followed_is_not_an_extra_one_too(make_cycle: Any) -> None:
+    setup = make_cycle(
+        oracle=ScriptedOracle(OracleVerdict.APPROVE),
+        observed=("MSFT",),
+        universe=("MSFT", "AAPL"),  # the observed one and a watchlist symbol are in the universe
+        extra=("MSFT", "AAPL", "JPM"),
+        stored=("MSFT", "AAPL", "JPM"),
+    )
+
+    assert setup.cycle.extra == ["JPM"]
+
+
+def test_the_extra_list_is_a_clean_list_of_300_symbols_outside_the_observation_universe() -> None:
+    """data/oracle_extra.py is the output of the registered selection and is never edited by hand;
+    this pins its shape (docs/oracle-provider-task.md, section 5.2)."""
+    watchlist = Settings(
+        _env_file=None, alpaca_api_key="k", alpaca_secret_key="s"
+    ).watchlist_symbols
+
+    assert len(ORACLE_EXTRA) == 300 and len(set(ORACLE_EXTRA)) == 300
+    assert list(ORACLE_EXTRA) == sorted(ORACLE_EXTRA)
+    assert all(s.isalpha() and s.isupper() and 1 <= len(s) <= 5 for s in ORACLE_EXTRA)
+    assert not set(ORACLE_EXTRA) & (set(observation_universe(watchlist)) | {MARKET_SYMBOL})
+    assert oracle_extra_symbols(watchlist) == list(ORACLE_EXTRA)
+    assert not {"SQQQ", "TQQQ"} & set(ORACLE_EXTRA)  # the two ETFs the first run let through
+
+
+def test_the_extra_stocks_are_not_part_of_the_observation_universe_but_have_news() -> None:
+    watchlist = ["AAPL", "MSFT"]
+    universe = observation_universe(watchlist)
+    extra = oracle_extra_symbols(watchlist)
+
+    assert extra and not set(extra) & set(universe)  # the hours research and the candidates
+    assert universe == sorted(set(research_universe()) | set(watchlist))  # ... did not move
+    assert set(news_symbols(watchlist)) == set(universe) | set(extra)
+    assert not set(extra) & set(observed_symbols(watchlist))  # the observed set did not grow either
 
 
 # ------------------------------------------------------------- the universe and the wiring
