@@ -4,3 +4,17 @@ security:
     SFTY-20260902-58666:
       reason: "CVE-2026-81726, path traversal in nltk's parser/tagger save and load functions, which nothing here calls; dev-group only"
       expires: 2027-03-01
+    # filelock 3.32.7: three advisories of 2026-10-17 on every version from 3.10 to 4.2.0. It is in the dev
+    # group of poetry.lock only because `safety` needs it, and safety 3.8.1 (the newest) pins filelock<4.0,
+    # so the fixed 4.2.1 cannot be locked (`poetry update filelock --lock` changes nothing). The image holds
+    # its own copy as a dependency of the build-time Poetry and virtualenv, outside the lock; no Python file
+    # of this repository imports filelock. Look again when safety lifts its pin (then `poetry update filelock`).
+    SFTY-20261017-72390:
+      reason: "CVE-2026-112910, incorrect permission assignment on the lock file that filelock creates; dev-group only (needed by safety, which pins filelock<4.0), build-time copy in the image, no code here imports it"
+      expires: 2027-03-01
+    SFTY-20261017-54654:
+      reason: "CVE-2026-112908, incorrect permission assignment on the lock file that filelock creates; dev-group only (needed by safety, which pins filelock<4.0), build-time copy in the image, no code here imports it"
+      expires: 2027-03-01
+    SFTY-20261017-57659:
+      reason: "CVE-2026-112938, race condition enabling link following in filelock's check before it creates the lock file; dev-group only (needed by safety, which pins filelock<4.0), build-time copy in the image, no code here imports it"
+      expires: 2027-03-01
