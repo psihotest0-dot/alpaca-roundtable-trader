@@ -269,6 +269,22 @@ def create_parser() -> argparse.ArgumentParser:
         "signal put to the Oracle, NO order ever placed (needs `fetch-observe` first).",
     )
 
+    # fractional paper trial (docs/fractional-paper-trial.md)
+    subparsers.add_parser(
+        "fractional-run",
+        help="Runs the fractional paper trial: the live strategy's signals as REAL paper orders in "
+        "the SECOND paper account, in fractions of a share (refuses to run on the live loop's key).",
+    )
+    subparsers.add_parser(
+        "fractional-report",
+        help="Reports what the fractional paper trial did and the written criteria of "
+        "operational readiness (read-only).",
+    )
+    subparsers.add_parser(
+        "fractional-resume",
+        help="Lifts the halt of the fractional trial's entries if every position has a standing stop.",
+    )
+
     # pause-entries command
     subparsers.add_parser("pause-entries", help="Halts the trading system, preventing new entries.")
 
@@ -1197,6 +1213,56 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"Observe error: {type(e).__name__}: {e}")
+            return 1
+
+    elif args.command == "fractional-run":
+        print("Starting the fractional paper trial (real paper orders in the SECOND account)...")
+        try:
+            from trading_system.runtime.orchestrator import Orchestrator
+
+            Orchestrator(Settings()).run_fractional()
+            return 0
+        except ValidationError as e:
+            print(f"Configuration validation failed: {e}")
+            return 1
+        except KeyboardInterrupt:
+            return 0
+        except Exception as e:
+            print(f"fractional-run error: {type(e).__name__}: {e}")
+            return 1
+
+    elif args.command == "fractional-report":
+        try:
+            from datetime import datetime, timezone
+
+            from trading_system.fractional.report import build as build_fractional
+            from trading_system.fractional.report import format_report as format_fractional
+            from trading_system.storage.database import get_engine, get_session_factory
+            from trading_system.storage.repositories import AuditRepository
+
+            settings = Settings()
+            audit = AuditRepository(get_session_factory(get_engine(settings.database_url)))
+            print(format_fractional(build_fractional(audit, datetime.now(timezone.utc))))
+            return 0
+        except Exception as e:
+            print(f"fractional-report error: {type(e).__name__}: {e}")
+            return 1
+
+    elif args.command == "fractional-resume":
+        try:
+            from datetime import datetime, timezone
+
+            from trading_system.runtime.orchestrator import Orchestrator
+
+            cycle = Orchestrator(Settings()).build_fractional_cycle()
+            missing = cycle.resume(datetime.now(timezone.utc))
+            if missing:
+                print("Not resumed: no standing stop for " + ", ".join(missing))
+                return 1
+            print("The fractional entries are resumed (every position has a standing stop).")
+            return 0
+        except Exception as e:
+            print(f"fractional-resume error: {type(e).__name__}: {e}")
             return 1
 
     elif args.command == "pause-entries":

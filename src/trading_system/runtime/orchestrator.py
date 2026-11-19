@@ -142,6 +142,56 @@ class Orchestrator:
                 restore()
         logger.info("Observer shutting down.")
 
+    def build_fractional_cycle(self) -> Any:
+        """The fractional paper trial's loop (docs/fractional-paper-trial.md): REAL paper orders, in the
+        account of the keys this process was given, which must not be the live loop's."""
+        from trading_system.broker.alpaca_broker import AlpacaBroker
+        from trading_system.data.alpaca_data import AlpacaData
+        from trading_system.fractional.cycle import FractionalCycle
+        from trading_system.observability.alerts import LoggingAlertManager
+        from trading_system.storage.repositories import AuditRepository
+
+        forbidden = self.settings.fractional_forbidden_key_id.strip()
+        if not forbidden:
+            raise RuntimeError(
+                "FRACTIONAL_FORBIDDEN_KEY_ID is empty: it must hold the live loop's key id, so "
+                "that the trial can refuse to run on that account."
+            )
+        if self.settings.alpaca_api_key.get_secret_value() == forbidden:
+            raise RuntimeError(
+                "The fractional loop was given the live loop's key: it must run on the second "
+                "paper account (ALPACA_PAPER2_API_KEY). Nothing was started."
+            )
+        return FractionalCycle(
+            settings=self.settings,
+            broker=AlpacaBroker(self.settings),
+            data=AlpacaData(self.settings),
+            audit_repo=AuditRepository(self.session_factory),
+            strategy_config=RUNTIME_STRATEGY,
+            alerts=LoggingAlertManager(logger),
+        )
+
+    def run_fractional(self, handle_signals: bool = True) -> None:
+        """Runs the fractional loop until SIGINT or SIGTERM. Positions and stops stay as they are on
+        the way out: the stops are the broker's, and the next start renews what has expired."""
+        cycle = self.build_fractional_cycle()
+        logger.info(
+            "Running the FRACTIONAL paper trial: real paper orders in the second account, "
+            f"virtual capital {self.settings.fractional_budget_usd} dollars."
+        )
+        runner = Runner(
+            cycle, cycle.broker, heartbeat=Heartbeat(Path(self.settings.heartbeat_path))
+        )
+        restore = self._stop_on_signals(runner) if handle_signals else None
+        try:
+            runner.run()
+        except KeyboardInterrupt:
+            pass
+        finally:
+            if restore:
+                restore()
+        logger.info("Fractional loop shutting down.")
+
     def _start_metrics(self) -> None:
         """Serves /metrics when METRICS_ENABLED is on (docs: the backend's Prometheus scrapes it). A
         port that cannot be taken is an error in the log and nothing more: the metrics are an

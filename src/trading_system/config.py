@@ -88,6 +88,19 @@ class Settings(BaseSettings):
         "COIN,MSTR,SHOP,ORCL,MU,NKE,AAL,RIG,MARA,OPEN,PATH"
     )
 
+    # The fractional paper trial on the second account (docs/fractional-paper-trial.md). The account holds
+    # a million dollars of paper money; the broker will not limit the bot, so these do: the loop works
+    # with a virtual capital of the budget (moved by what the account makes or loses) and refuses any
+    # single order above the ceiling.
+    fractional_budget_usd: float = Field(500.0, gt=0)
+    fractional_max_order_usd: float = Field(50.0, gt=0)
+    # While this file exists the loop makes no new entry (it is made when a position stays unprotected).
+    fractional_halt_path: str = "./var/fractional_halt"
+    # The key id of the LIVE LOOP's account. The fractional loop refuses to start on that key (or when
+    # this is empty): a mistake in the compose file must not let the trial place orders in the account
+    # whose protection check would halt the live loop. Compose fills it from ALPACA_API_KEY.
+    fractional_forbidden_key_id: str = ""
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     @field_validator("oracle_backend_url")
@@ -126,6 +139,11 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"MAX_PLANNED_RISK_PER_TRADE_PCT ({self.max_planned_risk_per_trade_pct}) is larger "
                 f"than MAX_TOTAL_PLANNED_OPEN_RISK_PCT ({self.max_total_planned_open_risk_pct})"
+            )
+        if self.fractional_max_order_usd > self.fractional_budget_usd:
+            raise ValueError(
+                f"FRACTIONAL_MAX_ORDER_USD ({self.fractional_max_order_usd}) is larger than "
+                f"FRACTIONAL_BUDGET_USD ({self.fractional_budget_usd})"
             )
         # Not read yet: the 15-minute and 1-hour bars are fixed in the data layer. Another value
         # would be accepted and silently ignored, which is worse than refusing it.

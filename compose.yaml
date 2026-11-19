@@ -199,6 +199,39 @@ services:
       retries: 3
       start_period: 15m
 
+  # The fractional paper trial (docs/fractional-paper-trial.md): the live strategy's signals as REAL paper
+  # orders in the SECOND paper account (keys ALPACA_PAPER2_*), in fractions of a share, with a virtual
+  # capital of 500 dollars. Alpaca takes no bracket and no GTC stop for fractional orders, so a DAY stop is
+  # placed after each fill and again whenever it is missing, and the take-profit is done by the software.
+  # It refuses to run on the live loop's key (FRACTIONAL_FORBIDDEN_KEY_ID is the live loop's key id and is
+  # only compared, never used) and shares no state with the live loop: its journal is `fractional_*` rows of
+  # audit_events, its halt is the file var/fractional_halt (`fractional-resume` lifts it). No port, no
+  # Oracle. `docker compose exec fractional python -m trading_system fractional-report` judges it.
+  fractional:
+    image: alpaca-roundtable-trader:latest
+    container_name: alpaca-trader-fractional
+    restart: unless-stopped
+    mem_limit: 512m
+    memswap_limit: 512m
+    logging: *logging
+    stop_grace_period: 30s
+    environment:
+      ALPACA_API_KEY: ${ALPACA_PAPER2_API_KEY:?Put ALPACA_PAPER2_API_KEY in .env}
+      ALPACA_SECRET_KEY: ${ALPACA_PAPER2_SECRET_KEY:?Put ALPACA_PAPER2_SECRET_KEY in .env}
+      FRACTIONAL_FORBIDDEN_KEY_ID: ${ALPACA_API_KEY:?Put ALPACA_API_KEY in .env}
+      IS_PAPER: "true"
+      DATABASE_URL: sqlite:///./var/trading.db
+      HEARTBEAT_PATH: ./var/fractional_heartbeat.json
+    volumes:
+      - trading_var:/app/var
+    command: ["python", "-m", "trading_system", "fractional-run"]
+    healthcheck:
+      test: ["CMD", "python", "-m", "trading_system", "health"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 2m
+
   # The weekly signal tested forward in time (docs/strategy-research-plan.md, section 10): every
   # hour it brings the daily bars of the research universe up to date (`fetch-daily`, about 11
   # seconds) and, once the day's bar is final (30 minutes after the close), records the signal's
