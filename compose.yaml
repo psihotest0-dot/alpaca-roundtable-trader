@@ -232,6 +232,44 @@ services:
       retries: 3
       start_period: 2m
 
+  # The live strategy with REAL paper orders on the THIRD paper account (docs/paper-third-account.md; keys
+  # ALPACA_PAPER3_*, account ends 05IN): `run --paper`, the same code as the dry-run loop `trader`, which stays
+  # unchanged as the twin. Whole shares, the full bracket (stop and target, GTC), the same 22 symbols and the
+  # same percentages; what differs is the account, the limit of positions (20 instead of 5, gross 80 % instead
+  # of 20 %) and a database of its own (var/paper3.db), so it shares no order, position or halt with `trader`.
+  # No Oracle, no port. Stop it with `docker compose stop paper3`; open positions keep their stop and target at
+  # Alpaca. Paper money only (IS_PAPER is forced to true by the settings).
+  paper3:
+    image: alpaca-roundtable-trader:latest
+    container_name: alpaca-trader-paper3
+    restart: unless-stopped
+    mem_limit: 1g
+    memswap_limit: 1g
+    logging: *logging
+    stop_grace_period: 30s
+    environment:
+      ALPACA_API_KEY: ${ALPACA_PAPER3_API_KEY:?Put ALPACA_PAPER3_API_KEY in .env}
+      ALPACA_SECRET_KEY: ${ALPACA_PAPER3_SECRET_KEY:?Put ALPACA_PAPER3_SECRET_KEY in .env}
+      IS_PAPER: "true"
+      DATABASE_URL: sqlite:///./var/paper3.db
+      HEARTBEAT_PATH: ./var/paper3_heartbeat.json
+      MAX_OPEN_POSITIONS: "20"
+      MAX_GROSS_EXPOSURE_PCT: "0.80"
+    volumes:
+      - trading_var:/app/var
+    command:
+      - sh
+      - -c
+      - |
+        python -m alembic -x db_url=sqlite:///./var/paper3.db upgrade head || exit 1
+        exec python -m trading_system run --paper
+    healthcheck:
+      test: ["CMD", "python", "-m", "trading_system", "health"]
+      interval: 60s
+      timeout: 20s
+      retries: 3
+      start_period: 180s
+
   # The weekly signal tested forward in time (docs/strategy-research-plan.md, section 10): every
   # hour it brings the daily bars of the research universe up to date (`fetch-daily`, about 11
   # seconds) and, once the day's bar is final (30 minutes after the close), records the signal's

@@ -1,5 +1,6 @@
 """The migrations must build exactly what the models describe, and must not lose data."""
 
+import argparse
 from datetime import datetime, timezone
 from decimal import Decimal
 from pathlib import Path
@@ -10,7 +11,7 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, inspect, text
 
 from trading_system.domain.enums import OrderSide, OrderStatus, OrderType
 from trading_system.domain.models import BrokerOrder
@@ -442,3 +443,19 @@ def test_the_prompt_label_goes_away_on_downgrade_without_losing_the_rows(
         columns = [r[1] for r in conn.execute(text("PRAGMA table_info(oracle_decisions)"))]
         assert "prompt_version" not in columns and "model" in columns  # only the newest went
         assert conn.execute(text("SELECT count(*) FROM oracle_decisions")).scalar() == 2
+
+
+def test_the_db_url_x_argument_builds_another_database_and_leaves_the_ini_one_alone(
+    db: tuple[Any, Config], tmp_path: Path
+) -> None:
+    """`alembic -x db_url=...` is how the third paper account gets its own var/paper3.db
+    (docs/paper-third-account.md). Before it, alembic always built the url of alembic.ini, so a
+    container with another DATABASE_URL started on a database without tables."""
+    ini_engine, cfg = db
+    other_url = f"sqlite:///{(tmp_path / 'other.db').as_posix()}"
+    cfg.cmd_opts = argparse.Namespace(x=[f"db_url={other_url}"])
+
+    command.upgrade(cfg, "head")
+
+    assert "broker_orders" in inspect(create_engine(other_url)).get_table_names()
+    assert inspect(ini_engine).get_table_names() == []
