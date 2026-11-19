@@ -162,8 +162,10 @@ services:
       start_period: 5m
 
   # The Oracle observer (runtime/observe.py): the live strategy over the observation universe (the
-  # research universe less the watchlist, ~133 symbols), each signal put to the Oracle the way the
-  # live loop does it and NO order placed (the cycle is built without a risk or execution engine).
+  # research universe less the watchlist, ~133 symbols) and, since 2026-11-19, ~300 more liquid stocks
+  # (data/oracle_extra.py, section 5.2 of docs/oracle-provider-task.md), each signal put to the Oracle
+  # the way the live loop does it and NO order placed (the cycle is built without a risk or execution
+  # engine). Expired signals are not asked about (section 5.3).
   # It gathers signals several times faster than the 22 watchlist symbols can, so that the model can
   # be judged sooner (docs/oracle-provider-task.md, section 5). The bars come from var/observe.db,
   # filled at start (`fetch-observe`: minutes the first time) and brought up to date every cycle.
