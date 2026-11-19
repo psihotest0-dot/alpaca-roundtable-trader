@@ -96,7 +96,16 @@ jobs:
       - name: Dependency Vulnerability Check
         run: |
           poetry run pip install safety
-          poetry self add poetry-plugin-export@^1.8.0 && poetry export -f requirements.txt | poetry run safety check --stdin
+          poetry self add poetry-plugin-export@^1.8.0
+          poetry export -f requirements.txt > "$RUNNER_TEMP/requirements.txt"
+          # On a failure the report is also written as an annotation: the job log needs a login to be read,
+          # an annotation does not (2026-11-19: exit code 64 with nothing else to go on).
+          if ! poetry run safety check --stdin < "$RUNNER_TEMP/requirements.txt" > "$RUNNER_TEMP/safety.txt" 2>&1; then
+            cat "$RUNNER_TEMP/safety.txt"
+            echo "::error title=safety check failed::$(sed 's/\x1b\[[0-9;]*m//g' "$RUNNER_TEMP/safety.txt" | grep -E 'Vulnerability found|Vulnerability ID|Affected spec|CVE-|vulnerabilities reported|Error|error' | head -30 | tr '\n' ' ')"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/safety.txt"
 
       - name: Run Ruff Check
         run: poetry run ruff check .
