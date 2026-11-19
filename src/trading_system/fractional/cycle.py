@@ -30,6 +30,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.trading.requests import LimitOrderRequest, MarketOrderRequest, StopOrderRequest
 
 from trading_system.data.live_price import UnusableLivePrice, check_live_price
+from trading_system.data.universe import MARKET_SYMBOL, observation_universe
 from trading_system.fractional.plan import (
     QUANTITY_TOLERANCE,
     HardCapExceeded,
@@ -116,7 +117,12 @@ class FractionalCycle:
 
     @property
     def watchlist(self) -> list[str]:
-        return list(self.settings.watchlist_symbols)
+        """The symbols the trial trades (docs/fractional-paper-trial.md, section 5)."""
+        if self.settings.fractional_symbols == "watchlist":
+            return list(self.settings.watchlist_symbols)
+        return [
+            s for s in observation_universe(self.settings.watchlist_symbols) if s != MARKET_SYMBOL
+        ]
 
     # ------------------------------------------------------------------ small things
 
@@ -301,6 +307,9 @@ class FractionalCycle:
         pending = [o for o in orders if _text(o.side) == "buy"]
         if any(o.symbol == symbol for o in pending) or any(p.symbol == symbol for p in positions):
             return refuse("a position or an entry for the symbol exists")
+        asset = self.broker.get_asset(symbol)
+        if not (asset.tradable and asset.fractionable):
+            return refuse("the asset is not tradable or not fractionable")
 
         stop_pct = Decimal(str(self.settings.stop_loss_pct))
         open_gross = sum((_decimal(p.market_value, "market value") for p in positions), Decimal(0))

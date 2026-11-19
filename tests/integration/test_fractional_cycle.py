@@ -41,6 +41,7 @@ class SecondAccount:
         self.market_open = True
         self.fill_entries = False
         self.stop_error: Exception | None = None
+        self.not_fractionable: set[str] = set()
         self.positions: dict[str, Position] = {}
         self.orders: dict[uuid.UUID, Order] = {}
         self.requests: list[Any] = []
@@ -68,6 +69,11 @@ class SecondAccount:
 
     def get_positions(self) -> list[Position]:
         return list(self.positions.values())
+
+    def get_asset(self, symbol: str) -> SimpleNamespace:
+        return SimpleNamespace(
+            symbol=symbol, tradable=True, fractionable=symbol not in self.not_fractionable
+        )
 
     def get_open_orders(self) -> list[Order]:
         return [o for o in self.orders.values() if _status(o) in OPEN_STATUSES]
@@ -247,6 +253,7 @@ def make_cycle(make_settings: Any, session_factory: Any, tmp_path: Path) -> Any:
         *, watchlist: str = "MSFT", broker: SecondAccount | None = None, **overrides: Any
     ) -> Setup:
         halt = tmp_path / "fractional_halt"
+        overrides.setdefault("fractional_symbols", "watchlist")  # the wide set has its own tests
         settings = make_settings(watchlist=watchlist, fractional_halt_path=str(halt), **overrides)
         bars_15m, bars_1h = make_bars(NOW)
         symbols = settings.watchlist_symbols
@@ -641,6 +648,62 @@ def test_a_halt_is_lifted_only_when_every_position_has_a_standing_stop(
         "fractional_resumed", NOW - timedelta(days=1), NOW + timedelta(days=1)
     )
     assert len(events) == 1
+
+
+# ------------------------------------------------------------- the symbols (plan, section 5)
+
+
+def test_a_stock_that_cannot_be_bought_in_fractions_is_refused(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    broker = SecondAccount()
+    broker.not_fractionable = {"MSFT"}
+    setup = make_cycle(broker=broker)
+
+    report = _entries(setup)
+
+    assert report.signals == 1 and report.submitted == 0 and broker.requests == []
+    (refused,) = _events(session_factory, "fractional_refused")
+    assert "not fractionable" in refused["reason"]
+
+
+def test_the_wide_setting_trades_the_observation_universe_without_the_market_etf_or_the_extras(
+    make_cycle: Any,
+) -> None:
+    from trading_system.data.oracle_extra import ORACLE_EXTRA
+
+    symbols = make_cycle(watchlist="AAPL", fractional_symbols="observation").cycle.watchlist
+
+    assert "AAPL" in symbols and "KO" in symbols  # the watchlist and the observed stocks
+    assert "SPY" not in symbols  # the market ETF is a yardstick, not a trade
+    assert not set(symbols) & set(ORACLE_EXTRA)  # the Oracle's extra stocks stay out
+    assert len(symbols) >= 140 and len(set(symbols)) == len(symbols)
+
+
+def test_the_narrow_setting_trades_only_the_watchlist(make_cycle: Any) -> None:
+    setup = make_cycle(watchlist="AAPL,MSFT", fractional_symbols="watchlist")
+
+    assert setup.cycle.watchlist == ["AAPL", "MSFT"]
+
+
+def test_a_pass_with_the_wide_setting_asks_for_the_bars_of_every_symbol(make_cycle: Any) -> None:
+    setup = make_cycle(watchlist="MSFT", fractional_symbols="observation")
+
+    report = _entries(setup)
+
+    asked = {
+        s
+        for request in setup.cycle.data.client.requests  # type: ignore[attr-defined]
+        for s in (
+            [request.symbol_or_symbols]
+            if isinstance(request.symbol_or_symbols, str)
+            else request.symbol_or_symbols
+        )
+    }
+    assert len(asked) >= 140 and "KO" in asked and "SPY" not in asked
+    assert (
+        report.signals == 1 and report.submitted == 1
+    )  # MSFT is the only one the fake has bars for
 
 
 # ------------------------------------------------------------------------------------ the walls

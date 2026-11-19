@@ -96,6 +96,9 @@ class Settings(BaseSettings):
     fractional_max_order_usd: float = Field(50.0, gt=0)
     # While this file exists the loop makes no new entry (it is made when a position stays unprotected).
     fractional_halt_path: str = "./var/fractional_halt"
+    # Which symbols the trial trades (docs/fractional-paper-trial.md, section 5): "observation" is the
+    # watchlist plus the observed stocks (without SPY); "watchlist" is the 22 of the live loop only.
+    fractional_symbols: Literal["observation", "watchlist"] = "observation"
     # The key id of the LIVE LOOP's account. The fractional loop refuses to start on that key (or when
     # this is empty): a mistake in the compose file must not let the trial place orders in the account
     # whose protection check would halt the live loop. Compose fills it from ALPACA_API_KEY.
