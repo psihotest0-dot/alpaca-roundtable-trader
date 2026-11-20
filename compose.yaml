@@ -78,6 +78,9 @@ services:
     # plain Linux Docker add `extra_hosts: ["host.docker.internal:host-gateway"]`).
     environment:
       <<: [*alpaca-env, *oracle-env, *metrics-env]
+      # 2026-11-20 (owner): the dry-run loop trades the 55-stock portfolio of docs/paper-third-account.md,
+      # section 6, like paper3. The observer keeps its own WATCHLIST: the observation universe must not move.
+      WATCHLIST_PRESET: paper3_portfolio
     # /metrics for the Go backend's Prometheus (job alpaca-trader, scraped as host.docker.internal:9101).
     # Published on the PC's loopback only: the page has no password.
     ports:
@@ -255,6 +258,7 @@ services:
       HEARTBEAT_PATH: ./var/paper3_heartbeat.json
       MAX_OPEN_POSITIONS: "20"
       MAX_GROSS_EXPOSURE_PCT: "0.80"
+      WATCHLIST_PRESET: paper3_portfolio  # the 55-stock portfolio (section 6 of docs/paper-third-account.md), switched on 2026-11-20
     volumes:
       - trading_var:/app/var
     command:
