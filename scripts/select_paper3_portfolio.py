@@ -7,7 +7,7 @@ Run it inside a container that has the code and the Alpaca data keys, from the r
 It writes ONE JSON object on stdout (the candidates and the numbers behind them) and a short summary
 on stderr. It places no order and writes nothing to any database.
 
-**The rule is registered in the document before any number, and it looks at no return of any kind:**
+**The rule is registered in the document before any number, and selects by no return (its size or sign):**
 
 1. The pool: the observed stocks (the research universe and the watchlist, less SPY) and the Oracle's
    extra stocks (`data.oracle_extra`), about 450.
@@ -21,6 +21,9 @@ on stderr. It places no order and writes nothing to any database.
    stocks whose risk is closest to the median risk of the eligible, taken only from the upper half by
    median dollar volume (so the big liquid companies come in by themselves and there is no third group).
 5. Ties are broken by the symbol, so a re-run on the same bars gives the same lists.
+6. The daily log returns of the last 60 completed sessions of every eligible stock are written next to
+   the candidates. The freeze step reads them ONLY to measure how much two stocks move together (the
+   correlation cap of section 6.3); nothing here selects by the size or sign of a return.
 
 The review (step 2) and the freeze (step 3) are `scripts/freeze_paper3_portfolio.py`.
 """
@@ -31,6 +34,7 @@ import sys
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
+import numpy as np
 import pandas as pd
 from alpaca.data.timeframe import TimeFrame
 from alpaca.trading.client import TradingClient
@@ -98,6 +102,7 @@ def table(data: AlpacaData, symbols: list[str], now: datetime) -> pd.DataFrame:
     today = now.astimezone(ZoneInfo("America/New_York")).date()
     start = now - timedelta(days=DAILY_SESSIONS * 7 // 5 + 12)
     rows = []
+    series: dict[str, pd.Series] = {}
     last_day = None
     for part in chunks(symbols, CHUNK):
         frames = data.fetch_bars_bulk(part, TimeFrame.Day, start, now, feed="sip")
@@ -109,6 +114,11 @@ def table(data: AlpacaData, symbols: list[str], now: datetime) -> pd.DataFrame:
             day = bars.index[-1].tz_convert("America/New_York").date()
             last_day = day if last_day is None else max(last_day, day)
             recent = bars.tail(RANGE_SESSIONS)
+            log_returns = np.log(bars["close"]).diff().dropna()
+            log_returns.index = [
+                str(d.date()) for d in log_returns.index.tz_convert("America/New_York")
+            ]
+            series[symbol] = log_returns
             rows.append(
                 {
                     "symbol": symbol,
@@ -122,11 +132,15 @@ def table(data: AlpacaData, symbols: list[str], now: datetime) -> pd.DataFrame:
             )
     out = pd.DataFrame(rows)
     out.attrs["last_session"] = str(last_day)
+    out.attrs["returns"] = pd.DataFrame(series).sort_index()
     return out
 
 
 def main() -> None:
-    settings = Settings()
+    # The pool is the observed universe as registered on 2026-11-19 (research universe + the 22-stock
+    # WATCHLIST + the Oracle's extra stocks). The preset must not move it: run in a container where
+    # WATCHLIST_PRESET is set (trader, paper3) and the pool would shrink to the new list's neighbours.
+    settings = Settings(watchlist_preset="")
     data = AlpacaData(settings)
     now = datetime.now(timezone.utc)
 
@@ -142,6 +156,7 @@ def main() -> None:
     say(f"plain NYSE/Nasdaq stocks among them: {len(plain)}")
 
     frame = table(data, plain, now)
+    daily_returns = frame.attrs["returns"]
     say(f"with {MIN_DAILY_SESSIONS}+ completed daily sessions: {len(frame)}")
     frame = frame[frame["median_close"] >= MIN_PRICE].copy()
     say(f"with a median close of {MIN_PRICE:g} or more (the eligible): {len(frame)}")
@@ -188,6 +203,15 @@ def main() -> None:
     def records(part: pd.DataFrame) -> list[dict]:
         return part.round(5).to_dict(orient="records")
 
+    daily_returns = daily_returns[[s for s in frame["symbol"] if s in daily_returns.columns]]
+    returns = {
+        "dates": [str(d) for d in daily_returns.index],
+        "returns": {
+            symbol: [None if pd.isna(x) else round(float(x), 6) for x in daily_returns[symbol]]
+            for symbol in daily_returns.columns
+        },
+    }
+
     print(
         json.dumps(
             {
@@ -203,6 +227,7 @@ def main() -> None:
                 "risky_candidates": records(risky),
                 "normal_candidates": records(normal),
                 "eligible_rows": records(frame),
+                "daily_returns": returns,
             }
         )
     )

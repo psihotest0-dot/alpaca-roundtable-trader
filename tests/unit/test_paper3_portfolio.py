@@ -6,10 +6,13 @@ import json
 from collections import Counter
 from pathlib import Path
 
+import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 from trading_system.config import Settings
 from trading_system.data.paper3_portfolio import (
+    MAX_CORRELATION,
     PAPER3_FACTS,
     PAPER3_NORMAL,
     PAPER3_PASSED_OVER,
@@ -49,7 +52,7 @@ def test_the_groups_are_what_they_are_called():
     risky_ranges = [PAPER3_FACTS[s][2] for s in PAPER3_RISKY]
     normal_ranges = [PAPER3_FACTS[s][2] for s in PAPER3_NORMAL]
     assert risky_ranges == sorted(risky_ranges, reverse=True)  # the most volatile first
-    assert min(risky_ranges) > 1.5 * max(normal_ranges)  # two groups far apart, not neighbours
+    assert min(risky_ranges) > 1.4 * max(normal_ranges)  # two groups far apart, not neighbours
 
 
 def test_a_vetoed_stock_is_not_in_the_list():
@@ -65,10 +68,22 @@ def test_the_committed_inputs_reproduce_the_frozen_list():
     freeze = _freeze_module()
     candidates = json.loads((INPUTS / "candidates.json").read_text(encoding="utf-8"))
     review = json.loads((INPUTS / "review.json").read_text(encoding="utf-8"))
-    risky, _ = freeze.pick(candidates["risky_order"], 30, review["sectors"], review["vetoes"])
-    normal, _ = freeze.pick(candidates["normal_order"], 25, review["sectors"], review["vetoes"])
+    risky, _, normal, _ = freeze.choose(candidates, review)
     assert tuple(risky) == PAPER3_RISKY
     assert tuple(normal) == PAPER3_NORMAL
+
+
+def test_no_two_stocks_of_a_group_move_together_more_than_the_cap():
+    freeze = _freeze_module()
+    candidates = json.loads((INPUTS / "candidates.json").read_text(encoding="utf-8"))
+    corr = freeze.correlations(candidates)
+    for group in (PAPER3_RISKY, PAPER3_NORMAL):
+        block = corr.loc[list(group), list(group)].to_numpy(dtype=float).copy()
+        np.fill_diagonal(block, 0.0)
+        assert block.max() <= MAX_CORRELATION, (group, block.max())
+    # the reason for the cap (section 6.3): left alone the risky group was clumped at 0.54, and a
+    # random draw of 30 from the 100 most volatile stocks has 0.37; the cap brings it to that level
+    assert freeze.mean_pair_correlation(corr, PAPER3_RISKY) <= 0.37
 
 
 def test_pick_skips_vetoes_and_enforces_the_sector_cap_with_the_next_one_as_replacement():
@@ -84,6 +99,22 @@ def test_pick_skips_vetoes_and_enforces_the_sector_cap_with_the_next_one_as_repl
         ("C", "sector cap (x)"),
         ("E", "sector cap (y)"),
     ]
+
+
+def test_pick_skips_a_stock_that_moves_with_one_already_chosen_and_takes_the_next():
+    freeze = _freeze_module()
+    corr = pd.DataFrame(
+        [[1.0, 0.9, 0.2, 0.6], [0.9, 1.0, 0.1, 0.5], [0.2, 0.1, 1.0, 0.3], [0.6, 0.5, 0.3, 1.0]],
+        index=list("ABCD"),
+        columns=list("ABCD"),
+    )
+    sectors = dict.fromkeys("ABCD", "x")
+    chosen, dropped = freeze.pick(list("ABCD"), 3, sectors, {}, corr=corr, max_corr=0.75)
+    # B is a twin of A (0.9) and drops out; C and D (0.6 with A) are far enough
+    assert chosen == ["A", "C", "D"]
+    assert dropped == [("B", "correlation 0.90 with A")]
+    # without the cap, the order is kept
+    assert freeze.pick(list("ABCD"), 3, sectors, {})[0] == ["A", "B", "C"]
 
 
 def test_pick_refuses_to_fill_a_group_by_hand_when_the_order_runs_out():

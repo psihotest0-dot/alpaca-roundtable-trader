@@ -11,18 +11,27 @@ what the review (step 2) found, and ONLY that:
 The procedure is mechanical and written in the document before any number: walk each group in its
 order (risk order for the risky group, nearest the median risk for the normal one), skip a vetoed stock,
 skip a stock whose sector already has MAX_PER_SECTOR in the group (that is "the lowest-ranked of the
-excess drops out and the replacement is the next one by the rule"), and stop when the group is full.
-Nobody picks a name. The result is written as a Python module (stdout), never edited by hand.
+excess drops out and the replacement is the next one by the rule"), skip a stock whose daily-return
+correlation with any stock already chosen in the group is above MAX_CORRELATION (section 6.3: the
+cap on how much two stocks move together, which stands in for the theme cap nobody can label without
+choosing), and stop when the group is full. Nobody picks a name. The correlations come from the daily
+returns that step 1 wrote next to the candidates (candidates["daily_returns"]); they are used only to
+measure co-movement. The result is written as a Python module (stdout), never edited by hand.
 """
 
 import json
 import sys
 import textwrap
-from typing import Mapping, Sequence
+from typing import Any, Mapping, Optional, Sequence
+
+import pandas as pd
 
 RISKY_SIZE = 30
 NORMAL_SIZE = 25
 MAX_PER_SECTOR = 6
+# Section 6.3: the largest threshold in {0.85, 0.80, 0.75, 0.70, 0.65, 0.60} at which the risky group is
+# no more clumped than a random draw of 30 from the 100 most volatile (mean pair correlation 0.37).
+MAX_CORRELATION = 0.75
 
 
 def pick(
@@ -31,9 +40,11 @@ def pick(
     sectors: Mapping[str, str],
     vetoes: Mapping[str, object],
     max_per_sector: int = MAX_PER_SECTOR,
+    corr: Optional[pd.DataFrame] = None,
+    max_corr: float = MAX_CORRELATION,
 ) -> tuple[list[str], list[tuple[str, str]]]:
-    """The first `size` of `order` that survive the vetoes and the sector cap, and why the others
-    that were passed over on the way dropped out."""
+    """The first `size` of `order` that survive the vetoes, the sector cap and the correlation cap,
+    and why the others that were passed over on the way dropped out."""
     chosen: list[str] = []
     dropped: list[tuple[str, str]] = []
     count: dict[str, int] = {}
@@ -47,6 +58,11 @@ def pick(
         if count.get(sector, 0) >= max_per_sector:
             dropped.append((symbol, f"sector cap ({sector})"))
             continue
+        if corr is not None and chosen:
+            twin = corr.loc[symbol, chosen].astype(float)
+            if twin.max() > max_corr:
+                dropped.append((symbol, f"correlation {twin.max():.2f} with {twin.idxmax()}"))
+                continue
         count[sector] = count.get(sector, 0) + 1
         chosen.append(symbol)
     if len(chosen) < size:
@@ -59,14 +75,42 @@ def wrapped(symbols: Sequence[str], indent: str) -> str:
     return "\n".join(f'{indent}"{line} "' for line in text.splitlines())
 
 
-def build(candidates: Mapping, review: Mapping) -> str:
+def correlations(candidates: Mapping[str, Any]) -> pd.DataFrame:
+    """Pairwise correlation of the daily log returns of the eligible stocks (pairs over the dates both
+    have)."""
+    daily = candidates["daily_returns"]
+    return pd.DataFrame(daily["returns"], index=daily["dates"]).corr()
+
+
+def mean_pair_correlation(corr: pd.DataFrame, names: Sequence[str]) -> float:
+    block = corr.loc[list(names), list(names)].to_numpy(dtype=float)
+    upper = block[
+        [i for i in range(len(names)) for j in range(i + 1, len(names))],
+        [j for i in range(len(names)) for j in range(i + 1, len(names))],
+    ]
+    return float(upper.mean())
+
+
+def choose(
+    candidates: Mapping[str, Any], review: Mapping[str, Any]
+) -> tuple[list[str], list[tuple[str, str]], list[str], list[tuple[str, str]]]:
     sectors: Mapping[str, str] = review["sectors"]
     vetoes: Mapping[str, Mapping] = review.get("vetoes", {})
-    risky, risky_dropped = pick(candidates["risky_order"], RISKY_SIZE, sectors, vetoes)
-    normal, normal_dropped = pick(candidates["normal_order"], NORMAL_SIZE, sectors, vetoes)
+    corr = correlations(candidates)
+    risky, risky_dropped = pick(candidates["risky_order"], RISKY_SIZE, sectors, vetoes, corr=corr)
+    normal, normal_dropped = pick(
+        candidates["normal_order"], NORMAL_SIZE, sectors, vetoes, corr=corr
+    )
     both = set(risky) & set(normal)
     if both:
         raise SystemExit(f"a stock is in both groups: {sorted(both)}")
+    return risky, risky_dropped, normal, normal_dropped
+
+
+def build(candidates: Mapping, review: Mapping) -> str:
+    sectors: Mapping[str, str] = review["sectors"]
+    risky, risky_dropped, normal, normal_dropped = choose(candidates, review)
+    corr = correlations(candidates)
 
     rows = {r["symbol"]: r for r in candidates["eligible_rows"]}
     chosen = {**{s: "risky" for s in risky}, **{s: "normal" for s in normal}}
@@ -78,10 +122,14 @@ def build(candidates: Mapping, review: Mapping) -> str:
         f"session {candidates['last_session']}, {candidates['eligible']} eligible stocks, median risk "
         f"{candidates['median_range']}) and",
         "`scripts/freeze_paper3_portfolio.py` (the review of docs/paper-third-account.md, step 2). "
-        "The rule looks at",
-        "no return of any kind. Risk = the median daily range over 45 sessions. Sectors: "
+        "The rule picks nothing by the size or sign of a return (the daily returns only measure how much",
+        "two stocks move together). Risk = the median daily range over 45 sessions. Sectors: "
         + str(review["sector_source"])
         + ".",
+        "",
+        f"Correlation cap (section 6.3): no stock has a daily-return correlation above {MAX_CORRELATION} with",
+        f"an earlier stock of its group; mean pair correlation: risky "
+        f"{mean_pair_correlation(corr, risky):.2f}, normal {mean_pair_correlation(corr, normal):.2f}.",
         "",
         "**This file is never edited by hand and does not change during the 20 days.** Another list is a",
         "new entry in the document first. A test pins the count and the shape.",
@@ -89,6 +137,7 @@ def build(candidates: Mapping, review: Mapping) -> str:
         "",
         f"MADE_AT = {candidates['made_at']!r}",
         f"LAST_SESSION = {candidates['last_session']!r}",
+        f"MAX_CORRELATION = {MAX_CORRELATION}",
         "",
         "# In order of risk, the most volatile first.",
         "PAPER3_RISKY: tuple[str, ...] = tuple(",
