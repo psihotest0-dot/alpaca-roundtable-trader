@@ -73,6 +73,35 @@ class Orchestrator:
             audit_repo=AuditRepository(self.session_factory),
             alerts=LoggingAlertManager(logger),
             news=self._open_news(),
+            context=self._context_recorder("paper3" if is_paper else "trader"),
+        )
+
+    def _context_recorder(self, source: str) -> Any:
+        """The recorder of the state of the world at each signal (plan section 16.1), or None when
+        SIGNAL_CONTEXT_ENABLED is off. Nothing is opened until the first signal."""
+        if not self.settings.signal_context_enabled:
+            return None
+        from trading_system.data.earnings_calendar import EarningsCalendar
+        from trading_system.data.paper3_portfolio import PAPER3_FACTS
+        from trading_system.research.context import ContextRecorder
+        from trading_system.storage.repositories import AuditRepository
+        from trading_system.storage.research import open_research_store
+
+        settings = self.settings
+
+        def spy() -> Any:
+            store = open_research_store(settings.research_database_url, settings.database_url)
+            return store.load(["SPY"], "1d").get("SPY")
+
+        return ContextRecorder(
+            AuditRepository(self.session_factory),
+            source,
+            config=RUNTIME_STRATEGY,
+            groups={symbol: facts[0] for symbol, facts in PAPER3_FACTS.items()},
+            spy_loader=spy,
+            calendar=EarningsCalendar(
+                Path(settings.heartbeat_path).parent / "earnings_calendar.json"
+            ),
         )
 
     def build_observation_cycle(self) -> Any:
@@ -114,6 +143,7 @@ class Orchestrator:
             oracle=create_oracle(self.settings, OracleDecisionRepository(self.session_factory)),
             news=self._open_news(),
             candidates=[get_strategy(name) for name in RECORDED],
+            context=self._context_recorder("observer"),
         )
 
     def run_observation(self, handle_signals: bool = True) -> None:

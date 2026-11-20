@@ -83,6 +83,7 @@ class ObservationCycle(TradingCycle):
         news: Any = None,
         updater: Callable[..., Any] = update_history,
         candidates: Sequence[BaseStrategy] = (),
+        context: Any = None,
     ) -> None:
         super().__init__(
             settings=settings,
@@ -99,6 +100,7 @@ class ObservationCycle(TradingCycle):
             audit_repo=audit_repo,
             alerts=None,
             news=news,
+            context=context,
         )
         self.store = store
         self.universe = list(universe)  # the bars kept up to date
@@ -206,6 +208,7 @@ class ObservationCycle(TradingCycle):
             detail["asked" if asked else "no_price"] += 1
             if asked and signal.symbol in extra:
                 detail["extra_asked"] += 1
+        self._journal_context(fresh, bars_15m, now)  # after the Oracle's work, like the orders
         return report, detail
 
     def _update_extra(self, now: datetime) -> None:
@@ -240,7 +243,14 @@ class ObservationCycle(TradingCycle):
             return {}
         try:
             return record_pass(
-                self.audit_repo, self.candidates, control, bars_15m, bars_1h, now, bar_start
+                self.audit_repo,
+                self.candidates,
+                control,
+                bars_15m,
+                bars_1h,
+                now,
+                bar_start,
+                context=self.context,
             )
         except Exception as e:
             logger.error(f"Could not journal the candidates' signals: {e}")

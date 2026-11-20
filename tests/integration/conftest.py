@@ -169,3 +169,8 @@ def run_cycle(
         )
 
     return _run
+
+
+# The observer scaffold of test_oracle_observer, for the tests of the signal context that need a cycle
+# of the observer too (an import in a conftest is how pytest shares fixtures).
+from tests.integration.test_oracle_observer import make_cycle, observe_url  # noqa: E402, F401

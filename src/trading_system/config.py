@@ -92,6 +92,10 @@ class Settings(BaseSettings):
     # scripts/select_paper3_portfolio.py and scripts/freeze_paper3_portfolio.py). "" keeps the WATCHLIST.
     watchlist_preset: Literal["", "paper3_portfolio"] = ""
 
+    # Journal the state of the world at every signal (docs/strategy-research-plan.md, section 16.1):
+    # off by default; compose switches it on for the loops that should record it.
+    signal_context_enabled: bool = False
+
     # The fractional paper trial on the second account (docs/fractional-paper-trial.md). The account holds
     # a million dollars of paper money; the broker will not limit the bot, so these do: the loop works
     # with a virtual capital of the budget (moved by what the account makes or loses) and refuses any

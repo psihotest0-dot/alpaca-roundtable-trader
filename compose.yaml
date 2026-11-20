@@ -81,6 +81,8 @@ services:
       # 2026-11-20 (owner): the dry-run loop trades the 55-stock portfolio of docs/paper-third-account.md,
       # section 6, like paper3. The observer keeps its own WATCHLIST: the observation universe must not move.
       WATCHLIST_PRESET: paper3_portfolio
+      # 2026-11-20 (owner): journal the state of the world at every signal (docs/strategy-research-plan.md, section 16).
+      SIGNAL_CONTEXT_ENABLED: "true"
     # /metrics for the Go backend's Prometheus (job alpaca-trader, scraped as host.docker.internal:9101).
     # Published on the PC's loopback only: the page has no password.
     ports:
@@ -184,6 +186,7 @@ services:
     environment:
       <<: [*alpaca-env, *oracle-env, *metrics-env]
       HEARTBEAT_PATH: ./var/observe_heartbeat.json
+      SIGNAL_CONTEXT_ENABLED: "true"  # the state of the world at every signal (docs/strategy-research-plan.md, section 16)
     # Its /metrics, scraped as host.docker.internal:9102 (the trader's is 9101); loopback only.
     ports:
       - "127.0.0.1:9102:9100"
@@ -259,6 +262,7 @@ services:
       MAX_OPEN_POSITIONS: "20"
       MAX_GROSS_EXPOSURE_PCT: "0.80"
       WATCHLIST_PRESET: paper3_portfolio  # the 55-stock portfolio (section 6 of docs/paper-third-account.md), switched on 2026-11-20
+      SIGNAL_CONTEXT_ENABLED: "true"  # the state of the world at every signal (docs/strategy-research-plan.md, section 16)
     volumes:
       - trading_var:/app/var
     command:

@@ -106,6 +106,7 @@ def record_pass(
     bars_1h: dict[str, pd.DataFrame],
     now: datetime,
     bar_start: datetime,
+    context: Any = None,
 ) -> dict[str, int]:
     """Journals the signals of the control (already found by the observer) and of each candidate for
     the bar that just closed, then marks the pass. One candidate that breaks does not stop the others:
@@ -122,6 +123,8 @@ def record_pass(
             for signal in signals:
                 journal_signal(audit, strategy.name, signal, now)
             counts[strategy.name] = len(signals)
+            if context is not None and signals:
+                context.record(signals, bars_15m, now, source=f"candidate:{strategy.name}")
         except Exception as e:  # one broken candidate must not stop the others or the Oracle
             logger.error(f"Candidate {strategy.name} could not be run on this bar: {e}")
             errors += 1

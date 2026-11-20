@@ -132,6 +132,7 @@ class TradingCycle:
         audit_repo: Any = None,
         alerts: Any = None,
         news: Any = None,
+        context: Any = None,
     ) -> None:
         self.settings = settings
         self.broker = broker
@@ -148,6 +149,8 @@ class TradingCycle:
         self.audit_repo = audit_repo
         self.alerts = alerts
         self.news = news  # the news cache (storage/news.py); None: the Oracle is given no news
+        # The signal-context recorder (research/context.py, plan section 16.1); None: nothing is recorded.
+        self.context = context
         self._fills_after: Optional[datetime] = None
         self._held: dict[str, HeldSignal] = {}
 
@@ -292,7 +295,21 @@ class TradingCycle:
             elif outcome is Outcome.HELD:
                 report.held += 1
                 self._held[signal.signal_id or ""] = HeldSignal(signal, bars_15m, bars_1h)
+        # After the orders, never before: the context may read a web page (the earnings calendar),
+        # and nothing it does may delay or change an order.
+        self._journal_context(signals, bars_15m, now)
         return report
+
+    def _journal_context(
+        self, signals: list[StrategySignal], bars_15m: dict[str, pd.DataFrame], now: datetime
+    ) -> None:
+        """The state of the world at each signal, into the journal (plan section 16.1). Best effort."""
+        if self.context is None or not signals:
+            return
+        try:
+            self.context.record(signals, bars_15m, now)
+        except Exception as e:  # the recorder does not raise; this is a second wall
+            logger.warning(f"Could not journal the signal contexts: {e}")
 
     def revisit_held(self, now: datetime) -> int:
         """Asks the Oracle again about every signal it told us to hold, while the signal is
