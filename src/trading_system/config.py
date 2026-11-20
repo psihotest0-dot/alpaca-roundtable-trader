@@ -87,6 +87,10 @@ class Settings(BaseSettings):
         "AAPL,MSFT,NVDA,AMD,GOOGL,TSLA,INTC,META,AMZN,SOFI,PLTR,"
         "COIN,MSTR,SHOP,ORCL,MU,NKE,AAL,RIG,MARA,OPEN,PATH"
     )
+    # A named, frozen list that REPLACES the WATCHLIST above for the loop that sets it
+    # (docs/paper-third-account.md, section 6: the 55-stock portfolio of the paper3 service, made by
+    # scripts/select_paper3_portfolio.py and scripts/freeze_paper3_portfolio.py). "" keeps the WATCHLIST.
+    watchlist_preset: Literal["", "paper3_portfolio"] = ""
 
     # The fractional paper trial on the second account (docs/fractional-paper-trial.md). The account holds
     # a million dollars of paper money; the broker will not limit the bot, so these do: the loop works
@@ -159,7 +163,12 @@ class Settings(BaseSettings):
 
     @property
     def watchlist_symbols(self) -> list[str]:
-        """The watchlist as a list (it is validated, upper-cased and de-duplicated already)."""
+        """The symbols the live loop trades: the named preset when one is set, else the WATCHLIST
+        (validated, upper-cased and de-duplicated already)."""
+        if self.watchlist_preset == "paper3_portfolio":
+            from trading_system.data.paper3_portfolio import PAPER3_SYMBOLS
+
+            return list(PAPER3_SYMBOLS)
         return [s for s in self.watchlist.split(",") if s]
 
     @field_validator(
