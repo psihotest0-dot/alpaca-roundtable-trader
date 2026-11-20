@@ -281,6 +281,12 @@ def create_parser() -> argparse.ArgumentParser:
         "operational readiness (read-only).",
     )
     subparsers.add_parser(
+        "paper-report",
+        help="Reports what the real paper orders of this process's account did: operational numbers "
+        "always, numbers about the result only from 300 closed trades (docs/strategy-research-plan.md, "
+        "section 16; read-only).",
+    )
+    subparsers.add_parser(
         "fractional-resume",
         help="Lifts the halt of the fractional trial's entries if every position has a standing stop.",
     )
@@ -1246,6 +1252,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return 0
         except Exception as e:
             print(f"fractional-report error: {type(e).__name__}: {e}")
+            return 1
+
+    elif args.command == "paper-report":
+        try:
+            from trading_system.research.paper_report import run as run_paper_report
+
+            print(run_paper_report(Settings()))
+            return 0
+        except Exception as e:
+            print(f"paper-report error: {type(e).__name__}: {e}")
             return 1
 
     elif args.command == "fractional-resume":
