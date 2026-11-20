@@ -1,9 +1,8 @@
 """`paper-report`: what the real paper orders of one account have done (plan section 16.2).
 
-The facts come from Alpaca (the account's fills; our own database keeps only the entry fills, because
-`save_fill` refuses an execution of an order it does not have, and the stop and target legs of a bracket
-are not stored as orders of ours) and from our journal (the order intent for the planned stop, the
-signal and its `signal_context`). Read-only: it places and changes nothing.
+The facts come from Alpaca (the account's fills: an independent source that does not depend on our own
+record of the bracket's stop and target legs having succeeded) and from our journal (the order intent for
+the planned stop, the signal and its `signal_context`). Read-only: it places and changes nothing.
 """
 
 import logging
