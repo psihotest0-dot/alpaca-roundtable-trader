@@ -268,11 +268,12 @@ services:
       ORACLE_ENABLED: "true"
       ORACLE_PROVIDER: backend
       ORACLE_MODE: active
-      # The backend caches and journals by signal_id alone, not by mode. Without an id of its own paper3
-      # would be answered from trader's shadow cache (with trader's account in the question) and its call
-      # would leave no row in the journal, or it would take the row of a shadow question away from the
-      # judge. The suffix goes on the wire only; the bot's own tables keep the plain id.
-      ORACLE_SIGNAL_ID_SUFFIX: "-paper3"
+      # No ORACLE_SIGNAL_ID_SUFFIX on purpose (owner, 2026-11-21): paper3 shares the backend's cache with
+      # trader and observe. The backend caches and journals by signal_id alone, not by mode, and trader
+      # trades the very same 55 stocks, so ONE verdict per signal is what all three act on or record:
+      # the verdict paper3 obeys is the one the shadow judge weighs, with no second draw of the model and
+      # no second call on its two slots. The cost is attribution in the backend: the journal row has the
+      # mode of whoever asked first (docs/paper-third-account.md, section 7). A test holds this.
       ALPACA_API_KEY: ${ALPACA_PAPER3_API_KEY:?Put ALPACA_PAPER3_API_KEY in .env}
       ALPACA_SECRET_KEY: ${ALPACA_PAPER3_SECRET_KEY:?Put ALPACA_PAPER3_SECRET_KEY in .env}
       IS_PAPER: "true"

@@ -233,8 +233,21 @@ def test_only_trader_observe_and_paper3_reach_the_oracle_and_only_paper3_obeys_i
     assert paper3["ORACLE_PROVIDER"] == "backend"
     assert paper3["ORACLE_BACKEND_URL"] and paper3["ORACLE_BACKEND_TOKEN"]
     assert "METRICS_ENABLED" not in paper3 and "ports" not in services["paper3"]
-    # The backend caches and journals by signal_id alone: paper3 needs an id of its own on the wire, and
-    # trader and observe must keep the plain one (the shadow sample the judge counts).
-    assert paper3["ORACLE_SIGNAL_ID_SUFFIX"] == "-paper3"
-    for name in ("trader", "observe"):
+    # Nobody has an id of its own on the wire (owner, 2026-11-21): the backend caches and journals by
+    # signal_id alone, and trader trades the same 55 stocks as paper3, so the three callers share one
+    # verdict per signal. The option exists in the code (ORACLE_SIGNAL_ID_SUFFIX) and stays off; turning
+    # it on for any service is a decision to be recorded in docs/paper-third-account.md, section 7.
+    for name in ("trader", "observe", "paper3"):
         assert "ORACLE_SIGNAL_ID_SUFFIX" not in services[name]["environment"], name
+
+
+def test_trader_and_paper3_trade_the_same_list_because_they_share_one_verdict_per_signal() -> None:
+    """paper3 shares the backend's cache with trader (no ORACLE_SIGNAL_ID_SUFFIX). That is sound only
+    while both ask about the same signals, i.e. while they have the same watchlist; if one of them gets
+    another list, the shared verdicts stop being the same experiment and the decision of 2026-11-21
+    (docs/paper-third-account.md, section 7) has to be taken again."""
+    services = _compose()
+    presets = {
+        name: services[name]["environment"].get("WATCHLIST_PRESET") for name in ("trader", "paper3")
+    }
+    assert presets["trader"] and presets["trader"] == presets["paper3"], presets
