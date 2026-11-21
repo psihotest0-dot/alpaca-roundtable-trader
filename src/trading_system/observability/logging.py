@@ -89,17 +89,8 @@ class JSONFormatter(logging.Formatter):
         if record.exc_info:
             log_data["exception"] = self.formatException(record.exc_info)
 
-        # Redact sensitive data
-        redacted_data = SensitiveDataRedactor.redact(log_data)
-
-        # Redact environment info specifically - never log the full environment
-        if "environment" in redacted_data or "env" in redacted_data:
-            if "environment" in redacted_data:
-                redacted_data["environment"] = "***REDACTED***"
-            if "env" in redacted_data:
-                redacted_data["env"] = "***REDACTED***"
-
-        return json.dumps(redacted_data)
+        # Redact sensitive data (also the whole `env` / `environment`: see _redact_value)
+        return json.dumps(SensitiveDataRedactor.redact(log_data))
 
 
 # The log file is rotated: 5 files of up to 5 MB. A week of a quiet system is well under one.

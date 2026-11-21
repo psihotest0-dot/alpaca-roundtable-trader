@@ -11,16 +11,6 @@ def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
-class Bar(BaseModel):
-    symbol: str
-    timestamp: datetime
-    open: Decimal
-    high: Decimal
-    low: Decimal
-    close: Decimal
-    volume: Decimal
-
-
 class StrategySignal(BaseModel):
     version: str
     symbol: str

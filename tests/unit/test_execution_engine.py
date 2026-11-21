@@ -5,6 +5,8 @@ from decimal import Decimal
 import datetime
 import uuid
 
+import requests
+from alpaca.common.exceptions import APIError
 from alpaca.trading.models import Order, Asset
 from alpaca.trading.enums import (
     TimeInForce,
@@ -164,6 +166,92 @@ def test_timeout_reconciliation(engine, mock_broker, mock_order_repo, base_inten
     assert result.status == OrderStatus.SUBMITTED
 
 
+def _api_error(status: int) -> APIError:
+    response = requests.Response()
+    response.status_code = status
+    return APIError('{"code": 1, "message": "x"}', requests.HTTPError(response=response))
+
+
+def _saved_statuses(mock_order_repo) -> list[OrderStatus]:
+    return [c.args[0].status for c in mock_order_repo.save_broker_order.call_args_list]
+
+
+@pytest.mark.parametrize("status", [400, 403, 422])
+def test_an_order_the_broker_refused_is_rejected_and_does_not_halt(
+    engine, mock_broker, mock_order_repo, mock_state_repo, base_intent, mock_asset, mocker, status
+):
+    """A 4xx is a refusal of the order itself: nothing stands at the broker, so the signal is not
+    traded and the record says REJECTED; there is no reason to stop the whole account."""
+    mocker.patch("trading_system.execution.engine.time.sleep")
+    mock_broker.get_asset.return_value = mock_asset
+    mock_broker.submit_order.side_effect = _api_error(status)
+    mock_broker.get_order_by_client_id.side_effect = _api_error(404)
+
+    assert engine.submit_order(base_intent) is None
+
+    mock_state_repo.save_state.assert_not_called()
+    assert _saved_statuses(mock_order_repo) == [OrderStatus.SUBMITTING, OrderStatus.REJECTED]
+    assert mock_broker.submit_order.call_count == 1  # never resubmitted
+
+
+@pytest.mark.parametrize(
+    "submit_error, lookup_error",
+    [
+        (Exception("Timeout"), _api_error(404)),  # perhaps sent: unknown
+        (_api_error(500), _api_error(404)),  # a server error says nothing about the order
+        (_api_error(429), _api_error(404)),  # a rate limit is not a refusal of the order
+        (_api_error(422), _api_error(503)),  # refused, but the lookup could not confirm it
+    ],
+)
+def test_a_submission_whose_outcome_is_unknown_still_halts(
+    engine,
+    mock_broker,
+    mock_order_repo,
+    mock_state_repo,
+    base_intent,
+    mock_asset,
+    mocker,
+    submit_error,
+    lookup_error,
+):
+    mocker.patch("trading_system.execution.engine.time.sleep")
+    mock_broker.get_asset.return_value = mock_asset
+    mock_broker.submit_order.side_effect = submit_error
+    mock_broker.get_order_by_client_id.side_effect = lookup_error
+
+    assert engine.submit_order(base_intent) is None
+
+    assert mock_state_repo.save_state.call_args[0][0].is_trading_halted is True
+    assert OrderStatus.REJECTED not in _saved_statuses(mock_order_repo)
+
+
+def test_a_refused_order_that_the_broker_has_anyway_is_returned(
+    engine, mock_broker, mock_order_repo, mock_state_repo, base_intent, mock_asset, mocker
+):
+    """A 422 for a client_order_id already used means the order stands: it is ours, not refused."""
+    mocker.patch("trading_system.execution.engine.time.sleep")
+    mock_broker.get_asset.return_value = mock_asset
+    mock_broker.submit_order.side_effect = _api_error(422)
+    existing = MagicMock(spec=Order)
+    existing.id = "existing-id"
+    existing.symbol = "AAPL"
+    existing.side = "buy"
+    existing.type = "limit"
+    existing.status = AlpacaOrderStatus.NEW
+    existing.qty = "10"
+    existing.filled_qty = "0"
+    existing.limit_price = "150.00"
+    existing.stop_price = "140.00"
+    existing.created_at = datetime.datetime.now(datetime.timezone.utc)
+    existing.updated_at = datetime.datetime.now(datetime.timezone.utc)
+    mock_broker.get_order_by_client_id.return_value = existing
+
+    result = engine.submit_order(base_intent)
+
+    assert result is not None and result.broker_id == "existing-id"
+    mock_state_repo.save_state.assert_not_called()
+
+
 def test_partial_fill_tracking(engine, mock_broker, mock_order_repo, base_intent):
     # Not testing event websocket stream here, but we can test manual reconciliation mapping
     mock_alpaca_order = MagicMock(spec=Order)
@@ -181,7 +269,7 @@ def test_partial_fill_tracking(engine, mock_broker, mock_order_repo, base_intent
 
     mock_broker.get_order_by_client_id.return_value = mock_alpaca_order
 
-    result = engine.reconcile_order("exec_test_signal_1")
+    result = engine.store_broker_order(mock_alpaca_order, "exec_test_signal_1")
     assert result is not None
     assert result.status == OrderStatus.PARTIALLY_FILLED
     assert result.filled_quantity == Decimal("4")

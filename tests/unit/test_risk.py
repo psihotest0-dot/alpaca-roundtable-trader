@@ -246,6 +246,52 @@ def test_pending_entry_rejected(risk_engine, base_signal, base_account, base_sta
     assert "Pending entry" in decision.reasoning
 
 
+def _pending_buy(symbol: str, limit_price: Decimal | None) -> BrokerOrder:
+    return BrokerOrder(
+        broker_id=f"b-{symbol}",
+        client_order_id=f"c-{symbol}",
+        symbol=symbol,
+        side=OrderSide.BUY,
+        type=OrderType.LIMIT if limit_price else OrderType.MARKET,
+        status=OrderStatus.SUBMITTED,
+        quantity=Decimal("10"),
+        filled_quantity=Decimal("0"),
+        limit_price=limit_price,
+        created_at=_now_utc(),
+        updated_at=_now_utc(),
+    )
+
+
+def test_an_unpriced_pending_entry_of_another_stock_refuses_the_signal(
+    risk_engine, base_signal, base_account, base_state
+):
+    """Its exposure was once priced with the price of the signal's stock, a different one."""
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[_pending_buy("NVDA", None)],
+        current_price=Decimal("150"),
+        state=base_state,
+    )
+    assert decision.approved is False and intent is None
+    assert "without a price for NVDA" in decision.reasoning
+
+
+def test_a_priced_pending_entry_of_another_stock_is_counted_at_its_own_price(
+    risk_engine, base_signal, base_account, base_state
+):
+    decision, intent = risk_engine.evaluate_signal(
+        signal=base_signal,
+        account=base_account,
+        positions=[],
+        active_orders=[_pending_buy("NVDA", Decimal("900"))],
+        current_price=Decimal("150"),
+        state=base_state,
+    )
+    assert decision.approved is True and intent is not None
+
+
 def test_max_open_positions(risk_engine, base_signal, base_account, base_state):
     positions = [
         PositionSnapshot(
@@ -376,24 +422,25 @@ def test_quantity_less_than_one(risk_engine, base_signal, base_account, base_sta
 
 
 def test_unknown_orders_conservatism(risk_engine, base_signal, base_account, base_state):
-    # pending BUY order increases gross exposure
+    # A pending BUY of another stock increases gross exposure at its own limit price. (One without
+    # any price refuses the signal: see test_an_unpriced_pending_entry_of_another_stock_...)
     active_orders = [
         BrokerOrder(
             broker_id="2",
             client_order_id="c2",
             symbol="NVDA",
             side=OrderSide.BUY,
-            type=OrderType.MARKET,
+            type=OrderType.LIMIT,
             status=OrderStatus.SUBMITTED,
             quantity=Decimal("100"),
             filled_quantity=Decimal("0"),
             created_at=_now_utc(),
             updated_at=_now_utc(),
-            limit_price=None,
+            limit_price=Decimal("150"),
             stop_price=None,
         )
     ]
-    # pending NVDA increases gross exposure by 100 * 150 = 15000 (assumes current price)
+    # pending NVDA increases gross exposure by 100 * 150 = 15000
     # available gross = 20000 - 15000 = 5000
     decision, intent = risk_engine.evaluate_signal(
         signal=base_signal,

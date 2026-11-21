@@ -7,6 +7,7 @@ from decimal import Decimal
 import datetime
 import time
 
+from alpaca.common.exceptions import APIError
 from alpaca.trading.requests import LimitOrderRequest, TakeProfitRequest, StopLossRequest
 from alpaca.trading.enums import OrderClass, OrderSide as AlpacaOrderSide, TimeInForce
 
@@ -222,32 +223,54 @@ class ExecutionEngine:
 
             except Exception as e:
                 logger.error(f"Order submission error: {e}")
+                return self._after_failed_submission(e, inflight_order)
 
-                # Check if it was accepted but we crashed/timed out
-                # Wait a bit then reconcile
-                try:
-                    time.sleep(1)
-                    reconciled_order = self.reconcile_order(client_order_id)
-                    if reconciled_order:
-                        return reconciled_order
-                    else:
-                        logger.critical(
-                            "Reconciliation failed after submission crash. Halting trading to prevent conflicting inputs."
-                        )
-                        self.halt_trading("Reconciliation failed after order submission crash.")
-                except Exception as rec_e:
-                    logger.critical(f"Failed to reconcile after exception: {rec_e}")
-                    self.halt_trading("Reconciliation exception after order submission crash.")
+    def _after_failed_submission(
+        self, error: Exception, inflight_order: BrokerOrder
+    ) -> Optional[BrokerOrder]:
+        """What a submission that raised left behind. Never a blind resubmit.
 
-                return None
-
-    def reconcile_order(self, client_order_id: str) -> Optional[BrokerOrder]:
-        # Never blind resubmit
+        The broker is asked for the order by its client_order_id: an order it has (the call timed
+        out after the order was taken, or the id was already used) is stored and returned. An order
+        it does not have, after a refusal of the order itself (a 4xx: a price, a quantity, buying
+        power), was never placed: the record becomes REJECTED and the trading goes on, the signal is
+        simply not traded. Anything else (a timeout, a server error, a lookup that fails) leaves it
+        unknown whether an order stands at the broker, and that halts the trading."""
+        client_order_id = inflight_order.client_order_id
         try:
+            time.sleep(1)
             alpaca_order = self.broker.get_order_by_client_id(client_order_id)
+        except Exception as lookup_error:
+            if is_refusal(error) and is_not_found(lookup_error):
+                logger.error(
+                    f"The broker refused order {client_order_id} for {inflight_order.symbol} "
+                    f"(HTTP {getattr(error, 'status_code', '?')}); nothing was placed, "
+                    "the signal is not traded."
+                )
+                try:
+                    self.order_repo.save_broker_order(
+                        inflight_order.model_copy(
+                            update={
+                                "status": OrderStatus.REJECTED,
+                                "updated_at": datetime.datetime.now(datetime.timezone.utc),
+                            }
+                        )
+                    )
+                except Exception as save_error:  # reconciliation marks it CANCELED later
+                    logger.warning(f"Could not mark {client_order_id} REJECTED: {save_error}")
+                return None
+            logger.warning(f"Reconciliation lookup failed for {client_order_id}: {lookup_error}")
+            logger.critical(
+                "Reconciliation failed after submission crash. Halting trading to prevent "
+                "conflicting inputs."
+            )
+            self.halt_trading("Reconciliation failed after order submission crash.")
+            return None
+        try:
             return self.store_broker_order(alpaca_order, client_order_id)
-        except Exception as e:
-            logger.warning(f"Reconciliation lookup failed for {client_order_id}: {e}")
+        except Exception as store_error:
+            logger.critical(f"Failed to reconcile after exception: {store_error}")
+            self.halt_trading("Reconciliation exception after order submission crash.")
             return None
 
     def store_broker_order(
@@ -383,6 +406,18 @@ class ExecutionEngine:
             logger.critical(f"Submitted emergency market close for {gap.symbol}")
         except Exception as e:
             logger.critical(f"Failed to submit emergency close for {gap.symbol}: {e}")
+
+
+def is_not_found(error: BaseException) -> bool:
+    """The broker answered 404: it has no such order."""
+    return isinstance(error, APIError) and error.status_code == 404
+
+
+def is_refusal(error: BaseException) -> bool:
+    """The broker read the order and refused it (a 4xx): nothing was placed. A timeout (408)
+    and a rate limit (429) are not refusals of the order itself."""
+    status = error.status_code if isinstance(error, APIError) else None
+    return isinstance(status, int) and 400 <= status < 500 and status not in (408, 429)
 
 
 # Statuses of an order that is live at the exchange.

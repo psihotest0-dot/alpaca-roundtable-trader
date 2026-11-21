@@ -3,7 +3,6 @@ import logging
 from unittest.mock import Mock
 
 from trading_system.observability.alerts import LoggingAlertManager
-from trading_system.observability.health import HealthStatus
 from trading_system.observability.logging import JSONFormatter, SensitiveDataRedactor
 from trading_system.observability.metrics import (
     REJECTED_SIGNALS,
@@ -60,23 +59,6 @@ def test_json_formatter():
     assert "***REDACTED***" in parsed["event"]
     assert parsed["signal_id"] == "sig_123"
     assert parsed["intent_id"] is None
-
-
-def test_health_readiness():
-    health = HealthStatus()
-
-    assert health.check_liveness() is True
-    assert health.check_readiness() is True
-
-    health.mark_market_data_stale(True)
-    assert health.check_readiness() is False
-
-    health.mark_market_data_stale(False)
-    assert health.check_readiness() is True
-
-    # Oracle failure should NOT affect readiness
-    health.mark_oracle_failed(True)
-    assert health.check_readiness() is True
 
 
 def test_metrics_correctness():

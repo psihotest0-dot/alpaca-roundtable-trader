@@ -126,8 +126,9 @@ class BackendOracle:
         self.mode = mode
         self.timeout_seconds = timeout_seconds
         # Appended to the signal_id in the request and nowhere else: the backend caches and journals by
-        # signal_id alone, so a second caller (paper3, active) needs an id of its own. The decisions this
-        # class returns keep the plain id, which is the key of the bot's own tables.
+        # signal_id alone, so a caller that must not share verdicts needs an id of its own (no service
+        # sets it: paper3 shares trader's on purpose). The decisions this class returns keep the plain
+        # id, which is the key of the bot's own tables.
         self.signal_id_suffix = signal_id_suffix
         self._token = token
         self._clock = clock

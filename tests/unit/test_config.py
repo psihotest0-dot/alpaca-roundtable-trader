@@ -179,3 +179,13 @@ def test_stopping_does_not_pause_entries_unless_asked_to():
     )
     assert default.pause_on_shutdown is False
     assert asked.pause_on_shutdown is True
+
+
+def test_log_level_is_read_in_any_case_and_an_unknown_one_is_refused():
+    assert Settings(alpaca_api_key="k", alpaca_secret_key="s", _env_file=None).log_level == "INFO"
+    assert (
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", log_level=" debug ").log_level
+        == "DEBUG"
+    )
+    with pytest.raises(ValidationError, match="LOG_LEVEL must be one of"):
+        Settings(alpaca_api_key="k", alpaca_secret_key="s", log_level="LOUD")

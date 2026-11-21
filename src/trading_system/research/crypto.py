@@ -112,12 +112,6 @@ def load_crypto_panel(
     return build_crypto_panel(frames_from_stored(stored))
 
 
-def zero_volume_share(frames: Mapping[str, pd.DataFrame]) -> float:
-    """The share of all stored bars that are placeholders (for the report)."""
-    total = sum(len(f) for f in frames.values())
-    return sum(int((f["volume"] <= 0).sum()) for f in frames.values()) / total if total else 0.0
-
-
 # ------------------------------------------------------------------------------------ signals
 
 

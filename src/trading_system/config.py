@@ -6,6 +6,8 @@ from urllib.parse import urlsplit
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
 
 class Settings(BaseSettings):
     alpaca_api_key: SecretStr
@@ -30,11 +32,12 @@ class Settings(BaseSettings):
     # Added to the signal_id on the wire and nowhere else (oracle/backend.py). The backend caches and
     # journals by signal_id alone, not by mode: two bots asking about the same signal would share one
     # model call, the later one would be answered from the first one's cache with the first one's account
-    # in the question, and the journal would hold one row, in the first one's mode. paper3 (active) sets
-    # "-paper3" so that its question is its own and its row says "active"; the bot's own records keep the
-    # plain id, so the arms are joined by stripping the suffix.
+    # in the question, and the journal would hold one row, in the first one's mode. No service sets it
+    # (owner, 2026-11-21, 8f64e6b): paper3 trades the same stocks as trader and shares its verdicts on
+    # purpose. A caller that sets it gets questions of its own; the bot's own records keep the plain id.
     oracle_signal_id_suffix: str = ""
 
+    # The level of the log (DEBUG, INFO, WARNING, ERROR, CRITICAL); read by cli.main.
     log_level: str = "INFO"
     database_url: str = "sqlite:///./var/trading.db"
     # The strategy research's own candle file (daily bars of the research universe, see
@@ -82,7 +85,6 @@ class Settings(BaseSettings):
     # ones (MARA, OPEN) go 1 to 2 minutes between prints.
     live_price_max_age_seconds: int = Field(120, gt=0)
     live_price_max_deviation_pct: float = Field(0.05, ge=0.0, le=1.0)
-    allow_fractional: bool = False
     # A position without an active stop halts trading and raises an alarm. Closing it at market
     # is a separate, explicit choice (see ExecutionEngine.emergency_check_unprotected_positions).
     emergency_close_unprotected: bool = False
@@ -149,6 +151,14 @@ class Settings(BaseSettings):
                 "takes nothing else in a signal_id)"
             )
         return v
+
+    @field_validator("log_level")
+    @classmethod
+    def check_log_level(cls, v: str) -> str:
+        level = v.strip().upper()
+        if level not in LOG_LEVELS:
+            raise ValueError(f"LOG_LEVEL must be one of {', '.join(LOG_LEVELS)}")
+        return level
 
     @field_validator("is_paper")
     @classmethod

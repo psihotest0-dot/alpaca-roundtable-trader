@@ -129,6 +129,18 @@ class RiskEngine:
                         reasoning="Pending entry order exists for symbol.",
                     ), None
 
+        # A pending entry without a limit or stop (a market order placed by someone else) has no
+        # price here, and its exposure cannot be guessed from the price of a different stock.
+        unpriced = sorted(
+            {pe.symbol for pe in pending_entries if not (pe.limit_price or pe.stop_price)}
+        )
+        if unpriced:
+            return RiskDecision(
+                signal_id=signal.signal_id or "",
+                approved=False,
+                reasoning=f"Pending entry without a price for {', '.join(unpriced)}; exposure unknown.",
+            ), None
+
         # Check max open positions
         if len(positions) + len(pending_entries) >= self.settings.max_open_positions:
             return RiskDecision(
@@ -159,10 +171,7 @@ class RiskEngine:
         # Determine gross exposure from existing + pending
         current_gross_exposure = sum(p.market_value for p in positions)
         for pe in pending_entries:
-            pe_price = (
-                pe.limit_price or pe.stop_price or current_price
-            )  # conservative approx if MARKET
-            current_gross_exposure += pe.quantity * pe_price
+            current_gross_exposure += pe.quantity * _entry_price(pe)
 
         max_gross = account.equity * Decimal(str(self.settings.max_gross_exposure_pct))
         available_gross = max_gross - current_gross_exposure
@@ -207,12 +216,8 @@ class RiskEngine:
                 ), None
             planned_risk = quantity * risk_per_share
 
-        # Total open planned risk
-        # For positions, we approximate risk as (average_entry_price - stop_price) * quantity or just limit conservative
-        # The prompt says: calculate planned risk from entry to stop.
-        # But for existing positions, we might not know their exact stop loss from here, or we use the standard %?
-        # "Изчислявай планирания риск от entry до stop."
-        # If we just apply the standard stop % to average entry price:
+        # Total open planned risk, from entry to stop. The stop of an existing position is not known
+        # here, so the standard stop % is applied to its average entry price.
         total_open_risk = Decimal(0)
         for p in positions:
             p_stop = p.average_entry_price * (
@@ -222,7 +227,7 @@ class RiskEngine:
                 total_open_risk += (p.average_entry_price - p_stop) * p.quantity
 
         for pe in pending_entries:
-            pe_price = pe.limit_price or pe.stop_price or current_price
+            pe_price = _entry_price(pe)
             pe_stop = pe_price * (Decimal("1.0") - Decimal(str(self.settings.stop_loss_pct)))
             if pe_stop < pe_price:
                 total_open_risk += (pe_price - pe_stop) * pe.quantity
@@ -249,10 +254,7 @@ class RiskEngine:
                 ), None
             planned_risk = quantity * risk_per_share
 
-        """
-        Gap and slippage can exceed this planned risk.
-        """
-
+        # Gap and slippage can exceed this planned risk.
         intent = OrderIntent(
             signal_id=signal.signal_id or "",
             symbol=signal.symbol,
@@ -275,5 +277,9 @@ class RiskEngine:
         return decision, intent
 
 
-# Added a check for stale account snapshot
-# However, skipping it for now since the required staleness threshold isn't in settings, but we can do a simple check.
+def _entry_price(order: BrokerOrder) -> Decimal:
+    """The price of a pending entry; evaluate_signal has refused unpriced ones already."""
+    price = order.limit_price or order.stop_price
+    if price is None:
+        raise ValueError(f"pending entry for {order.symbol} has no price")
+    return price

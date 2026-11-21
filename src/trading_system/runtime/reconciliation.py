@@ -12,10 +12,9 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
-from alpaca.common.exceptions import APIError
-
 from trading_system.domain.enums import OrderStatus
 from trading_system.domain.models import BrokerOrder
+from trading_system.execution.engine import is_not_found
 
 logger = logging.getLogger(__name__)
 
@@ -35,10 +34,6 @@ class OrderReconciliation:
     changed: int = 0  # status or filled quantity differs from what the database had
     never_sent: list[str] = field(default_factory=list)
     failed: list[str] = field(default_factory=list)  # lookup errors; tried again next time
-
-
-def _is_not_found(error: Exception) -> bool:
-    return isinstance(error, APIError) and error.status_code == 404
 
 
 def reconcile_orders(
@@ -61,7 +56,7 @@ def reconcile_orders(
         try:
             alpaca_order = broker.get_order_by_client_id(order.client_order_id)
         except Exception as e:
-            if _is_not_found(e):
+            if is_not_found(e):
                 _handle_unknown_order(order, order_repo, report, now)
             else:
                 logger.warning(f"Could not look up order {order.client_order_id}: {e}")

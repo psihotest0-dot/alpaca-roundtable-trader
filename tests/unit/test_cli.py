@@ -126,3 +126,17 @@ def test_run_passes_the_pause_on_exit_option_on_and_leaves_the_setting_otherwise
         ):
             assert main(argv) == 0
         orchestrator.run.assert_called_once_with(False, pause_on_shutdown=expected)
+
+
+def test_log_level_comes_from_the_settings_and_falls_back_to_info(monkeypatch):
+    """LOG_LEVEL was once in .env.example and read by nothing: the log was always INFO."""
+    import logging
+
+    from trading_system.cli import log_level
+
+    monkeypatch.setenv("ALPACA_API_KEY", "k")
+    monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
+    monkeypatch.setenv("LOG_LEVEL", "debug")
+    assert log_level() == logging.DEBUG
+    monkeypatch.setenv("LOG_LEVEL", "nonsense")  # the settings cannot be read
+    assert log_level() == logging.INFO

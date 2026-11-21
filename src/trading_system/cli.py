@@ -403,14 +403,24 @@ def log_file_for(command: Optional[str]) -> Optional[str]:
     return LOG_FILE if command == "run" else None
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def log_level() -> int:
+    """LOG_LEVEL from the settings. INFO when the settings cannot be read: the logger is set up
+    before any command, also before `validate-config`, which reports what is wrong with them."""
     import logging
+
+    try:
+        return logging.getLevelNamesMapping()[Settings().log_level]
+    except Exception:
+        return logging.INFO
+
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
     from trading_system.observability.logging import setup_json_logger
 
     parser = create_parser()
     args = parser.parse_args(argv)
 
-    setup_json_logger("", level=logging.INFO, log_file=log_file_for(args.command))
+    setup_json_logger("", level=log_level(), log_file=log_file_for(args.command))
 
     if args.command == "validate-config":
         from trading_system.config_check import check_config

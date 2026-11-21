@@ -209,11 +209,6 @@ class CorporateActionsFeed:
         )
 
 
-def in_window(events: Iterable[CorporateEvent], first: date, last: date) -> list[CorporateEvent]:
-    """The events with `first` <= day <= `last`."""
-    return [e for e in events if first <= e.day <= last]
-
-
 def format_events(events: Sequence[CorporateEvent]) -> str:
     """One line per event: the date, the symbols, what happens."""
     return "\n".join(f"  {e.day}  {', '.join(e.affected):<14} {e.detail}" for e in events)

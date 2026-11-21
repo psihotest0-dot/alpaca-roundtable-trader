@@ -37,14 +37,14 @@ def test_control_engineered_bars_produce_one_long_signal() -> None:
     assert [s.symbol for s in signals] == ["AAPL"]
 
 
-def test_fetch_bars_returns_the_bars_alpaca_sent(settings: Any) -> None:
-    """C1c. fetch_bars raised UnboundLocalError on its normal path, because it imported
+def test_fetch_bars_bulk_returns_the_bars_alpaca_sent(settings: Any) -> None:
+    """C1c. fetching bars once raised UnboundLocalError on its normal path, because it imported
     pandas inside some branches and so made `pd` a local name for the whole function."""
     now = datetime.now(timezone.utc)
     bars_15m, bars_1h = make_bars(now)
     data = _data_with(settings, bars_15m, bars_1h)
 
-    frame = data.fetch_bars("AAPL", FIFTEEN_MINUTES, now - timedelta(days=30), now)
+    frame = data.fetch_bars_bulk(["AAPL"], FIFTEEN_MINUTES, now - timedelta(days=30), now)["AAPL"]
 
     assert len(frame) == len(bars_15m)
     assert str(frame.index.tz) == "UTC"

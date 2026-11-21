@@ -27,7 +27,6 @@ from trading_system.data.corporate_actions import (
     event_from,
     format_events,
     held_symbols,
-    in_window,
 )
 
 
@@ -283,19 +282,6 @@ def test_nothing_in_the_answer_is_an_empty_list():
 
 def _event(symbol: str, day: date) -> CorporateEvent:
     return CorporateEvent("forward_splits", (symbol,), day, "split: 2 new share(s) for 1 old")
-
-
-def test_in_window_includes_both_ends():
-    events = [
-        _event("A", date(2026, 11, 6)),
-        _event("B", date(2026, 11, 13)),
-        _event("C", date(2026, 11, 14)),
-    ]
-
-    assert [e.affected[0] for e in in_window(events, date(2026, 11, 6), date(2026, 11, 13))] == [
-        "A",
-        "B",
-    ]
 
 
 def test_the_lines_name_the_day_the_symbols_and_what_happens():

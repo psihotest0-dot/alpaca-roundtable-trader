@@ -125,12 +125,6 @@ class AlpacaData:
             for symbol, trade in trades.items()
         }
 
-    def fetch_bars(
-        self, symbol: str, timeframe: TimeFrame, start: datetime, end: datetime
-    ) -> pd.DataFrame:
-        """Bars for one symbol (an empty frame if there are none)."""
-        return self.fetch_bars_bulk([symbol], timeframe, start, end).get(symbol, pd.DataFrame())
-
     def load_universe(
         self,
         symbols: Sequence[str],

@@ -25,7 +25,6 @@ from trading_system.research.crypto import (
     frames_from_stored,
     load_crypto_panel,
     random_half,
-    zero_volume_share,
 )
 from trading_system.research.measure import STOCK_RULES, measure
 from trading_system.research.panel import HOLDOUT_START
@@ -121,13 +120,6 @@ def test_the_panel_needs_btc() -> None:
 
     with pytest.raises(ValueError, match="BTC/USD"):
         build_crypto_panel(frames)
-
-
-def test_zero_volume_share_counts_placeholders() -> None:
-    frames = _frames(days=100)
-    frames["ETH/USD"].loc[frames["ETH/USD"].index[:7], "volume"] = 0.0
-
-    assert zero_volume_share(frames) == pytest.approx(7 / (100 * len(frames)))
 
 
 # -------------------------------------------------------------------------------- the signal
