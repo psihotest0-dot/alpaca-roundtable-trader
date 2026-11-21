@@ -1,4 +1,5 @@
 import math
+import re
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -26,6 +27,13 @@ class Settings(BaseSettings):
     # route). Only in `.env` and only in the trader service of compose.yaml; never in git.
     oracle_backend_token: SecretStr = SecretStr("")
     oracle_timeout_seconds: int = Field(10, gt=0, le=120)
+    # Added to the signal_id on the wire and nowhere else (oracle/backend.py). The backend caches and
+    # journals by signal_id alone, not by mode: two bots asking about the same signal would share one
+    # model call, the later one would be answered from the first one's cache with the first one's account
+    # in the question, and the journal would hold one row, in the first one's mode. paper3 (active) sets
+    # "-paper3" so that its question is its own and its row says "active"; the bot's own records keep the
+    # plain id, so the arms are joined by stripping the suffix.
+    oracle_signal_id_suffix: str = ""
 
     log_level: str = "INFO"
     database_url: str = "sqlite:///./var/trading.db"
@@ -129,6 +137,18 @@ class Settings(BaseSettings):
                 "ORACLE_BACKEND_TOKEN, not in the URL"
             )
         return v.rstrip("/")
+
+    @field_validator("oracle_signal_id_suffix")
+    @classmethod
+    def check_oracle_signal_id_suffix(cls, v: str) -> str:
+        """What the backend accepts in a signal_id (letters, digits, - and _, 128 at most; ours is 64
+        long), and short enough to leave room for it."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{0,16}", v):
+            raise ValueError(
+                "ORACLE_SIGNAL_ID_SUFFIX must be at most 16 letters, digits, - or _ (the backend "
+                "takes nothing else in a signal_id)"
+            )
+        return v
 
     @field_validator("is_paper")
     @classmethod

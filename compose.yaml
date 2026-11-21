@@ -33,9 +33,11 @@ x-alpaca-env: &alpaca-env
   DATABASE_URL: sqlite:///./var/trading.db
 
 # The Oracle's settings and the backend's token. Only the services that talk to the backend get them:
-# trader (the live loop) and observe (the observer). They come from .env (git-ignored); with none
-# set the Oracle stays off. The backend calls its token ORACLE_TOKEN and that name may be what .env
-# holds: it is accepted when ORACLE_BACKEND_TOKEN is not set (the bot's own name wins if both are).
+# trader (the live loop), observe (the observer) and paper3 (the real paper orders, the only one in
+# ACTIVE mode: see its comment; a test holds who gets them and in which mode). They come from .env
+# (git-ignored); with none set the Oracle stays off. The backend calls its token ORACLE_TOKEN and that
+# name may be what .env holds: it is accepted when ORACLE_BACKEND_TOKEN is not set (the bot's own name
+# wins if both are).
 x-oracle-env: &oracle-env
   ORACLE_ENABLED: ${ORACLE_ENABLED:-false}
   ORACLE_PROVIDER: ${ORACLE_PROVIDER:-null}
@@ -243,8 +245,14 @@ services:
   # unchanged as the twin. Whole shares, the full bracket (stop and target, GTC), the same 22 symbols and the
   # same percentages; what differs is the account, the limit of positions (20 instead of 5, gross 80 % instead
   # of 20 %) and a database of its own (var/paper3.db), so it shares no order, position or halt with `trader`.
-  # No Oracle, no port. Stop it with `docker compose stop paper3`; open positions keep their stop and target at
-  # Alpaca. Paper money only (IS_PAPER is forced to true by the settings).
+  # THE ORACLE IS ON, IN ACTIVE MODE, since 2026-11-21 (owner's decision, docs/paper-third-account.md, section 7):
+  # paper3 is the arm of the experiment where the model's word counts. A VETO ends the signal, a HOLD (or a
+  # backend that does not answer) keeps it waiting until it expires, and only an APPROVE lets it go on to risk
+  # and the order. `trader` stays in shadow mode on the same signals and is the control: its simulated trades
+  # are the strategy alone. Fail closed: with the backend stopped, or the token wrong, paper3 makes NO entry
+  # (and `health` turns unhealthy); exits are untouched, the stops are the broker's. No port. Stop it with
+  # `docker compose stop paper3`; open positions keep their stop and target at Alpaca. Paper money only
+  # (IS_PAPER is forced to true by the settings).
   paper3:
     image: alpaca-roundtable-trader:latest
     container_name: alpaca-trader-paper3
@@ -254,6 +262,17 @@ services:
     logging: *logging
     stop_grace_period: 30s
     environment:
+      <<: *oracle-env
+      # Written out, not read from .env: .env holds the shadow-or-off setting of trader and observe, and
+      # an Oracle that was silently off here would make paper3 trade without the model while it looks on.
+      ORACLE_ENABLED: "true"
+      ORACLE_PROVIDER: backend
+      ORACLE_MODE: active
+      # The backend caches and journals by signal_id alone, not by mode. Without an id of its own paper3
+      # would be answered from trader's shadow cache (with trader's account in the question) and its call
+      # would leave no row in the journal, or it would take the row of a shadow question away from the
+      # judge. The suffix goes on the wire only; the bot's own tables keep the plain id.
+      ORACLE_SIGNAL_ID_SUFFIX: "-paper3"
       ALPACA_API_KEY: ${ALPACA_PAPER3_API_KEY:?Put ALPACA_PAPER3_API_KEY in .env}
       ALPACA_SECRET_KEY: ${ALPACA_PAPER3_SECRET_KEY:?Put ALPACA_PAPER3_SECRET_KEY in .env}
       IS_PAPER: "true"

@@ -118,12 +118,17 @@ class BackendOracle:
         *,
         mode: str = "shadow",
         timeout_seconds: float = 10.0,
+        signal_id_suffix: str = "",
         session: Optional[requests.Session] = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self.url = url.rstrip("/")
         self.mode = mode
         self.timeout_seconds = timeout_seconds
+        # Appended to the signal_id in the request and nowhere else: the backend caches and journals by
+        # signal_id alone, so a second caller (paper3, active) needs an id of its own. The decisions this
+        # class returns keep the plain id, which is the key of the bot's own tables.
+        self.signal_id_suffix = signal_id_suffix
         self._token = token
         self._clock = clock
         self._session = session if session is not None else requests.Session()
@@ -138,6 +143,7 @@ class BackendOracle:
             settings.oracle_backend_token.get_secret_value(),
             mode=settings.oracle_mode,
             timeout_seconds=float(settings.oracle_timeout_seconds),
+            signal_id_suffix=settings.oracle_signal_id_suffix,
         )
 
     # ------------------------------------------------------------------ the question
@@ -205,6 +211,8 @@ class BackendOracle:
     def _body(self, request: OracleRequest) -> bytes:
         payload = request.model_dump(mode="json")
         payload["signal"] = _without_none(payload["signal"])
+        if self.signal_id_suffix and payload["signal"].get("signal_id"):
+            payload["signal"]["signal_id"] += self.signal_id_suffix
         for key in ("volume_ratio", "live_price"):  # the contract has no null for these
             if payload.get(key) is None:
                 payload.pop(key, None)

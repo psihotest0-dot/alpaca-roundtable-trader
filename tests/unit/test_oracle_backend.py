@@ -118,6 +118,33 @@ def test_the_mode_travels_with_the_question() -> None:
     assert backend.received[0].json["mode"] == "active" and decision.mode == "active"
 
 
+def test_the_suffix_changes_the_signal_id_on_the_wire_and_nowhere_else() -> None:
+    """The backend caches and journals by signal_id alone. paper3 (active) asks about the same signals
+    as trader (shadow): without an id of its own it would be answered from trader's cache and would
+    leave no journal row. The decision it gets back keeps the plain id, the key of the bot's tables."""
+    plain = _signal().signal_id
+    with FakeOracleBackend() as backend:
+        decision = _oracle(backend, mode="active", signal_id_suffix="-paper3").evaluate(_request())
+
+    sent = backend.received[0].json["signal"]["signal_id"]
+    assert sent == f"{plain}-paper3" and sent.startswith(str(plain))
+    assert decision.signal_id == plain and not decision.failed
+
+
+def test_without_a_suffix_the_signal_id_goes_out_as_it_is() -> None:
+    with FakeOracleBackend() as backend:
+        _oracle(backend).evaluate(_request())
+
+    assert backend.received[0].json["signal"]["signal_id"] == _signal().signal_id
+
+
+def test_a_failure_with_a_suffix_still_carries_the_plain_id() -> None:
+    with FakeOracleBackend(Reply(503, "overloaded")) as backend:
+        decision = _oracle(backend, signal_id_suffix="-paper3").evaluate(_request())
+
+    assert decision.failed and decision.signal_id == _signal().signal_id
+
+
 # --- the three words ---------------------------------------------------------------------------
 
 
@@ -495,14 +522,16 @@ def test_the_oracle_is_built_from_the_settings() -> None:
         oracle_backend_url="http://127.0.0.1:8080/",
         oracle_backend_token=GOOD_TOKEN,
         oracle_timeout_seconds=7,
+        oracle_signal_id_suffix="-paper3",
     )
 
     oracle = BackendOracle.from_settings(settings)
 
-    assert (oracle.url, oracle.mode, oracle.timeout_seconds) == (
+    assert (oracle.url, oracle.mode, oracle.timeout_seconds, oracle.signal_id_suffix) == (
         "http://127.0.0.1:8080",
         "active",
         7,
+        "-paper3",
     )
     assert oracle.name == "backend"
 

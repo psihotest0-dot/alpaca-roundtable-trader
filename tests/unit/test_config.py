@@ -142,6 +142,20 @@ def test_the_oracle_timeout_has_bounds(seconds):
         _oracle_settings(oracle_timeout_seconds=seconds)
 
 
+def test_the_signal_id_suffix_is_empty_by_default_and_takes_what_the_backend_takes():
+    assert _oracle_settings().oracle_signal_id_suffix == ""
+    assert _oracle_settings(oracle_signal_id_suffix="-paper3").oracle_signal_id_suffix == "-paper3"
+    assert _oracle_settings(oracle_signal_id_suffix="A_b-9").oracle_signal_id_suffix == "A_b-9"
+
+
+@pytest.mark.parametrize(
+    "suffix", [" -paper3", "-paper 3", "-paper3/", "-пейпър", "x" * 17, "-p3\n"]
+)
+def test_a_signal_id_suffix_the_backend_would_refuse_is_refused_at_start(suffix):
+    with pytest.raises(ValidationError, match="ORACLE_SIGNAL_ID_SUFFIX"):
+        _oracle_settings(oracle_signal_id_suffix=suffix)
+
+
 def test_the_oracle_token_never_shows_in_a_repr():
     token = "T" * 40
     s = _oracle_settings(oracle_backend_token=token)

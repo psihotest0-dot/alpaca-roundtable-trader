@@ -206,3 +206,35 @@ def test_the_loops_serve_metrics_on_all_interfaces_inside_their_container() -> N
     for name in ("data", "news", "forward", "backup"):
         env = _compose()[name].get("environment", {})
         assert "METRICS_ENABLED" not in env, f"{name} has no loop to measure"
+
+
+def test_only_trader_observe_and_paper3_reach_the_oracle_and_only_paper3_obeys_it() -> None:
+    """The backend's token goes to the three services that ask the model, and to nobody else. Two of
+    them are in shadow mode (the default, `${ORACLE_MODE:-shadow}`): the model is heard and not obeyed.
+    paper3 is in ACTIVE mode on purpose (owner's decision of 2026-11-21, docs/paper-third-account.md,
+    section 7): its entries wait for the model's word. Its three settings are written out, not read from
+    .env, so that an Oracle switched off or in shadow there cannot leave paper3 trading without the model
+    while it looks as if the model were in the loop. Going back to shadow is a decision, and this test
+    is where it has to be made on purpose."""
+    services = _compose()
+    holders = {
+        name
+        for name, service in services.items()
+        if any(str(key).startswith("ORACLE_") for key in service.get("environment", {}))
+    }
+    assert holders == {"trader", "observe", "paper3"}
+    for name in ("trader", "observe"):
+        env = services[name]["environment"]
+        assert env["ORACLE_MODE"] == "${ORACLE_MODE:-shadow}", name
+        assert env["ORACLE_BACKEND_TOKEN"], name
+    paper3 = services["paper3"]["environment"]
+    assert paper3["ORACLE_MODE"] == "active"
+    assert str(paper3["ORACLE_ENABLED"]).lower() == "true"
+    assert paper3["ORACLE_PROVIDER"] == "backend"
+    assert paper3["ORACLE_BACKEND_URL"] and paper3["ORACLE_BACKEND_TOKEN"]
+    assert "METRICS_ENABLED" not in paper3 and "ports" not in services["paper3"]
+    # The backend caches and journals by signal_id alone: paper3 needs an id of its own on the wire, and
+    # trader and observe must keep the plain one (the shadow sample the judge counts).
+    assert paper3["ORACLE_SIGNAL_ID_SUFFIX"] == "-paper3"
+    for name in ("trader", "observe"):
+        assert "ORACLE_SIGNAL_ID_SUFFIX" not in services[name]["environment"], name
