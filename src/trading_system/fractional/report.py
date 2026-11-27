@@ -98,7 +98,9 @@ def build(audit: Any, now: datetime) -> Report:
             report.gross_over_ceiling += 1
     report.trading_days = len(days)
 
-    report.entries = len(events("fractional_entry"))
+    # An order Alpaca rejected at once was sent but is not an entry (criterion 2 counts it below)
+    entries_rejected = len(events("fractional_entry_rejected"))
+    report.entries = len(events("fractional_entry")) - entries_rejected
     for _, d in events("fractional_refused"):
         report.refused[str(d.get("reason", ""))[:60]] += 1
     for _, d in events("fractional_fill"):
@@ -122,9 +124,9 @@ def build(audit: Any, now: datetime) -> Report:
     report.sale_problems = len(events("fractional_sale_refused"))
     for _, d in events("fractional_alert"):
         report.alerts[str(d.get("title", ""))] += 1
-    # Every refusal of a stop is Alpaca's word and is written down; none is expected (the one expected
-    # case, a price already through the stop, is sold instead of sent).
-    report.unexplained_refusals = report.stops_refused
+    # Every refusal of a stop or an entry is Alpaca's word and is written down; none is expected (the
+    # one expected case, a price already through the stop, is sold instead of sent).
+    report.unexplained_refusals = report.stops_refused + entries_rejected
     return report
 
 

@@ -152,6 +152,18 @@ def test_a_halt_a_refusal_a_sale_problem_or_too_much_gross_each_fail_the_trial(
     assert "sale(s) refused" in problems and "over 20 %" in problems
 
 
+def test_an_entry_alpaca_rejected_is_no_entry_and_fails_the_trial(session_factory: Any) -> None:
+    audit = _journal(session_factory)
+    _fill_days(audit, days=20, entries=16)
+    audit.record("fractional_entry_rejected", {"symbol": "KO"}, when=NOW)
+
+    report = build(audit, NOW + timedelta(days=60))
+
+    assert report.entries == 15  # sent 16 times, entered 15
+    assert report.unexplained_refusals == 1
+    assert "1 order(s) refused by Alpaca" in " | ".join(report.failures())
+
+
 def test_the_report_counts_fills_and_how_far_they_were_from_the_limit(session_factory: Any) -> None:
     audit = _journal(session_factory)
     audit.record(

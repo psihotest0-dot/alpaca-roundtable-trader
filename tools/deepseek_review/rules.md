@@ -59,7 +59,7 @@
   looking at the hold-out. Report a bug only when the code does not do what its own docstring or comment
   says the rule is (look-ahead, an off-by-one in a window, a wrong count, a wrong sign).
 - The comments explain why, often with dates and measurements: do not report them as noise.
-- The tests (about 1440) are in files that are NOT shown: never write that something has no test.
+- The tests (about 1470) are in files that are NOT shown: never write that something has no test.
 - Only the files of the group are reviewed. Files marked "context" are shown so that callers and callees
   can be read; do not report findings in them. About any other file, say that you cannot see it instead
   of guessing what it does.
@@ -68,6 +68,42 @@
   processes that meet only in the database and at the broker.
 - Metrics listen on `0.0.0.0` inside the container on purpose; the port is published on the PC's
   loopback only (`127.0.0.1:9101` / `:9102`). The containers run as an unprivileged user.
+- Bars reach a strategy already cut to the bars that had CLOSED by the decision time
+  (`AlpacaData` drops every bar whose start plus its length is after `now`), and the signal is from the
+  last of them: a caller does not need to cut them again, and the first trade of the next bar is not
+  look-ahead.
+- `MarketBarRepository.load(start, end)`: `start` inclusive, `end` EXCLUSIVE (`bar_start < end`); it
+  returns frames already normalized with a UTC index (SQLite hands back naive UTC, the repository makes
+  it aware). Every frame of the research, the backtest and the judges comes from it or from
+  `fetch_bars_bulk`, also normalized. An empty frame is dropped before a pass (`load_universe`, the
+  observer's `_load`).
+- Times read back from the database are made UTC-aware where they are compared (`_decision()` for the
+  Oracle's `decision_timestamp`, so every `decided_at` carries `+00:00`; reconciliation does the same).
+- The enum columns are SQLAlchemy `Enum` without `create_constraint`: since SQLAlchemy 1.4 that makes NO
+  CHECK constraint, so a migration that renames a label cannot fail on a CHECK.
+- Only `fetch-news` writes news rows into `news.db` (the `news` container, one run at a time); the
+  loops only read it.
+- `Orchestrator.resume_entries` is called only from `resume_entries_checked`, which looks at the account
+  again first; the CLI uses that one, and its `--force` (the owner has seen the problems) is deliberate.
+- A signal expires 15 minutes after its bar closed (`expires_at`), so one from an older bar is already
+  expired, and every consumer refuses an expired one: risk, the fractional loop's `_enter`, the observer
+  (it drops them before asking).
+- The backtest's documented model (`backtest/models.py`, the "assumptions and limitations" list that
+  every report prints): the entry price is the first trade of the next bar plus slippage (it passes the
+  live price checks), sizing and limits come from the real `RiskEngine`, the stop counts first when stop
+  and target fall in one bar, stops and targets act ONLY on regular-session bars (the live GTC legs work
+  only then; a gap past a level by the next open fills at that open), fees and slippage are fixed
+  percentages, and an entry that would not fill at once is not modelled. These are deliberate and
+  registered; report a bug only when the code differs from that list.
+- An Oracle answer is returned even if writing its record failed (deliberate: losing the record must not
+  lose the decision; the backend also keeps it 30 minutes). HTTP 408 and 429 from the backend count as a
+  timeout and as unavailable, and start the 30 s pause like a 5xx.
+- `get_open_orders` asks Alpaca for 500 orders (its maximum; the default is 50) and logs a full page.
+  A bracket entry that filled only in part is cancelled at once (Alpaca then works the legs for the
+  filled shares) and the protection check waits up to 2 minutes for its stop before it halts.
+- Only the `run` command writes the log file `var/alpaca_trading.log`; every other command (`observe`,
+  `fractional-run` included) logs to the console, which Docker keeps, and the fractional loop has no
+  metrics port (all deliberate).
 
 ## Rules of the project: report breaking them
 

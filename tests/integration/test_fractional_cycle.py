@@ -40,6 +40,7 @@ class SecondAccount:
         self.equity = equity
         self.market_open = True
         self.fill_entries = False
+        self.reject_entries = False  # Alpaca takes the buy and rejects it at once
         self.stop_error: Exception | None = None
         self.not_fractionable: set[str] = set()
         self.positions: dict[str, Position] = {}
@@ -104,6 +105,8 @@ class SecondAccount:
         assert kind == "LimitOrderRequest" and side == "buy", f"the loop sent a {kind} {side}"
         assert str(request.time_in_force.value) == "day"  # fractional orders are DAY only
         assert getattr(request, "order_class", None) in (None, "simple")  # no bracket
+        if self.reject_entries:
+            return self._store(request, "limit", "rejected")
         order = self._store(
             request,
             "limit",
@@ -314,6 +317,21 @@ def test_a_signal_becomes_one_fractional_day_limit_order_sized_on_the_virtual_ca
     assert baseline["equity"] == "1000000" and baseline["budget"] == "500.0"
     (entry,) = _events(session_factory, "fractional_entry")
     assert entry["symbol"] == "MSFT" and entry["virtual_equity"] == "500.0"
+
+
+def test_an_entry_alpaca_rejects_at_once_is_journalled_and_not_counted(
+    make_cycle: Any, session_factory: Any
+) -> None:
+    setup = make_cycle()
+    setup.broker.reject_entries = True
+
+    report = _entries(setup)
+
+    assert report.signals == 1 and report.submitted == 0 and report.errors == 0
+    assert len(setup.broker.requests) == 1  # it was sent once, and not again
+    (rejected,) = _events(session_factory, "fractional_entry_rejected")
+    assert rejected["symbol"] == "MSFT" and rejected["client_order_id"].startswith("frac-")
+    assert _events(session_factory, "fractional_fill") == []
 
 
 def test_the_baseline_is_written_once_and_read_back(make_cycle: Any, session_factory: Any) -> None:

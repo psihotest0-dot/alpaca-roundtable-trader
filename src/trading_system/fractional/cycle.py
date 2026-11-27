@@ -393,11 +393,25 @@ class FractionalCycle:
             f"Fractional entry {symbol}: {sized.quantity} at limit {sized.limit_price} "
             f"({sized.notional:.2f} dollars)."
         )
-        self._after_entry(order, sized.limit_price, reference, now)
+        if self._after_entry(order, sized.limit_price, reference, now) == "rejected":
+            # Sent, but not an entry: Alpaca refused it at once (the report must not count it)
+            logger.warning(f"Alpaca rejected the fractional entry {symbol} ({order.id}).")
+            self._journal(
+                "fractional_entry_rejected",
+                {
+                    "symbol": symbol,
+                    "signal_id": signal.signal_id,
+                    "order_id": str(order.id),
+                    "client_order_id": client_order_id,
+                },
+                now,
+            )
+            return False
         return True
 
-    def _after_entry(self, order: Any, limit: Decimal, reference: Decimal, now: datetime) -> None:
-        """Waits a little for the fill, so that the stop goes on at once, and journals the fill."""
+    def _after_entry(self, order: Any, limit: Decimal, reference: Decimal, now: datetime) -> str:
+        """Waits a little for the fill, so that the stop goes on at once, and journals the fill.
+        Returns the order's status when the wait ended."""
         fresh = order
         for _ in range(FILL_POLLS):
             self._sleep(FILL_POLL_SECONDS)
@@ -427,6 +441,7 @@ class FractionalCycle:
                 moment = filled_at if filled_at.tzinfo else filled_at.replace(tzinfo=timezone.utc)
                 self._unprotected_since.setdefault(order.symbol, min(moment, now))
             self._manage_positions(self._clock())
+        return _text(fresh.status)
 
     # ------------------------------------------------------------------ housekeeping
 

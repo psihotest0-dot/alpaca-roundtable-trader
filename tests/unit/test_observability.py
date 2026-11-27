@@ -36,6 +36,19 @@ def test_secret_redaction_string():
     assert "***REDACTED***" in redacted
 
 
+def test_a_base64_bearer_token_is_redacted_whole():
+    """RFC 6750 tokens may hold + / and end in =; the pattern used to stop at the first one."""
+    redacted = SensitiveDataRedactor.redact("sent Bearer ab+cd/ef== to the backend")
+
+    assert redacted == "sent ***REDACTED*** to the backend"
+
+
+def test_a_base64_authorization_header_is_redacted_whole():
+    redacted = SensitiveDataRedactor.redact('headers {"authorization: Basic dXNlcjpw/+YXNz=="}')
+
+    assert "dXNlcjpw" not in redacted and "YXNz" not in redacted and "==" not in redacted
+
+
 def test_json_formatter():
     record = logging.LogRecord(
         name="test_logger",

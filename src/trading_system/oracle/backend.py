@@ -355,8 +355,12 @@ def _kind_for_status(status: int, code: Optional[str]) -> str:
         return UNAUTHORIZED
     if status in (400, 405, 413):
         return BAD_REQUEST
-    if status == 504:
+    # Not in the backend's contract, but a proxy or a later backend may send them: a timeout
+    # and "too many requests" are the backend being busy, so they start the pause like a 5xx.
+    if status in (408, 504):
         return TIMEOUT
+    if status == 429:
+        return UNAVAILABLE
     if status == 502:  # the model did not answer, or answered twice with something unusable
         return BAD_REPLY if code == "unusable_reply" else UNAVAILABLE
     if status == 404:  # the backend serves its Oracle routes only with a token of 32 characters

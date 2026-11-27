@@ -121,7 +121,7 @@ class ContextRecorder:
         try:
             state = compute_market_state(self._spy_loader(), today)
         except Exception as e:  # e.g. the research file is being written; try again next time
-            logger.warning(f"Could not read SPY for the signal context: {e}")
+            logger.warning(f"Could not read SPY for the signal context: {type(e).__name__}: {e}")
             self.errors += 1
             return MarketState()
         if (
@@ -167,7 +167,9 @@ class ContextRecorder:
                 self.audit_repo.record(SIGNAL_CONTEXT, details, when=when)
                 written += 1
             except Exception as e:  # a context must never stop a loop
-                logger.warning(f"Could not journal the context of {signal.symbol}: {e}")
+                logger.warning(
+                    f"Could not journal the context of {signal.symbol}: {type(e).__name__}: {e}"
+                )
                 self.errors += 1
         return written
 
@@ -178,7 +180,7 @@ class ContextRecorder:
             day = closed_bar.tz_convert(MARKET_TZ).date()
             info = self.calendar.lookup(symbol, day)
         except Exception as e:
-            logger.warning(f"Could not look up earnings for {symbol}: {e}")
+            logger.warning(f"Could not look up earnings for {symbol}: {type(e).__name__}: {e}")
             self.errors += 1
             return {"earnings_known": False, "earnings_in_2_sessions": None, "earnings_dates": []}
         return {

@@ -126,7 +126,9 @@ def record_pass(
             if context is not None and signals:
                 context.record(signals, bars_15m, now, source=f"candidate:{strategy.name}")
         except Exception as e:  # one broken candidate must not stop the others or the Oracle
-            logger.error(f"Candidate {strategy.name} could not be run on this bar: {e}")
+            logger.error(
+                f"Candidate {strategy.name} could not be run on this bar: {type(e).__name__}: {e}"
+            )
             errors += 1
             counts[strategy.name] = -1
     audit.record(

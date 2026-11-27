@@ -190,6 +190,8 @@ REFUSALS = [
     (error(504, "model_timeout"), TIMEOUT),
     (error(500, "internal_error"), UNAVAILABLE),
     (Reply(503, "overloaded"), UNAVAILABLE),
+    (Reply(408, "request timeout"), TIMEOUT),  # not in the contract: a proxy may send them
+    (Reply(429, "too many requests"), UNAVAILABLE),
     (Reply(404, "not found"), UNAVAILABLE),  # the backend serves the route only with a token
     (Reply(302, "", headers={"Location": "/elsewhere"}), BAD_REPLY),
     (Reply(200, "this is not json"), BAD_REPLY),
@@ -371,7 +373,13 @@ class Clock:
 
 @pytest.mark.parametrize(
     "reply",
-    [error(504, "model_timeout"), error(502, "model_unavailable"), error(500, "internal_error")],
+    [
+        error(504, "model_timeout"),
+        error(502, "model_unavailable"),
+        error(500, "internal_error"),
+        Reply(408, "request timeout"),
+        Reply(429, "too many requests"),
+    ],
 )
 def test_after_a_failure_the_next_calls_fail_at_once_until_the_pause_is_over(reply: Reply) -> None:
     clock = Clock()

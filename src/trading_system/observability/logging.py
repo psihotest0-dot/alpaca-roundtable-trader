@@ -12,12 +12,14 @@ class SensitiveDataRedactor:
     # Patterns or keys to look for in dictionaries or strings
     SENSITIVE_KEYS = {"api_key", "secret", "authorization", "password", "token"}
 
-    # Regex to catch Authorization headers, Bearer tokens, etc., in strings
+    # Regex to catch Authorization headers, Bearer tokens, etc., in strings. A token may be
+    # base64 (RFC 6750 allows + / and trailing =): those characters are part of it, or the
+    # pattern would cut the token there and leave the rest in the log.
     SENSITIVE_PATTERNS = [
-        re.compile(r"Bearer\s+[A-Za-z0-9\-\._~]+", re.IGNORECASE),
+        re.compile(r"Bearer\s+[A-Za-z0-9\-\._~+/]+=*", re.IGNORECASE),
         re.compile(r"api_key=['\"]?[A-Za-z0-9\-\._]+['\"]?", re.IGNORECASE),
         re.compile(r"secret_key=['\"]?[A-Za-z0-9\-\._]+['\"]?", re.IGNORECASE),
-        re.compile(r"authorization:\s*['\"]?[A-Za-z0-9\-\._\s]+['\"]?", re.IGNORECASE),
+        re.compile(r"authorization:\s*['\"]?[A-Za-z0-9\-\._~+/=\s]+['\"]?", re.IGNORECASE),
     ]
 
     @classmethod
