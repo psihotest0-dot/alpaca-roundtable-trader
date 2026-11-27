@@ -79,6 +79,11 @@ poetry run mypy src
 poetry run pytest
 ```
 
+A paid second review of the whole code by DeepSeek, in themed groups, with the facts of this bot
+sent first, is in [`tools/deepseek_review/`](tools/deepseek_review/README.md). It is run on request,
+after the owner agrees to the cost, and every finding is checked against the code before anything
+is changed.
+
 ### Guard rails against leaking secrets
 
 Install the pre-commit hooks once per machine. They block env files, databases,

@@ -1,0 +1,250 @@
+{
+ "rules": "tools/deepseek_review/rules.md",
+ "system": "You are a senior Python reviewer. You review an automated trading bot for US stocks: Python 3.15, pandas 3, pydantic 2 with pydantic-settings, SQLAlchemy 2 on SQLite (WAL), alembic, alpaca-py against Alpaca's PAPER accounts, requests to the owner's Go backend for an optional second opinion (the Oracle: APPROVE / VETO / HOLD), Prometheus metrics, Docker Compose. The project's rules and facts (given first) must be treated as true - do NOT report as a bug something they state as deliberate.\n\nFind REAL defects: logic errors on the order path (an order sent when it must not be, twice, without a stop, with a wrong size, price or tick, after a halt), state that gets out of sync with the broker after a failure or a restart, unhandled or swallowed exceptions, wrong edge cases (None, NaN, 0, empty frames, a missing bar, a partial fill, time zones and the New York trading day, naive vs aware datetimes, float vs Decimal), look-ahead in signals, backtests and research (using a bar that had not closed yet), off-by-one errors in windows and counts, SQL or ORM code that does not do what the code expects (a missing commit, a session used after an error, a race between two containers on one SQLite file), resource leaks (responses, sessions, files, threads), broken rules of the project (secrets in logs or messages, anything unclear treated as a yes) and security problems (secrets, injection, unsafe paths). Also list a few worthwhile improvements, marked as such.\n\nPython facts: the loop is synchronous (no asyncio); two pieces of code in one thread cannot race. Do not report style that ruff does not check (f-strings in logging calls, import order). Do not invent behaviour of alpaca-py, pandas or SQLAlchemy that you are not sure of: say so in \"confidence\".\n\nBe precise and honest: every finding must cite the file and line numbers (lines are numbered in the listing) and quote the exact code it is about. Do not invent code that is not shown. If something depends on a file that is not included, say so in \"confidence\". Prefer fewer, well-founded findings over many speculative ones.\n\nAnswer with ONE JSON object only:\n{\"findings\": [{\"id\": \"<group>-<n>\", \"file\": \"...\", \"lines\": \"123-130\", \"kind\": \"bug|risk|rule|security|improvement\", \"severity\": \"high|medium|low\", \"title\": \"...\", \"quote\": \"exact code\", \"explanation\": \"why it is wrong and when it happens\", \"fix\": \"what to change\", \"confidence\": \"high|medium|low\"}]}",
+ "coverage": [
+  "src/*.py",
+  "scripts/*.py",
+  "compose.yaml",
+  "Dockerfile",
+  "pyproject.toml",
+  "alembic.ini",
+  ".env.example",
+  ".github/workflows/*.yml",
+  ".pre-commit-config.yaml",
+  "ops/prometheus/alpaca_alerts.yml"
+ ],
+ "coverage_skip": [],
+ "groups": {
+  "orders": {
+   "review": [
+    "src/trading_system/execution/engine.py",
+    "src/trading_system/broker/alpaca_broker.py",
+    "src/trading_system/broker/order_mapping.py",
+    "src/trading_system/risk/engine.py",
+    "src/trading_system/risk/entry_plan.py",
+    "src/trading_system/risk/daily_equity.py",
+    "src/trading_system/runtime/reconciliation.py",
+    "src/trading_system/runtime/account_check.py",
+    "src/trading_system/common/retry.py",
+    "src/trading_system/domain/models.py",
+    "src/trading_system/domain/enums.py"
+   ],
+   "context": [
+    "src/trading_system/config.py",
+    "src/trading_system/storage/repositories.py"
+   ]
+  },
+  "loop": {
+   "review": [
+    "src/trading_system/runtime/cycle.py",
+    "src/trading_system/runtime/orchestrator.py",
+    "src/trading_system/runtime/runner.py",
+    "src/trading_system/runtime/schedule.py",
+    "src/trading_system/runtime/heartbeat.py",
+    "src/trading_system/data/live_price.py",
+    "src/trading_system/data/bars.py"
+   ],
+   "context": [
+    "src/trading_system/config.py",
+    "src/trading_system/domain/models.py",
+    "src/trading_system/domain/enums.py",
+    "src/trading_system/execution/engine.py",
+    "src/trading_system/oracle/contract.py",
+    "src/trading_system/strategy/base.py"
+   ]
+  },
+  "oracle": {
+   "review": [
+    "src/trading_system/oracle/__init__.py",
+    "src/trading_system/oracle/backend.py",
+    "src/trading_system/oracle/checks.py",
+    "src/trading_system/oracle/contract.py",
+    "src/trading_system/oracle/factory.py",
+    "src/trading_system/oracle/inputs.py",
+    "src/trading_system/oracle/news_input.py",
+    "src/trading_system/oracle/null.py",
+    "src/trading_system/oracle/recording.py",
+    "src/trading_system/oracle/shadow.py",
+    "src/trading_system/data/news.py",
+    "src/trading_system/storage/news.py"
+   ],
+   "context": [
+    "src/trading_system/config.py",
+    "src/trading_system/domain/models.py",
+    "src/trading_system/domain/enums.py",
+    "src/trading_system/storage/repositories.py"
+   ]
+  },
+  "judge": {
+   "review": [
+    "src/trading_system/oracle/judge.py",
+    "src/trading_system/backtest/shadow.py",
+    "src/trading_system/research/stats.py",
+    "src/trading_system/research/trials.py",
+    "src/trading_system/research/paper_report.py"
+   ],
+   "context": [
+    "src/trading_system/domain/enums.py",
+    "src/trading_system/oracle/contract.py",
+    "src/trading_system/storage/models.py"
+   ]
+  },
+  "strategy": {
+   "review": [
+    "src/trading_system/strategy/atr.py",
+    "src/trading_system/strategy/base.py",
+    "src/trading_system/strategy/config.py",
+    "src/trading_system/strategy/dip_cross.py",
+    "src/trading_system/strategy/ema_crossover.py",
+    "src/trading_system/strategy/registry.py",
+    "src/trading_system/strategy/session_cross.py",
+    "src/trading_system/strategy/trend.py",
+    "src/trading_system/strategy/trend_cross.py",
+    "src/trading_system/research/signals.py"
+   ],
+   "context": [
+    "src/trading_system/domain/models.py",
+    "src/trading_system/domain/enums.py",
+    "src/trading_system/data/bars.py"
+   ]
+  },
+  "backtest": {
+   "review": [
+    "src/trading_system/backtest/analysis.py",
+    "src/trading_system/backtest/comparison.py",
+    "src/trading_system/backtest/engine.py",
+    "src/trading_system/backtest/exits.py",
+    "src/trading_system/backtest/loader.py",
+    "src/trading_system/backtest/models.py"
+   ],
+   "context": [
+    "src/trading_system/domain/models.py",
+    "src/trading_system/domain/enums.py",
+    "src/trading_system/risk/engine.py",
+    "src/trading_system/risk/entry_plan.py",
+    "src/trading_system/strategy/base.py",
+    "src/trading_system/data/bars.py"
+   ]
+  },
+  "research_candidates": {
+   "review": [
+    "src/trading_system/research/anatomy.py",
+    "src/trading_system/research/atr_candidate.py",
+    "src/trading_system/research/candidates.py",
+    "src/trading_system/research/context.py",
+    "scripts/atr_measurement/atr_observed.py",
+    "scripts/atr_measurement/atr_profile.py"
+   ],
+   "context": [
+    "src/trading_system/research/stats.py",
+    "src/trading_system/research/trials.py",
+    "src/trading_system/strategy/base.py"
+   ]
+  },
+  "research_measure": {
+   "review": [
+    "src/trading_system/research/__init__.py",
+    "src/trading_system/research/crypto.py",
+    "src/trading_system/research/forward.py",
+    "src/trading_system/research/intraday.py",
+    "src/trading_system/research/measure.py",
+    "src/trading_system/research/panel.py"
+   ],
+   "context": [
+    "src/trading_system/research/stats.py",
+    "src/trading_system/research/trials.py",
+    "src/trading_system/strategy/base.py"
+   ]
+  },
+  "storage": {
+   "review": [
+    "src/trading_system/storage/database.py",
+    "src/trading_system/storage/models.py",
+    "src/trading_system/storage/repositories.py",
+    "src/trading_system/storage/research.py",
+    "src/trading_system/storage/backup.py",
+    "src/trading_system/data/history.py",
+    "src/trading_system/alembic/env.py",
+    "src/trading_system/alembic/versions/7cbd8a703bf7_initial_schema.py",
+    "src/trading_system/alembic/versions/a4c7e91b3d68_oracle_decisions_backend_call.py",
+    "src/trading_system/alembic/versions/b6d1f4a82c35_market_bars.py",
+    "src/trading_system/alembic/versions/c3f1a9e47d52_order_identity_by_client_order_id.py",
+    "src/trading_system/alembic/versions/c9d4e2a7f815_oracle_decisions_prompt_version.py",
+    "src/trading_system/alembic/versions/e8b2d5a61f07_take_profit_price_on_order_intents.py",
+    "src/trading_system/alembic/versions/f1a7c3d95b20_oracle_decisions_verdict.py",
+    "alembic.ini"
+   ],
+   "context": [
+    "src/trading_system/domain/models.py",
+    "src/trading_system/domain/enums.py",
+    "src/trading_system/data/bars.py"
+   ]
+  },
+  "data": {
+   "review": [
+    "src/trading_system/data/alpaca_data.py",
+    "src/trading_system/data/corporate_actions.py",
+    "src/trading_system/data/crypto.py",
+    "src/trading_system/data/earnings_calendar.py",
+    "src/trading_system/data/oracle_extra.py",
+    "src/trading_system/data/paper3_portfolio.py",
+    "src/trading_system/data/universe.py",
+    "scripts/freeze_paper3_portfolio.py",
+    "scripts/select_oracle_extra.py",
+    "scripts/select_paper3_portfolio.py"
+   ],
+   "context": [
+    "src/trading_system/data/bars.py",
+    "src/trading_system/storage/research.py"
+   ]
+  },
+  "observe_fractional": {
+   "review": [
+    "src/trading_system/runtime/observe.py",
+    "src/trading_system/fractional/__init__.py",
+    "src/trading_system/fractional/cycle.py",
+    "src/trading_system/fractional/plan.py",
+    "src/trading_system/fractional/report.py"
+   ],
+   "context": [
+    "src/trading_system/config.py",
+    "src/trading_system/domain/models.py",
+    "src/trading_system/domain/enums.py",
+    "src/trading_system/broker/alpaca_broker.py",
+    "src/trading_system/data/live_price.py",
+    "src/trading_system/risk/entry_plan.py",
+    "src/trading_system/strategy/base.py"
+   ]
+  },
+  "cli": {
+   "review": [
+    "src/trading_system/__main__.py",
+    "src/trading_system/cli.py",
+    "src/trading_system/config.py",
+    "src/trading_system/config_check.py"
+   ],
+   "context": []
+  },
+  "ops": {
+   "review": [
+    "src/trading_system/observability/alerts.py",
+    "src/trading_system/observability/equity_check.py",
+    "src/trading_system/observability/health.py",
+    "src/trading_system/observability/logging.py",
+    "src/trading_system/observability/metrics.py",
+    "src/trading_system/observability/report.py",
+    "compose.yaml",
+    "Dockerfile",
+    "pyproject.toml",
+    ".env.example",
+    ".github/workflows/ci.yml",
+    ".pre-commit-config.yaml",
+    "ops/prometheus/alpaca_alerts.yml"
+   ],
+   "context": [
+    "src/trading_system/config.py",
+    "src/trading_system/runtime/heartbeat.py"
+   ]
+  }
+ }
+}
