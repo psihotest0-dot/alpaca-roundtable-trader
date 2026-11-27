@@ -81,11 +81,21 @@ def test_the_same_signal_before_the_open_is_not_traded(settings: Settings) -> No
 
 def test_a_signal_on_the_last_bar_of_the_session_is_acted_on(settings: Settings) -> None:
     # The cross-up bar closes at 20:45 UTC = 15:45 ET, a bar before the close: still in the session.
-    result, follow_index, _ = _run(
-        settings, datetime(2026, 11, 2, 20, 52, tzinfo=UTC), [QUIET, QUIET, GAP_UP_6_PCT]
+    frame, hourly, follow_index = make_bars_with_follow_up(
+        datetime(2026, 11, 2, 20, 52, tzinfo=UTC), [QUIET, QUIET, GAP_UP_6_PCT]
     )
+    engine = BacktestEngine(
+        settings,
+        BacktestConfig(initial_capital=Decimal("100000")),
+        {"AAPL": frame},
+        {"AAPL": hourly},
+    )
+    result = engine.run()
 
-    assert [t.entry_time for t in result.trades] == [follow_index[0]]
+    assert engine.positions["AAPL"].entry_time == follow_index[0]
+    # The gap up comes at 16:15 ET, after the close, where the bracket's legs do not act
+    # (2026-11-27): the position is still open when the data ends, not taken at the target.
+    assert result.trades == []
 
 
 def test_a_signal_that_arrives_at_the_close_is_not_acted_on(settings: Settings) -> None:

@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 from tests.fixtures.research import stock_names
+from tests.fixtures.sessions import session_bar, session_bars_from, session_bars_until
 from trading_system.cli import main
 from trading_system.domain.enums import OracleVerdict, SignalDirection
 from trading_system.domain.models import OracleDecision, StrategySignal
@@ -74,10 +75,13 @@ class World:
         self.count += 1
         symbol = next(self.names)
         offset = (self.count % self.spread) if day is None else day
-        # one day after the other, in a few hours each, when signals are spread over days (so that a
-        # day stays a day); a single run of 15-minute steps otherwise, as before
-        steps = self.count if (day is None and self.spread == 1) else self.count % 40
-        closed = FIRST_SIGNAL + timedelta(days=offset, minutes=15 * steps)
+        # one weekday after the other, in a few hours of each session, when signals are spread over
+        # days (so that a day stays a day); a single run of session bars otherwise. Session bars
+        # only: the shadow trades exit only there (2026-11-27), as the real bracket does.
+        if day is None and self.spread == 1:
+            closed = session_bars_from(FIRST_SIGNAL, self.count + 1, last_slot=24)[-1]
+        else:
+            closed = session_bar(FIRST_SIGNAL, offset, 2 + self.count % 22)
         signal = StrategySignal(
             version=version,
             symbol=symbol,
@@ -105,8 +109,8 @@ class World:
 
     def _bars(self, signal: StrategySignal, growth: float) -> None:
         entry = pd.Timestamp(signal.closed_bar_timestamp) + pd.Timedelta(minutes=15)
-        index = pd.date_range(
-            entry - pd.Timedelta(hours=3), periods=12 + 120, freq="15min", tz="UTC"
+        index = session_bars_until(entry - pd.Timedelta(minutes=15), 12).append(
+            session_bars_from(entry, 120)
         )
         closes = [100.0] * 12
         for _ in range(120):

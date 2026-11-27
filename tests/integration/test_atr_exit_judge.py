@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
+from tests.fixtures.sessions import session_bar, session_bars_from, session_bars_until, weekday_open
 from trading_system.backtest.shadow import SignalToPlay, play_out
 from trading_system.cli import main
 from trading_system.domain.enums import SignalDirection
@@ -38,7 +39,9 @@ from trading_system.storage.research import open_observe_store
 
 UTC = timezone.utc
 BASE = datetime(2026, 11, 9, 5, 0, tzinfo=UTC)  # a Monday, midnight in New York
-NOW = datetime(2027, 1, 15, tzinfo=UTC)  # long after the last signal (maturity is 14 days)
+# Long after the last signal (maturity is 14 days): day d is the d-th weekday after BASE, so the
+# 45 days run into January.
+NOW = datetime(2027, 2, 15, tzinfo=UTC)
 DAYS = 45
 Path_ = list[tuple[float, float]]  # (open, close) of each bar after the signal, % above 100
 RANGES = [0.8, 0.9, 1.0, 1.1, 1.2]  # the ATR, % of the price: stop 4.8-7.2 %, target 6-9 %
@@ -86,7 +89,7 @@ class World:
     ) -> str:
         self.count += 1
         symbol = symbol or f"S{self.count:04d}"
-        closed = BASE + timedelta(days=day, minutes=15 * slot)
+        closed = session_bar(BASE, day, slot).to_pydatetime()
         if journal:
             signal = StrategySignal(
                 version=f"{CONTROL}-1",
@@ -101,13 +104,15 @@ class World:
 
     def _bars(self, symbol: str, closed: datetime, rng: float, path: Path_, before: int) -> None:
         signal_bar = pd.Timestamp(closed)
-        past = pd.date_range(end=signal_bar, periods=before, freq="15min", tz="UTC")
+        # Session bars only: the shadow trades exit only there (2026-11-27), as the real bracket does.
+        past = session_bars_until(signal_bar, before)
         rows = [(100.0, 100.0 + rng / 2, 100.0 - rng / 2, 100.0)] * before
-        index = list(past)
-        for i, (o, c) in enumerate(path):
+        index = list(past) + list(
+            session_bars_from(signal_bar + pd.Timedelta(minutes=15), len(path))
+        )
+        for o, c in path:
             op, cl = 100 * (1 + o / 100), 100 * (1 + c / 100)
             rows.append((op, max(op, cl) * 1.0003, min(op, cl) * 0.9997, cl))
-            index.append(signal_bar + pd.Timedelta(minutes=15 * (i + 1)))
         frame = pd.DataFrame(
             rows,
             columns=["open", "high", "low", "close"],
@@ -118,7 +123,7 @@ class World:
     def run_days(self, days: int = DAYS) -> None:
         for day in range(days):
             self.audit.record(
-                CYCLE_EVENT, {"bar_start": "x", "errors": 0}, when=BASE + timedelta(days=day)
+                CYCLE_EVENT, {"bar_start": "x", "errors": 0}, when=weekday_open(BASE, day)
             )
 
     def judge(self) -> Any:
@@ -169,7 +174,7 @@ def test_the_play_out_with_the_exit_rule_uses_the_atr_of_the_window(
 ) -> None:
     # +6 %: past the live 5 % target, short of the 7.5 ATR (7.5 % at a range of 1 %)
     world.signal(_from_closes([6.0, 6.1, 6.2]), day=0, rng=1.0, symbol="AAA")
-    sig = SignalToPlay("s", "AAA", pd.Timestamp(BASE), "x")
+    sig = SignalToPlay("s", "AAA", session_bar(BASE, 0, 0), "x")
 
     live = play_out([sig], world.store, world.settings)
     candidate = play_out([sig], world.store, world.settings, exit_rule=ATR_EXIT)
@@ -183,7 +188,7 @@ def test_the_atr_of_a_signal_does_not_see_the_bars_after_it(world: World) -> Non
     # BEFORE the signal is 1 %): the drop hits it. If the bars after the signal leaked into the ATR,
     # the 8 % bar would widen the stop to about 9 % and the drop would not reach it.
     world.signal(_from_closes([0.0, -8.0, -8.1]), day=0, rng=1.0, symbol="AAA")
-    sig = SignalToPlay("s", "AAA", pd.Timestamp(BASE), "x")
+    sig = SignalToPlay("s", "AAA", session_bar(BASE, 0, 0), "x")
 
     played = play_out([sig], world.store, world.settings, exit_rule=ATR_EXIT)
 
@@ -193,7 +198,7 @@ def test_the_atr_of_a_signal_does_not_see_the_bars_after_it(world: World) -> Non
 
 def test_a_signal_without_enough_bars_for_an_atr_is_counted_not_played(world: World) -> None:
     world.signal(GOOD, day=0, symbol="AAA", bars_before=8)
-    sig = SignalToPlay("s", "AAA", pd.Timestamp(BASE), "x")
+    sig = SignalToPlay("s", "AAA", session_bar(BASE, 0, 0), "x")
 
     played = play_out([sig], world.store, world.settings, exit_rule=ATR_EXIT)
 
@@ -355,7 +360,8 @@ def test_the_command_prints_both_judges(
 ) -> None:
     real_now = datetime.now(UTC)
     for i in range(3):
-        closed = real_now - timedelta(days=20 + i)
+        # 10:00 New York of a weekday about three weeks ago (the bars are session bars)
+        closed = session_bar(real_now - timedelta(days=20 + i), 0, 2).to_pydatetime()
         signal = StrategySignal(
             version=f"{CONTROL}-1",
             symbol=f"S{i:04d}",

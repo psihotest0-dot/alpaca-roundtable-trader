@@ -6,6 +6,9 @@ the same data 14 times out of 15. These are the boundaries it is now tied to.
 
 from datetime import datetime, time, timedelta, timezone
 
+import numpy as np
+import pandas as pd
+
 from trading_system.data.alpaca_data import FIFTEEN_MINUTES
 from trading_system.risk.daily_equity import MARKET_TZ
 
@@ -39,3 +42,13 @@ def is_regular_session(moment: datetime) -> bool:
     bars on those days (or after the early close)."""
     local = _utc(moment).astimezone(MARKET_TZ)
     return local.weekday() < 5 and SESSION_OPEN <= local.time() < SESSION_CLOSE
+
+
+def regular_session_mask(index: pd.DatetimeIndex) -> np.ndarray:
+    """`is_regular_session` for every instant of `index` at once (naive instants are UTC)."""
+    utc = index.tz_localize("UTC") if index.tz is None else index.tz_convert("UTC")
+    local = utc.tz_convert(MARKET_TZ)
+    minutes = local.hour * 60 + local.minute
+    opens = SESSION_OPEN.hour * 60 + SESSION_OPEN.minute
+    closes = SESSION_CLOSE.hour * 60 + SESSION_CLOSE.minute
+    return np.asarray((local.day_of_week < 5) & (minutes >= opens) & (minutes < closes), dtype=bool)

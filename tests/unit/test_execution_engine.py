@@ -729,3 +729,163 @@ def test_a_check_that_cannot_read_the_broker_does_not_look_like_a_clean_one(engi
     engine.emergency_check_unprotected_positions()  # logs the error, as before
 
     assert metrics.PROTECTION_CHECK_TIMESTAMP._value.get() == 0
+
+
+# --- a partially filled entry (2026-11-27, code review) ------------------------------------
+# While a bracket entry has filled only in part its legs wait (`held`): the shares bought have no
+# stop. The rest of the entry is cancelled at once, Alpaca then works the legs for the filled
+# shares, and the protection check waits for them for PARTIAL_FILL_GRACE instead of halting.
+
+NOW = datetime.datetime(2026, 11, 25, 15, 0, tzinfo=datetime.timezone.utc)
+
+
+def _entry(symbol, status, *, qty=10, filled=0, age_minutes=1, legs=None):
+    order = _order(symbol, AlpacaOrderSide.BUY, AlpacaOrderType.LIMIT, status, qty, legs=legs)
+    order.client_order_id = f"exec_{symbol}"
+    order.created_at = NOW - datetime.timedelta(minutes=age_minutes)
+    order.filled_qty = str(filled)
+    return order
+
+
+def _legs(symbol, stop_status, take_profit_status, qty=4):
+    return [
+        _order(symbol, AlpacaOrderSide.SELL, AlpacaOrderType.LIMIT, take_profit_status, qty),
+        _stop(symbol, qty, status=stop_status),
+    ]
+
+
+@pytest.fixture
+def clocked(mock_broker, mock_order_repo, mock_state_repo, settings):
+    moment = {"now": NOW}
+    engine = ExecutionEngine(
+        mock_broker, mock_order_repo, mock_state_repo, settings, clock=lambda: moment["now"]
+    )
+    return engine, moment
+
+
+def _halted(mock_state_repo) -> bool:
+    return any(c.args[0].is_trading_halted for c in mock_state_repo.save_state.call_args_list)
+
+
+def test_a_partially_filled_entry_is_cancelled_at_once_and_a_young_unfilled_one_is_not(
+    clocked, mock_broker
+):
+    engine, _ = clocked
+    mock_broker.get_open_orders.return_value = [
+        _entry("AAA", AlpacaOrderStatus.PARTIALLY_FILLED, filled=4),
+        _entry("BBB", AlpacaOrderStatus.NEW),
+    ]
+    mock_broker.get_order_by_client_id.side_effect = lambda cid: SimpleNamespace(
+        id=f"id-{cid}", status="partially_filled" if cid == "exec_AAA" else "new"
+    )
+
+    engine.check_bounded_entry_expiry()
+
+    assert [c.args[0] for c in mock_broker.cancel_order_by_id.call_args_list] == ["id-exec_AAA"]
+
+
+def test_shares_of_a_partially_filled_entry_wait_for_their_legs_and_then_halt(
+    clocked, mock_broker, mock_state_repo
+):
+    engine, moment = clocked
+    parent = _entry(
+        "AAA",
+        AlpacaOrderStatus.PARTIALLY_FILLED,
+        filled=4,
+        legs=_legs("AAA", AlpacaOrderStatus.HELD, AlpacaOrderStatus.HELD),
+    )
+    mock_broker.get_positions.return_value = [_position("AAA", 4)]
+    mock_broker.get_open_orders.return_value = [parent]
+    mock_broker.get_recent_orders_for_symbol.return_value = [parent]
+
+    engine.emergency_check_unprotected_positions()
+    moment["now"] = NOW + datetime.timedelta(minutes=1)
+    engine.emergency_check_unprotected_positions()
+    assert not _halted(mock_state_repo)
+
+    moment["now"] = NOW + datetime.timedelta(minutes=3)
+    engine.emergency_check_unprotected_positions()
+    assert _halted(mock_state_repo)
+
+
+def test_after_the_cancel_a_gap_waits_for_the_legs_and_then_halts(
+    clocked, mock_broker, mock_state_repo
+):
+    engine, moment = clocked
+    mock_broker.get_open_orders.return_value = [
+        _entry("AAA", AlpacaOrderStatus.PARTIALLY_FILLED, filled=4)
+    ]
+    mock_broker.get_order_by_client_id.return_value = SimpleNamespace(
+        id="id-exec_AAA", status="partially_filled"
+    )
+    engine.check_bounded_entry_expiry()
+    # cancelled; the legs are not working yet
+    cancelled = _entry(
+        "AAA",
+        AlpacaOrderStatus.CANCELED,
+        filled=4,
+        legs=_legs("AAA", AlpacaOrderStatus.HELD, AlpacaOrderStatus.HELD),
+    )
+    mock_broker.get_positions.return_value = [_position("AAA", 4)]
+    mock_broker.get_open_orders.return_value = []
+    mock_broker.get_recent_orders_for_symbol.return_value = [cancelled]
+
+    engine.emergency_check_unprotected_positions()
+    assert not _halted(mock_state_repo)
+
+    moment["now"] = NOW + datetime.timedelta(minutes=3)
+    engine.emergency_check_unprotected_positions()
+    assert _halted(mock_state_repo)
+
+
+def test_an_unprotected_position_without_a_partial_entry_still_halts_at_once(
+    clocked, mock_broker, mock_state_repo
+):
+    engine, _ = clocked
+    mock_broker.get_positions.return_value = [_position("AAA", 4)]
+    mock_broker.get_open_orders.return_value = []
+    mock_broker.get_recent_orders_for_symbol.return_value = []
+
+    engine.emergency_check_unprotected_positions()
+
+    assert _halted(mock_state_repo)
+
+
+@pytest.mark.parametrize(
+    "stop_status, take_profit_status",
+    [
+        (AlpacaOrderStatus.HELD, AlpacaOrderStatus.NEW),  # the OCO pair, as for a filled entry
+        (AlpacaOrderStatus.NEW, AlpacaOrderStatus.HELD),  # the stop is the working half
+    ],
+)
+def test_an_entry_cancelled_after_a_partial_fill_is_protected_by_its_working_legs(
+    stop_status, take_profit_status
+):
+    cancelled = _entry(
+        "AAA",
+        AlpacaOrderStatus.CANCELED,
+        filled=4,
+        legs=_legs("AAA", stop_status, take_profit_status),
+    )
+
+    assert find_unprotected_positions([_position("AAA", 4)], [], lambda _s: [cancelled]) == []
+
+
+@pytest.mark.parametrize(
+    "stop_status, take_profit_status, filled",
+    [
+        (AlpacaOrderStatus.HELD, AlpacaOrderStatus.HELD, 4),  # nothing works: no evidence
+        (AlpacaOrderStatus.CANCELED, AlpacaOrderStatus.CANCELED, 4),  # the legs went with it
+        (AlpacaOrderStatus.HELD, AlpacaOrderStatus.NEW, 0),  # cancelled before any fill
+    ],
+)
+def test_other_states_of_a_cancelled_entry_do_not_protect(stop_status, take_profit_status, filled):
+    cancelled = _entry(
+        "AAA",
+        AlpacaOrderStatus.CANCELED,
+        filled=filled,
+        legs=_legs("AAA", stop_status, take_profit_status),
+    )
+
+    (gap,) = find_unprotected_positions([_position("AAA", 4)], [], lambda _s: [cancelled])
+    assert gap.covered == Decimal(0)

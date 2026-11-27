@@ -38,7 +38,8 @@ def test_backtest_gap_aware_stop_loss(dummy_settings):
     # Test that if a bar opens BELOW the stop loss, we get filled at the open price (gap down)
     bt_config = BacktestConfig(initial_capital=Decimal("10000.0"), slippage_pct=0.0)
 
-    t0 = datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc)
+    # Tuesday 10:00 New York: stops and targets act only in the regular session (2026-11-27).
+    t0 = datetime(2023, 1, 3, 15, 0, tzinfo=timezone.utc)
     t1 = t0 + timedelta(minutes=15)
 
     engine = BacktestEngine(dummy_settings, bt_config, {}, {})
@@ -73,7 +74,8 @@ def test_backtest_conservative_intrabar_collision(dummy_settings):
     # Test that if BOTH SL and TP are hit in the same bar, it defaults to STOP_LOSS
     bt_config = BacktestConfig(initial_capital=Decimal("10000.0"), slippage_pct=0.0)
 
-    t0 = datetime(2023, 1, 1, 10, 0, tzinfo=timezone.utc)
+    # Tuesday 10:00 New York: stops and targets act only in the regular session (2026-11-27).
+    t0 = datetime(2023, 1, 3, 15, 0, tzinfo=timezone.utc)
     t1 = t0 + timedelta(minutes=15)
 
     engine = BacktestEngine(dummy_settings, bt_config, {}, {})

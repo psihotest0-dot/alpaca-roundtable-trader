@@ -470,6 +470,12 @@ class BacktestEngine:
         )
 
     def _process_bar_executions(self, current_time: datetime) -> None:
+        # The bracket's legs at Alpaca are GTC without extended hours: they act only in the
+        # regular session, so a pre- or after-market bar closes nothing (2026-11-27; before, 20 of
+        # 129 exits of the live strategy over 180 days were taken on such bars). A gap past a level
+        # by the next open fills at that open (resolve_exit).
+        if not is_regular_session(current_time):
+            return
         closed_positions = []
         for sym, pos in self.positions.items():
             df = self.df_15m.get(sym)

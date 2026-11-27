@@ -10,6 +10,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
+from tests.fixtures.sessions import weekday_open
 from trading_system.backtest.shadow import SignalToPlay, play_out
 from trading_system.cli import main
 from trading_system.domain.enums import SignalDirection
@@ -388,8 +389,13 @@ def test_a_symbol_has_one_open_trade_at_a_time(world: World) -> None:
     assert r.signals == 2 and r.trades == 1
 
 
+# The bars below are in the session (09:30 New York on the Monday of BASE): the shadow trades exit
+# only there (2026-11-27), as the real bracket does.
+SESSION_OPEN = weekday_open(BASE, 0)
+
+
 def _frame(rows: list[tuple[float, float, float, float]]) -> pd.DataFrame:
-    index = pd.date_range(BASE, periods=len(rows), freq="15min", tz="UTC", name="timestamp")
+    index = pd.date_range(SESSION_OPEN, periods=len(rows), freq="15min", tz="UTC", name="timestamp")
     return pd.DataFrame(rows, columns=["open", "high", "low", "close"], index=index).assign(
         volume=1000.0
     )
@@ -410,7 +416,7 @@ def test_play_out_skips_a_signal_while_the_symbols_trade_is_open_and_not_after_i
 
     def signal(index: int) -> SignalToPlay:  # a signal on bar `index` enters on bar index + 1
         return SignalToPlay(
-            f"s{index}", "AAA", pd.Timestamp(BASE) + pd.Timedelta(minutes=15 * index), "x"
+            f"s{index}", "AAA", SESSION_OPEN + pd.Timedelta(minutes=15 * index), "x"
         )
 
     settings = make_settings()

@@ -23,6 +23,7 @@ from trading_system.risk.entry_plan import (
     atr_exit_percentages,
     build_entry_plan,
 )
+from trading_system.runtime.schedule import regular_session_mask
 from trading_system.storage.repositories import MarketBarRepository
 from trading_system.strategy.atr import atr_and_close
 
@@ -45,16 +46,25 @@ def simulate_shadow_trade(
     """`bars`: the symbol's 15-minute bars, sorted, indexed by their start time (UTC). The
     position is held from the bar that starts at `entry_time`; the stop and the target are
     watched on that bar too, as for a real position. A position that neither level reaches
-    before the data ends is closed at the last close and marked "OPEN"."""
+    before the data ends is closed at the last close and marked "OPEN".
+
+    The levels are watched on regular-session bars only (2026-11-27, registered in
+    docs/oracle-provider-task.md, section 5.4, before any look): the live bracket's legs are GTC
+    orders without extended hours, which Alpaca works only from 09:30 to 16:00 New York time, so a
+    pre- or after-market print through the stop closes nothing. A gap past a level by the next
+    open fills at that open, as `resolve_exit` does for any gap."""
     first = int(bars.index.searchsorted(entry_time, side="left"))
     opens, highs, lows, closes = (
         bars[name].to_numpy(dtype=float) for name in ("open", "high", "low", "close")
     )
+    in_session = regular_session_mask(pd.DatetimeIndex(bars.index))
 
     reason = "OPEN"
     exit_time = bars.index[-1]
     raw_exit = Decimal(str(closes[-1]))
     for i in range(first, len(bars)):
+        if not in_session[i]:
+            continue
         hit = resolve_exit(
             Decimal(str(opens[i])),
             Decimal(str(highs[i])),
@@ -115,7 +125,7 @@ def play_out(
 ) -> PlayedOut:
     """Plays each signal out as the backtest would trade it: entry at the open of the bar after the
     signal's bar, the entry plan of the live settings (limit buffer, stop, target), the backtest's
-    slippage and fee, and the first of stop and target the stored bars reach.
+    slippage and fee, and the first of stop and target the stored regular-session bars reach.
 
     One definition for every judge (the Oracle's and the candidates'). A trade that neither level has
     reached by the end of the data comes back with exit_reason "OPEN", valued at the last close: the

@@ -30,6 +30,9 @@ class ExecutionEngine:
         state_repo: StateRepository,
         settings: Settings,
         is_dry_run: bool = False,
+        clock: Callable[[], datetime.datetime] = lambda: datetime.datetime.now(
+            datetime.timezone.utc
+        ),
     ):
         self.broker = broker
         self.order_repo = order_repo
@@ -37,6 +40,11 @@ class ExecutionEngine:
         self.settings = settings
         self.is_dry_run = is_dry_run
         self._lock = threading.Lock()
+        self._clock = clock
+        # Symbols whose partially filled entry this engine cancelled, and when (see
+        # check_bounded_entry_expiry); and since when a gap in their protection has been waited on.
+        self._partial_cancelled: dict[str, datetime.datetime] = {}
+        self._waiting_since: dict[str, datetime.datetime] = {}
 
     def _generate_client_order_id(self, signal_id: str) -> str:
         # Deterministic client_order_id according to signal ID
@@ -315,15 +323,28 @@ class ExecutionEngine:
                 logger.error(f"Failed to cancel order {client_order_id}: {e}")
 
     def check_bounded_entry_expiry(self, max_age_minutes: int = 15) -> None:
-        # Bounded entry expiry policy
-        # Query broker for open buy orders and cancel if they exceed TTL
+        """Cancels open entries older than `max_age_minutes`, and a PARTIALLY FILLED entry at once.
+
+        A bracket's stop and target wait (`held`) until the entry has filled completely, so while
+        it is partly filled the shares bought have no stop. Cancelling the rest makes Alpaca work
+        the legs for the filled shares (see cancel_bracket_order); the position is smaller than
+        planned and protected (2026-11-27, code review; before, the protection check halted all
+        trading until resume-entries)."""
         try:
             open_orders = self.broker.get_open_orders()
-            now = datetime.datetime.now(datetime.timezone.utc)
+            now = self._clock()
             for order in open_orders:
                 if order.side == "buy" and order.status in ["new", "accepted", "partially_filled"]:
                     age = (now - order.created_at).total_seconds() / 60
-                    if age > max_age_minutes:
+                    if _text(order.status) == "partially_filled":
+                        logger.warning(
+                            f"Entry {order.id} for {order.symbol} is partially filled "
+                            f"({getattr(order, 'filled_qty', '?')} of {order.qty}); cancelling the "
+                            "rest so that its stop and target cover the shares bought."
+                        )
+                        self._partial_cancelled[str(order.symbol)] = now
+                        self.cancel_bracket_order(order.client_order_id)
+                    elif age > max_age_minutes:
                         logger.warning(
                             f"Order {order.id} for {order.symbol} expired ({age:.1f} min). Canceling."
                         )
@@ -339,9 +360,12 @@ class ExecutionEngine:
         position alone, because it may not be ours (the paper account is shared with other
         tools) and a forced close is not something to do on a guess."""
         try:
-            unprotected = self.unprotected_positions()
+            positions = list(self.broker.get_positions())
+            open_orders = list(self.broker.get_open_orders())
+            gaps = self.unprotected_positions(positions, open_orders)
             # Never raises; the alarm and the halt below are as they were.
-            metrics.protection_checked(len(unprotected))
+            metrics.protection_checked(len(gaps))
+            unprotected = self._not_waited_on(gaps, open_orders)
             if not unprotected:
                 return
 
@@ -364,6 +388,40 @@ class ExecutionEngine:
                 self._emergency_close(gap)
         except Exception as e:
             logger.error(f"Failed during emergency check: {e}")
+
+    def _not_waited_on(
+        self, gaps: list["UnprotectedPosition"], open_orders: list[Any]
+    ) -> list["UnprotectedPosition"]:
+        """The gaps that halt. A position bought by a PARTIALLY FILLED entry (still open, or
+        cancelled by check_bounded_entry_expiry a moment ago) waits for its bracket's legs for up
+        to PARTIAL_FILL_GRACE: logged, not halted. Past that, or without such an entry, it halts."""
+        now = self._clock()
+        partial = {
+            str(o.symbol)
+            for o in open_orders
+            if _text(o.side) == "buy" and _text(o.status) == "partially_filled"
+        }
+        gapped = {gap.symbol for gap in gaps}
+        for symbol in list(self._waiting_since):
+            if symbol not in gapped:
+                del self._waiting_since[symbol]
+        for symbol in list(self._partial_cancelled):
+            if symbol not in gapped and now - self._partial_cancelled[symbol] > PARTIAL_FILL_GRACE:
+                del self._partial_cancelled[symbol]
+        halting = []
+        for gap in gaps:
+            if gap.symbol in partial or gap.symbol in self._partial_cancelled:
+                since = self._waiting_since.setdefault(gap.symbol, now)
+                if now - since <= PARTIAL_FILL_GRACE:
+                    logger.warning(
+                        f"{gap.symbol}: {gap.quantity} shares from a partially filled entry, "
+                        f"covered {gap.covered}; waiting for the bracket's legs "
+                        f"({(now - since).total_seconds():.0f} of "
+                        f"{PARTIAL_FILL_GRACE.total_seconds():.0f} s)."
+                    )
+                    continue
+            halting.append(gap)
+        return halting
 
     def unprotected_positions(
         self, positions: Optional[list[Any]] = None, open_orders: Optional[list[Any]] = None
@@ -420,6 +478,11 @@ def is_refusal(error: BaseException) -> bool:
     return isinstance(status, int) and 400 <= status < 500 and status not in (408, 429)
 
 
+# How long a position bought by a partially filled entry may wait for its bracket's legs before
+# the protection check halts: the cancel of the rest goes out on one housekeeping round, the legs
+# are there by the next (a round is at most a minute with the market open).
+PARTIAL_FILL_GRACE = datetime.timedelta(minutes=2)
+
 # Statuses of an order that is live at the exchange.
 _ACTIVE_STATUSES = frozenset({"new", "accepted", "partially_filled", "pending_new"})
 
@@ -456,15 +519,37 @@ def _is_stop(order: Any, closing_side: str) -> bool:
 
 
 def _bracket_stop_quantity(orders: Iterable[Any], symbol: str, closing_side: str) -> Decimal:
-    """Shares protected by the stop legs of brackets whose entry has filled completely."""
+    """Shares protected by the stop legs of brackets whose entry has filled completely, or was
+    cancelled after a partial fill (Alpaca then works the legs for the shares bought).
+
+    For a cancelled entry a `held` stop counts only beside a working take-profit leg (the OCO
+    pair, as seen for a filled entry); an active stop counts by itself. Legs in any other state
+    protect nothing: the check fails towards the alarm."""
     total = Decimal(0)
     for parent in orders:
-        if parent.symbol != symbol or _text(parent.status) != "filled":
+        if parent.symbol != symbol:
             continue
-        for leg in _with_legs(getattr(parent, "legs", None) or []):
-            if _is_stop(leg, closing_side) and _text(leg.status) in _LIVE_BRACKET_STOP_STATUSES:
+        status = _text(parent.status)
+        legs = list(_with_legs(getattr(parent, "legs", None) or []))
+        if status == "filled":
+            live = _LIVE_BRACKET_STOP_STATUSES
+        elif status in ("canceled", "expired") and _filled(parent) > 0:
+            pair_works = any(
+                not _is_stop(leg, closing_side) and _text(leg.status) in _ACTIVE_STATUSES
+                for leg in legs
+            )
+            live = _LIVE_BRACKET_STOP_STATUSES if pair_works else _ACTIVE_STATUSES
+        else:
+            continue
+        for leg in legs:
+            if _is_stop(leg, closing_side) and _text(leg.status) in live:
                 total += Decimal(str(leg.qty))
     return total
+
+
+def _filled(order: Any) -> Decimal:
+    value = getattr(order, "filled_qty", None)
+    return Decimal(str(value)) if value not in (None, "") else Decimal(0)
 
 
 def find_unprotected_positions(

@@ -126,3 +126,85 @@ def test_a_gap_is_filled_at_the_open() -> None:
 
     assert trade.exit_reason == "STOP_LOSS"
     assert trade.exit_price == D("90.0")
+
+
+# --- the regular session (2026-11-27) ---------------------------------------------------------
+# The bracket's legs at Alpaca are GTC without extended hours: they act only from 09:30 to 16:00
+# New York time. A pre- or after-market print through a level closes nothing; a gap past it by the
+# next open fills at that open.
+
+
+def _overnight(pre_market_low: float, open_next: float) -> pd.DataFrame:
+    index = pd.DatetimeIndex(
+        [
+            pd.Timestamp("2026-11-24 20:45", tz="UTC"),  # 15:45 New York, the entry bar
+            pd.Timestamp("2026-11-24 21:30", tz="UTC"),  # 16:30, after the close
+            pd.Timestamp("2026-11-25 13:00", tz="UTC"),  # 08:00, pre-market
+            pd.Timestamp("2026-11-25 14:30", tz="UTC"),  # 09:30, the open
+        ]
+    )
+    return pd.DataFrame(
+        {
+            "open": [100.0, 99.0, 99.0, open_next],
+            "high": [100.2, 106.0, 99.0, max(open_next, 100.0) + 0.2],
+            "low": [99.8, 98.0, pre_market_low, min(open_next, 100.0) - 0.2],
+            "close": [100.0, 99.0, 99.0, open_next],
+        },
+        index=index,
+    )
+
+
+def _play(bars: pd.DataFrame) -> object:
+    return simulate_shadow_trade(
+        symbol="X",
+        signal_id="s",
+        verdict="VETO",
+        bars=bars,
+        entry_time=bars.index[0].to_pydatetime(),
+        entry_price=D("100"),
+        stop_loss=D("96"),
+        take_profit=D("105"),
+        slippage_pct=0.0,
+        fee_pct=0.0,
+    )
+
+
+def test_prints_outside_the_session_through_a_level_close_nothing() -> None:
+    # after the close the high is 106 (past the target), in the pre-market the low is 95 (past the stop)
+    trade = _play(_overnight(pre_market_low=95.0, open_next=100.5))
+
+    assert trade.exit_reason == "OPEN"
+
+
+def test_a_gap_past_the_stop_by_the_next_open_fills_at_that_open() -> None:
+    trade = _play(_overnight(pre_market_low=95.0, open_next=94.0))
+
+    assert (trade.exit_reason, trade.exit_price) == ("STOP_LOSS", D("94.0"))
+    assert trade.exit_time == pd.Timestamp("2026-11-25 14:30", tz="UTC")
+
+
+def test_the_backtest_takes_no_exit_on_a_bar_outside_the_session() -> None:
+    from trading_system.backtest.engine import BacktestEngine
+    from trading_system.backtest.models import BacktestConfig, BacktestPosition
+    from trading_system.config import Settings
+
+    settings = Settings(_env_file=None, alpaca_api_key="k", alpaca_secret_key="s")
+    engine = BacktestEngine(settings, BacktestConfig(slippage_pct=0.0), {}, {})
+    bars = _overnight(pre_market_low=95.0, open_next=94.0)
+    engine.df_15m = {"X": bars.assign(timestamp=bars.index)}
+    engine.positions["X"] = BacktestPosition(
+        symbol="X",
+        quantity=D("10"),
+        average_entry_price=D("100"),
+        entry_time=bars.index[0].to_pydatetime(),
+        stop_loss=D("96"),
+        take_profit=D("105"),
+    )
+
+    for moment in bars.index[1:3]:  # after the close, then the pre-market
+        engine._process_bar_executions(moment.to_pydatetime())
+    assert "X" in engine.positions
+
+    engine._process_bar_executions(bars.index[3].to_pydatetime())  # the open, gapped down
+    assert "X" not in engine.positions
+    assert (engine.trades[0].exit_reason, engine.trades[0].exit_price) == ("STOP_LOSS", D("94.0"))

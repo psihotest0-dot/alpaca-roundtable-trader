@@ -67,3 +67,18 @@ def test_the_regular_session_is_nine_thirty_to_four_new_york_time_on_weekdays(
     from trading_system.runtime.schedule import is_regular_session
 
     assert is_regular_session(moment) is expected
+
+
+def test_the_session_mask_agrees_with_the_one_moment_check_across_weeks_and_clock_changes() -> None:
+    import pandas as pd
+
+    from trading_system.runtime.schedule import is_regular_session, regular_session_mask
+
+    # Two weeks around the end of summer time in New York (2026-11-01), every 15 minutes, and the
+    # same instants as naive UTC.
+    index = pd.date_range("2026-10-26", "2026-11-09", freq="15min", tz="UTC")
+    expected = [is_regular_session(moment.to_pydatetime()) for moment in index]
+
+    assert list(regular_session_mask(index)) == expected
+    assert list(regular_session_mask(index.tz_localize(None))) == expected
+    assert sum(expected) == 10 * 26  # ten weekdays of 26 bars, 09:30 to 15:45
