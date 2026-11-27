@@ -10,7 +10,7 @@ import pandas as pd
 import pytest
 
 from tests.fixtures.bars import GAP_UP_6_PCT, QUIET, make_bars_with_follow_up
-from trading_system.backtest.engine import BacktestEngine
+from trading_system.backtest.engine import BacktestEngine, ReplayOracleError
 from trading_system.backtest.models import BacktestConfig, BacktestResult
 from trading_system.config import Settings
 from trading_system.runtime.runner import ENTRY_DELAY
@@ -206,3 +206,49 @@ def test_costs_are_in_the_shadow_result(settings: Settings, tmp_path: Path) -> N
 
     assert shadow.pnl_pct < 0.06 - 0.003  # slippage on both sides and a fee on both
     assert shadow.entry_price > Decimal("0")
+
+
+# ------------------------------------------------------------------ an unusable replay file
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "{not json",  # broken
+        "[]",  # not an object
+        "{}",  # no decisions: every signal would be played as a veto
+        '{"sig-1": {"verdict": "APPROVE"}}',  # no `approved`
+        '{"sig-1": {"approved": "yes"}}',  # `approved` not true/false
+        '{"sig-1": "APPROVE"}',  # neither true/false nor an object
+    ],
+)
+def test_an_unusable_replay_file_stops_the_backtest(
+    settings: Settings, tmp_path: Path, content: str
+) -> None:
+    """It used to be only logged, and the report then showed no trades as if that were real."""
+    path = tmp_path / "decisions.json"
+    path.write_text(content, encoding="utf-8")
+    config = BacktestConfig(replay_oracle_path=str(path), **NO_COSTS)
+
+    with pytest.raises(ReplayOracleError, match="decisions.json"):
+        BacktestEngine(settings, config, {"AAPL": pd.DataFrame()}, {"AAPL": pd.DataFrame()})
+
+
+def test_a_missing_replay_file_stops_the_backtest(settings: Settings, tmp_path: Path) -> None:
+    config = BacktestConfig(replay_oracle_path=str(tmp_path / "nowhere.json"), **NO_COSTS)
+
+    with pytest.raises(ReplayOracleError, match="Cannot read the replay file"):
+        BacktestEngine(settings, config, {"AAPL": pd.DataFrame()}, {"AAPL": pd.DataFrame()})
+
+
+def test_an_older_replay_file_of_bare_true_false_still_loads(
+    settings: Settings, tmp_path: Path
+) -> None:
+    path = tmp_path / "old.json"
+    path.write_text(json.dumps({"sig-1": True, "sig-2": False}), encoding="utf-8")
+    config = BacktestConfig(replay_oracle_path=str(path), **NO_COSTS)
+
+    engine = BacktestEngine(settings, config, {"AAPL": pd.DataFrame()}, {"AAPL": pd.DataFrame()})
+
+    assert engine.oracle_decisions == {"sig-1": True, "sig-2": False}
+    assert engine.oracle_verdicts == {"sig-1": "APPROVE", "sig-2": "VETO"}

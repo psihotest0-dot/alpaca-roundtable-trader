@@ -50,6 +50,31 @@ def test_get_open_orders(mock_client, settings):
     req = call_args.kwargs["filter"]
     assert req.status == QueryOrderStatus.OPEN
     assert req.nested is True
+    # Alpaca's default is 50 orders: the checks must not work from a cut list
+    assert req.limit == 500
+
+
+@patch("trading_system.broker.alpaca_broker.TradingClient")
+def test_get_open_orders_warns_when_the_limit_is_reached(mock_client, settings, caplog):
+    mock_client.return_value.get_orders.return_value = [{"id": str(i)} for i in range(500)]
+    broker = AlpacaBroker(settings)
+
+    with caplog.at_level("WARNING", logger="trading_system.broker.alpaca_broker"):
+        orders = broker.get_open_orders()
+
+    assert len(orders) == 500
+    assert "request limit of 500" in caplog.text
+
+
+@patch("trading_system.broker.alpaca_broker.TradingClient")
+def test_get_open_orders_is_quiet_below_the_limit(mock_client, settings, caplog):
+    mock_client.return_value.get_orders.return_value = [{"id": str(i)} for i in range(499)]
+    broker = AlpacaBroker(settings)
+
+    with caplog.at_level("WARNING", logger="trading_system.broker.alpaca_broker"):
+        broker.get_open_orders()
+
+    assert "request limit" not in caplog.text
 
 
 @patch("trading_system.broker.alpaca_broker.TradingClient")

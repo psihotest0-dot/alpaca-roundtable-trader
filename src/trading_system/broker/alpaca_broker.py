@@ -11,6 +11,8 @@ from trading_system.config import Settings
 logger = logging.getLogger(__name__)
 
 _FILLS_PAGE_SIZE = 100
+# Alpaca returns at most 50 orders unless asked for more, and 500 is its maximum
+_OPEN_ORDERS_LIMIT = 500
 
 
 class AlpacaBroker:
@@ -46,14 +48,26 @@ class AlpacaBroker:
 
     @retry_read_request()
     def get_open_orders(self) -> Any:
+        """All open orders, legs nested under their parent.
+
+        Without a limit Alpaca returns only 50, so the risk and protection checks would see a
+        cut list on a busy account; 500 is the most it gives. A full page is logged, because
+        then orders may still be missing."""
         from alpaca.trading.requests import GetOrdersRequest
         from alpaca.trading.enums import QueryOrderStatus
 
         req = GetOrdersRequest(
             status=QueryOrderStatus.OPEN,
             nested=True,  # includes child orders
+            limit=_OPEN_ORDERS_LIMIT,
         )
-        return self.client.get_orders(filter=req)
+        orders = self.client.get_orders(filter=req)
+        if len(orders) >= _OPEN_ORDERS_LIMIT:
+            logger.warning(
+                f"Open orders reached the request limit of {_OPEN_ORDERS_LIMIT}; "
+                "the list may be incomplete"
+            )
+        return orders
 
     @retry_read_request()
     def get_recent_orders_for_symbol(self, symbol: str, limit: int = 50) -> Any:

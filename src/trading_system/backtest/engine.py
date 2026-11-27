@@ -47,6 +47,10 @@ logger = logging.getLogger(__name__)
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
+class ReplayOracleError(ValueError):
+    """The `--replay-oracle` file is missing, unreadable or holds no usable decisions."""
+
+
 class BacktestEngine:
     def __init__(
         self,
@@ -121,21 +125,36 @@ class BacktestEngine:
         return self._decision_time
 
     def _load_replay_oracle(self, path: str) -> None:
+        """Read the decisions of `export-oracle-decisions`: signal id -> an entry with a true or
+        false `approved` (or, in older files, the bare true or false).
+
+        A file that cannot be used stops the backtest. It used to be only logged, and then every
+        signal was played as a veto: a report without trades that looked like a real one."""
         try:
-            with open(path, "r") as f:
+            with open(path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                # Assume dict mapping signal_id -> approved bool
-                for k, v in data.items():
-                    if isinstance(v, dict) and "approved" in v:
-                        self.oracle_decisions[k] = bool(v["approved"])
-                        fallback = "APPROVE" if v["approved"] else "VETO"
-                        self.oracle_verdicts[k] = str(v.get("verdict") or fallback)
-                    else:
-                        self.oracle_decisions[k] = bool(v)
-                        self.oracle_verdicts[k] = "APPROVE" if v else "VETO"
-            logger.info(f"Loaded {len(self.oracle_decisions)} oracle decisions from replay.")
-        except Exception as e:
-            logger.error(f"Failed to load replay oracle: {e}")
+        except (OSError, ValueError) as e:
+            raise ReplayOracleError(f"Cannot read the replay file {path}: {e}") from e
+        if not isinstance(data, dict) or not data:
+            raise ReplayOracleError(
+                f"The replay file {path} holds no decisions: expected a JSON object of "
+                "signal id -> decision, as export-oracle-decisions writes it."
+            )
+        for k, v in data.items():
+            if isinstance(v, dict) and isinstance(v.get("approved"), bool):
+                approved = v["approved"]
+                fallback = "APPROVE" if approved else "VETO"
+                self.oracle_verdicts[k] = str(v.get("verdict") or fallback)
+            elif isinstance(v, bool):
+                approved = v
+                self.oracle_verdicts[k] = "APPROVE" if v else "VETO"
+            else:
+                raise ReplayOracleError(
+                    f"The replay file {path} has an unusable decision for {k}: {v!r} "
+                    "(expected true/false or an object with a true/false `approved`)."
+                )
+            self.oracle_decisions[k] = approved
+        logger.info(f"Loaded {len(self.oracle_decisions)} oracle decisions from replay.")
 
     def run(self) -> BacktestResult:
         self._prepare()

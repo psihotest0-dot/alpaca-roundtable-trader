@@ -138,6 +138,23 @@ def test_backtest_replays_the_stored_candles(
     assert "RiskEngine" in out  # the report says plainly that the sizing is not the live one yet
 
 
+def test_backtest_with_an_unusable_replay_file_fails_instead_of_reporting_no_trades(
+    alpaca: Any, settings: Any, capsys: pytest.CaptureFixture[str], tmp_path: Any
+) -> None:
+    alpaca(_client(datetime.now(timezone.utc)))
+    broken = tmp_path / "oracle.json"
+    broken.write_text("{not json", encoding="utf-8")
+    with patch("trading_system.cli.Settings", return_value=settings):
+        assert main(["fetch-history", "--days", "10"]) == 0
+        capsys.readouterr()
+
+        assert main(["backtest", "--days", "10", "--replay-oracle", str(broken)]) == 1
+
+    out = capsys.readouterr().out
+    assert "Cannot read the replay file" in out
+    assert "=== Backtest Report ===" not in out
+
+
 def _long_history(now: datetime) -> FakeHistoryClient:
     """Twenty days of rising bars, the newest one just closed."""
     last_15m = pd.Timestamp(now).floor("15min") - pd.Timedelta(minutes=15)
